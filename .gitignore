@@ -1,1 +1,17 @@
-CATHe2_tf*
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Logs and checkpoints
+logs/
+checkpoints/
+
+# VSCode settings
+.vscode/
+
+# Environment files
+.env
