@@ -15,3 +15,9 @@ checkpoints/
 
 # Environment files
 .env
+
+# Data files
+data/
+
+# Venv
+venv/
