@@ -1,13 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
-from typing import List, Optional, Dict
-from torchmetrics import Accuracy, F1Score, ConfusionMatrix
-import seaborn as sns
-import matplotlib.pyplot as plt
-import numpy as np
-from pathlib import Path
+from typing import List, Dict
+from torchmetrics import Accuracy, F1Score
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -60,9 +55,6 @@ class CATHeClassifier(pl.LightningModule):
         self.train_f1 = F1Score(task="multiclass", num_classes=num_classes)
         self.val_f1 = F1Score(task="multiclass", num_classes=num_classes)
         self.test_f1 = F1Score(task="multiclass", num_classes=num_classes)
-        
-        # Confusion matrix for validation
-        self.val_confmat = ConfusionMatrix(task="multiclass", num_classes=num_classes)
         
         # Store predictions for epoch end analysis
         self.validation_step_outputs = []
@@ -146,31 +138,9 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         """Compute and log epoch-level validation metrics."""
-        # Compute confusion matrix
-        conf_mat = self.val_confmat.compute()
-        
-        # Plot confusion matrix
-        plt.figure(figsize=(10, 10))
-        sns.heatmap(conf_mat.cpu().numpy(), annot=True, fmt='d', cmap='Blues')
-        plt.title('Validation Confusion Matrix')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
-        
-        # Log figure to tensorboard
-        if self.logger:
-            self.logger.experiment.add_figure(
-                'confusion_matrix',
-                plt.gcf(),
-                global_step=self.current_epoch
-            )
-        
-        plt.close()
-        
+
         # Reset validation step outputs
         self.validation_step_outputs.clear()
-        
-        # Reset confusion matrix
-        self.val_confmat.reset()
 
     def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """Test step.
