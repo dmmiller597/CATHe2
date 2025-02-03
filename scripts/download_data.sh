@@ -51,4 +51,5 @@ else
     echo "No top-level directory detected; assuming files are already in place."
 fi
 
-echo "Dataset downloaded, extracted, and reorganized successfully." 
+echo "Dataset downloaded, extracted, and reorganized successfully."
+rm "$OUTPUT_ZIP" 
