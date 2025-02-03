@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import (
     LearningRateMonitor,
     RichProgressBar
 )
-from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import WandbLogger
 import torch
 from pathlib import Path
 
@@ -38,7 +38,7 @@ def setup_callbacks(cfg: DictConfig) -> list:
     ]
 
 def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
-    logger = TensorBoardLogger('logs', name='cathe', default_hp_metric=False)
+    logger = WandbLogger(project="CATHe", name="cathe")
     logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))
     
     accelerator = 'gpu' if torch.cuda.is_available() and cfg.training.gpus > 0 else 'cpu'

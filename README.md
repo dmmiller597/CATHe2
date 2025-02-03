@@ -86,9 +86,12 @@ python src/train.py training.batch_size=64 training.learning_rate=0.0001
 ```
 
 ### Monitor training:
+After starting training, visit your Weights & Biases dashboard at https://wandb.ai.
+If you haven't already, run:
 ```bash
-tensorboard --logdir logs
+wandb login
 ```
+to set up your W&B credentials.
 
 ## License
 

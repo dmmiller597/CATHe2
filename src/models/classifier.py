@@ -180,8 +180,7 @@ class CATHeClassifier(pl.LightningModule):
             optimizer,
             mode='min',
             factor=0.1,
-            patience=5,
-            verbose=True
+            patience=5
         )
         
         return {
