@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
 from utils import get_logger
@@ -11,167 +11,131 @@ from utils import get_logger
 log = get_logger()
 
 class CATHeDataset(Dataset):
-    """Dataset for CATH protein embeddings and labels."""
+    """Dataset class for CATH superfamily classification."""
     
-    def __init__(
-        self,
-        embeddings_path: str,
-        labels_path: str,
-        transform: Optional[callable] = None
-    ):
-        """Initialize dataset.
+    def __init__(self, embeddings_path: Path, labels_path: Path):
+        """Initialize dataset with protein embeddings and their corresponding labels.
         
         Args:
-            embeddings_path: Path to NPZ file containing embeddings
-            labels_path: Path to CSV file containing labels
-            transform: Optional transform to apply to embeddings
-            
-        Raises:
-            FileNotFoundError: If input files don't exist
-            ValueError: If data dimensions mismatch
+            embeddings_path: Path to NPZ file containing ProtT5 embeddings
+            labels_path: Path to CSV file containing SF labels
         """
-        embeddings_path = Path(embeddings_path)
-        labels_path = Path(labels_path)
-        
-        if not embeddings_path.exists():
-            raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
-        if not labels_path.exists():
-            raise FileNotFoundError(f"Labels file not found: {labels_path}")
-            
-        # Load data
+        # Load embeddings
         with np.load(embeddings_path) as data:
             self.embeddings = torch.FloatTensor(data['arr_0'])
-            
-        self.labels = torch.LongTensor(pd.read_csv(labels_path).values.squeeze())
         
-        if len(self.embeddings) != len(self.labels):
-            raise ValueError(
-                f"Mismatch between embeddings ({len(self.embeddings)}) and "
-                f"labels ({len(self.labels)})"
-            )
-            
-        self.transform = transform
-        log.info(f"Loaded dataset with {len(self)} samples")
+        # Load labels and convert to indices
+        labels_df = pd.read_csv(labels_path)
+        # Extract SF column and convert to categorical codes
+        self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes)
         
     def __len__(self) -> int:
-        """Return the number of samples."""
+        """Return the number of samples in the dataset."""
         return len(self.embeddings)
-        
-    def __getitem__(self, idx: int) -> tuple:
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get a sample from the dataset.
         
         Args:
             idx: Index of the sample
             
         Returns:
-            Tuple of (embedding, label)
+            Tuple of (embedding, label) 
         """
-        embedding = self.embeddings[idx]
-        if self.transform:
-            embedding = self.transform(embedding)
-        return embedding, self.labels[idx]
+        return self.embeddings[idx], self.labels[idx]
 
 class CATHeDataModule(pl.LightningDataModule):
-    """PyTorch Lightning data module for CATH classification."""
+    """PyTorch Lightning data module for CATH superfamily classification."""
     
     def __init__(
         self,
         data_dir: str,
-        batch_size: int,
         train_embeddings: str,
-        val_embeddings: str,
-        test_embeddings: str,
         train_labels: str,
+        val_embeddings: str,
         val_labels: str,
-        test_labels: str,
+        test_embeddings: str = None,
+        test_labels: str = None,
+        batch_size: int = 32,
         num_workers: int = 4,
-        transform: Optional[callable] = None
     ):
-        """Initialize the data module.
+        """Initialize data module.
         
         Args:
-            data_dir: Root directory containing the data
-            batch_size: Batch size for dataloaders
-            train_embeddings: Path to training embeddings
-            val_embeddings: Path to validation embeddings
-            test_embeddings: Path to test embeddings
-            train_labels: Path to training labels
-            val_labels: Path to validation labels
-            test_labels: Path to test labels
-            num_workers: Number of workers for dataloaders (default: 4)
-            transform: Optional transform to apply to embeddings
+            data_dir: Root directory containing data files
+            train_embeddings: Path to training embeddings file
+            train_labels: Path to training labels file
+            val_embeddings: Path to validation embeddings file
+            val_labels: Path to validation labels file
+            test_embeddings: Path to test embeddings file (optional)
+            test_labels: Path to test labels file (optional)
+            batch_size: Number of samples per batch
+            num_workers: Number of subprocesses for data loading
         """
         super().__init__()
         self.data_dir = Path(data_dir)
+        self.train_embeddings = Path(train_embeddings)
+        self.train_labels = Path(train_labels)
+        self.val_embeddings = Path(val_embeddings)
+        self.val_labels = Path(val_labels)
+        self.test_embeddings = Path(test_embeddings) if test_embeddings else None
+        self.test_labels = Path(test_labels) if test_labels else None
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.transform = transform
-        
-        self.file_paths = {
-            'train': (Path(train_embeddings), Path(train_labels)),
-            'val': (Path(val_embeddings), Path(val_labels)),
-            'test': (Path(test_embeddings), Path(test_labels))
-        }
-        
-        self.datasets = {split: None for split in ['train', 'val', 'test']}
-        
-    def prepare_data(self) -> None:
-        """Verify all data files exist."""
-        for split, (emb_path, label_path) in self.file_paths.items():
-            if not emb_path.exists():
-                raise FileNotFoundError(f"{split} embeddings not found at: {emb_path}")
-            if not label_path.exists():
-                raise FileNotFoundError(f"{split} labels not found at: {label_path}")
-                
-    def setup(self, stage: Optional[str] = None) -> None:
-        """Set up datasets for training/validation/testing.
+        self.datasets: Dict[str, CATHeDataset] = {}
+
+    def setup(self, stage: Optional[str] = None):
+        """Set up datasets for each stage of training.
         
         Args:
-            stage: Stage to setup ('fit' or 'test')
+            stage: Current stage ('fit' or 'test')
         """
         if stage == "fit" or stage is None:
-            for split in ['train', 'val']:
-                self.datasets[split] = CATHeDataset(
-                    str(self.file_paths[split][0]),
-                    str(self.file_paths[split][1]),
-                    transform=self.transform
-                )
-                log.info(f"Set up {split} dataset")
-            
-        if stage == "test" or stage is None:
-            self.datasets['test'] = CATHeDataset(
-                str(self.file_paths['test'][0]),
-                str(self.file_paths['test'][1]),
-                transform=self.transform
+            self.datasets["train"] = CATHeDataset(
+                self.data_dir / self.train_embeddings,
+                self.data_dir / self.train_labels
             )
-            log.info("Set up test dataset")
+            self.datasets["val"] = CATHeDataset(
+                self.data_dir / self.val_embeddings,
+                self.data_dir / self.val_labels
+            )
+            # Store number of classes for model configuration
+            self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
+        if stage == "test" and self.test_embeddings and self.test_labels:
+            self.datasets["test"] = CATHeDataset(
+                self.data_dir / self.test_embeddings,
+                self.data_dir / self.test_labels
+            )
+
     def train_dataloader(self) -> DataLoader:
-        """Create the training data loader."""
+        """Create training data loader."""
         return DataLoader(
-            self.datasets['train'],
+            self.datasets["train"],
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=True
         )
-        
+
     def val_dataloader(self) -> DataLoader:
-        """Create the validation data loader."""
+        """Create validation data loader."""
         return DataLoader(
-            self.datasets['val'],
+            self.datasets["val"],
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=True
         )
-        
-    def test_dataloader(self) -> DataLoader:
-        """Create the test data loader."""
-        return DataLoader(
-            self.datasets['test'],
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True
-        ) 
+
+    def test_dataloader(self) -> Optional[DataLoader]:
+        """Create test data loader if test data is available."""
+        if "test" in self.datasets:
+            return DataLoader(
+                self.datasets["test"],
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
+                pin_memory=True
+            )
+        return None 
