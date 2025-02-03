@@ -61,7 +61,6 @@ data:
 model:
   embedding_dim: 1024
   hidden_sizes: [512, 256]
-  num_classes: 2373
   dropout: 0.2
   use_batch_norm: true
 
