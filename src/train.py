@@ -52,9 +52,9 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
         callbacks=callbacks,
         logger=logger,
         deterministic=True,
-        gradient_clip_val=cfg.training.get('gradient_clip_val', 0.0),
-        accumulate_grad_batches=cfg.training.get('accumulate_grad_batches', 1),
-        precision=cfg.training.get('precision', 32)
+        gradient_clip_val=cfg.training.get("gradient_clip_val", 0.0),
+        accumulate_grad_batches=cfg.training.get("accumulate_grad_batches", 1),
+        precision=cfg.training.get("precision", 32)
     )
 
 @hydra.main(config_path="../config", config_name="config", version_base="1.1")
@@ -78,19 +78,19 @@ def main(cfg: DictConfig) -> None:
         num_workers=cfg.training.num_workers
     )
     
-    # Setup data module to get number of classes
+    # Setup the data module and determine num_classes
     data_module.setup()
     
-    # Update config with number of classes from data
+    # Disable structured config so we can add new keys
+    OmegaConf.set_struct(cfg.model, False)
     cfg.model.num_classes = data_module.num_classes
     
-    # Initialize model with updated config
-    model = CATHeClassifier(cfg.model)
+    # Initialize model with updated config parameters
+    model = CATHeClassifier(**cfg.model)
     
-    # Setup trainer
+    # Setup trainer and start training
     trainer = setup_trainer(cfg, setup_callbacks(cfg))
     
-    # Train the model
     log.info("Starting training...")
     trainer.fit(model, data_module)
     
@@ -108,5 +108,5 @@ def main(cfg: DictConfig) -> None:
     
     log.info("Training completed successfully!")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 
