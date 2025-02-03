@@ -1,4 +1,4 @@
-# CATHe: Protein Structure Classifier
+# CATHe
 
 CATHe (short for CATH embeddings) is a deep learning tool designed to detect remote homologues (up to 20% sequence similarity) for superfamilies in the CATH database. CATHe consists of an artificial neural network model which was trained on sequence embeddings from the ProtT5 protein Language Model (pLM).
 
