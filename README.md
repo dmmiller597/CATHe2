@@ -1,6 +1,6 @@
 # CATHe: Protein Structure Classifier
 
-A CATH protein structure classification model using protein language model embeddings.
+CATHe (short for CATH embeddings) is a deep learning tool designed to detect remote homologues (up to 20% sequence similarity) for superfamilies in the CATH database. CATHe consists of an artificial neural network model which was trained on sequence embeddings from the ProtT5 protein Language Model (pLM).
 
 ## Project Structure
 
@@ -20,14 +20,25 @@ A CATH protein structure classification model using protein language model embed
 └── checkpoints/          # Model checkpoints
 ```
 
-## Setup and Usage
+## Installation
 
-1. Install dependencies:
+### Option 1: Virtual Environment
 ```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-2. Configure your experiment in `config/config.yaml`:
+### Option 2: Conda Environment
+```bash
+conda create --name cathe python=3.8 -y
+conda activate cathe
+pip install -r requirements.txt
+```
+
+## Configuration
+
+1. Configure your experiment in `config/config.yaml`:
 ```yaml
 data:
   data_dir: "path/to/data"
@@ -51,7 +62,9 @@ training:
    ...
 ```
 
-3. Train the model:
+## Usage
+
+### Train the model:
 ```bash
 python src/train.py
 ```
@@ -61,7 +74,7 @@ You can optionally override any config parameters via command line:
 python src/train.py training.batch_size=64 training.learning_rate=0.0001
 ```
 
-4. Monitor training:
+### Monitor training:
 ```bash
 tensorboard --logdir logs
 ```
