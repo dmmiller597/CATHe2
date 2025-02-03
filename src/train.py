@@ -57,63 +57,53 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
         precision=cfg.training.get('precision', 32)
     )
 
-@hydra.main(config_path="../config", config_name="config", version_base=None)
+@hydra.main(config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    try:
-        log.info("Configuration:\n" + OmegaConf.to_yaml(cfg))
-        
-        # Set random seed
-        set_seed(cfg.training.get('seed', 42), workers=True)
-        
-        # Initialize data module
-        log.info("Initializing data module...")
-        data_module = CATHeDataModule(
-            data_dir=cfg.data.data_dir,
-            batch_size=cfg.training.batch_size,
-            train_embeddings=cfg.data.train_embeddings,
-            val_embeddings=cfg.data.val_embeddings,
-            test_embeddings=cfg.data.test_embeddings,
-            train_labels=cfg.data.train_labels,
-            val_labels=cfg.data.val_labels,
-            test_labels=cfg.data.test_labels,
-            num_workers=cfg.training.get('num_workers', 4)
-        )
-        
-        # Initialize model
-        log.info("Initializing model...")
-        model = CATHeClassifier(
-            embedding_dim=cfg.model.embedding_dim,
-            hidden_sizes=cfg.model.hidden_sizes,
-            num_classes=cfg.model.num_classes,
-            dropout=cfg.model.get('dropout', 0.2),
-            learning_rate=cfg.training.learning_rate,
-            use_batch_norm=cfg.model.get('use_batch_norm', True)
-        )
-        
-        # Setup trainer
-        trainer = setup_trainer(cfg, setup_callbacks(cfg))
-        
-        # Train the model
-        log.info("Starting training...")
-        trainer.fit(model, data_module)
-        
-        if trainer.checkpoint_callback.best_model_path:
-            log.info(f"Best model path: {trainer.checkpoint_callback.best_model_path}")
-            log.info("Testing best model...")
-            trainer.test(model, data_module)
-            
-            # Save test metrics
-            test_results = Path('logs') / 'test_results.yaml'
-            with open(test_results, 'w') as f:
-                import yaml
-                yaml.dump(trainer.callback_metrics, f)
-            log.info(f"Test results saved to {test_results}")
-        
-        log.info("Training completed successfully!")
+    """Main training function."""
+    set_seed(cfg.training.seed)
     
-    except Exception as e:
-        log.exception("An error occurred during training")
-        raise
+    # Initialize data module
+    data_module = CATHeDataModule(
+        data_dir=cfg.data.data_dir,
+        train_embeddings=cfg.data.train_embeddings,
+        train_labels=cfg.data.train_labels,
+        val_embeddings=cfg.data.val_embeddings,
+        val_labels=cfg.data.val_labels,
+        test_embeddings=cfg.data.test_embeddings,
+        test_labels=cfg.data.test_labels,
+        batch_size=cfg.training.batch_size,
+        num_workers=cfg.training.num_workers
+    )
+    
+    # Setup data module to get number of classes
+    data_module.setup()
+    
+    # Update config with number of classes from data
+    cfg.model.num_classes = data_module.num_classes
+    
+    # Initialize model with updated config
+    model = CATHeClassifier(cfg.model)
+    
+    # Setup trainer
+    trainer = setup_trainer(cfg, setup_callbacks(cfg))
+    
+    # Train the model
+    log.info("Starting training...")
+    trainer.fit(model, data_module)
+    
+    if trainer.checkpoint_callback.best_model_path:
+        log.info(f"Best model path: {trainer.checkpoint_callback.best_model_path}")
+        log.info("Testing best model...")
+        trainer.test(model, data_module)
+        
+        # Save test metrics
+        test_results = Path('logs') / 'test_results.yaml'
+        with open(test_results, 'w') as f:
+            import yaml
+            yaml.dump(trainer.callback_metrics, f)
+        log.info(f"Test results saved to {test_results}")
+    
+    log.info("Training completed successfully!")
 
 if __name__ == '__main__':
     main() 
