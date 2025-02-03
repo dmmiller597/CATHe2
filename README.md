@@ -1,4 +1,4 @@
-# CATHe: Protein Structure Classification with Deep Learning
+# CATHe: Protein Structure Classifier
 
 A CATH protein structure classification model using protein language model embeddings.
 
