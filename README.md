@@ -24,6 +24,14 @@ CATHe (short for CATH embeddings) is a deep learning tool designed to detect rem
 
 The dataset used for training, optimizing, and testing CATHe was derived from the CATH database. The datasets, along with the weights for the CATHe artificial neural network can be downloaded from Zenodo from this link: [Dataset](https://doi.org/10.5281/zenodo.6327572).
 
+## Download Data
+
+To download the CATHe dataset from Zenodo, run the following script from your terminal:
+
+```bash
+bash scripts/download_data.sh
+```
+
 ## Installation
 
 ### Option 1: Virtual Environment
