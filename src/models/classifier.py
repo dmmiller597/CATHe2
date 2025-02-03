@@ -117,9 +117,6 @@ class CATHeClassifier(pl.LightningModule):
         acc = self.val_acc(preds, y)
         f1 = self.val_f1(preds, y)
         
-        # Update confusion matrix
-        self.val_confmat.update(preds, y)
-        
         # Log metrics
         self.log_dict({
             "val_loss": loss,
