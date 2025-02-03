@@ -62,6 +62,10 @@ def main(cfg: DictConfig) -> None:
     """Main training function."""
     set_seed(cfg.training.seed)
     
+    # Set matmul precision for better performance on Tensor Core GPUs
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('medium')
+    
     # Initialize data module
     data_module = CATHeDataModule(
         data_dir=cfg.data.data_dir,
