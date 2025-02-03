@@ -62,6 +62,9 @@ def main(cfg: DictConfig) -> None:
     """Main training function."""
     set_seed(cfg.training.seed)
     
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision("high")
+    
     # Get the project root directory (parent of src)
     project_root = Path(__file__).parent.parent.resolve()
     

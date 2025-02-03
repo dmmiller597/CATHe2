@@ -27,7 +27,7 @@ class CATHeDataset(Dataset):
         # Load labels and convert to indices
         labels_df = pd.read_csv(labels_path)
         # Extract SF column and convert to categorical codes
-        self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes)
+        self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes.copy())
         
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
