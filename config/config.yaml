@@ -1,11 +1,11 @@
 data:
   data_dir: "data"
-  train_embeddings: "data/embeddings/SF_Train_ProtT5.npz"
-  val_embeddings: "data/embeddings/SF_Val_ProtT5.npz"
-  test_embeddings: "data/embeddings/SF_Test_ProtT5.npz"
-  train_labels: "data/annotations/Y_Train_SF.csv"
-  val_labels: "data/annotations/Y_Val_SF.csv"
-  test_labels: "data/annotations/Y_Test_SF.csv"
+  train_embeddings: "embeddings/SF_Train_ProtT5.npz"
+  val_embeddings: "embeddings/SF_Val_ProtT5.npz"
+  test_embeddings: "embeddings/SF_Test_ProtT5.npz"
+  train_labels: "annotations/Y_Train_SF.csv"
+  val_labels: "annotations/Y_Val_SF.csv"
+  test_labels: "annotations/Y_Test_SF.csv"
 
 model:
   embedding_dim: 1024  # Adjust based on your embedding size
