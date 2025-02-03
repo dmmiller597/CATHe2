@@ -57,18 +57,17 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
         precision=cfg.training.get('precision', 32)
     )
 
-@hydra.main(config_path="../config", config_name="config")
+@hydra.main(config_path="../config", config_name="config", version_base="1.1")
 def main(cfg: DictConfig) -> None:
     """Main training function."""
     set_seed(cfg.training.seed)
     
-    # Set matmul precision for better performance on Tensor Core GPUs
-    if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('medium')
+    # Get the project root directory (parent of src)
+    project_root = Path(__file__).parent.parent.resolve()
     
-    # Initialize data module
+    # Initialize data module with absolute path
     data_module = CATHeDataModule(
-        data_dir=cfg.data.data_dir,
+        data_dir=str(project_root / cfg.data.data_dir),
         train_embeddings=cfg.data.train_embeddings,
         train_labels=cfg.data.train_labels,
         val_embeddings=cfg.data.val_embeddings,

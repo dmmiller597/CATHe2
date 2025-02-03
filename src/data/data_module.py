@@ -73,20 +73,14 @@ class CATHeDataModule(pl.LightningDataModule):
             num_workers: Number of subprocesses for data loading
         """
         super().__init__()
-        # Convert data_dir to an absolute path using the project root.
-        self.data_dir = Path(data_dir)
-        if not self.data_dir.is_absolute():
-            # Assumes that the project root is two levels up from this file (src/data/)
-            self.data_dir = (Path(__file__).parent.parent / self.data_dir).resolve()
-        else:
-            self.data_dir = self.data_dir.resolve()
-        
-        self.train_embeddings = Path(train_embeddings)
-        self.train_labels = Path(train_labels)
-        self.val_embeddings = Path(val_embeddings)
-        self.val_labels = Path(val_labels)
-        self.test_embeddings = Path(test_embeddings) if test_embeddings else None
-        self.test_labels = Path(test_labels) if test_labels else None
+        # Convert data_dir to absolute path if it's relative
+        self.data_dir = Path(data_dir).resolve()
+        self.train_embeddings = train_embeddings
+        self.train_labels = train_labels
+        self.val_embeddings = val_embeddings
+        self.val_labels = val_labels
+        self.test_embeddings = test_embeddings
+        self.test_labels = test_labels
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.datasets: Dict[str, CATHeDataset] = {}
