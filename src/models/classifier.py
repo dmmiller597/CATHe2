@@ -55,7 +55,7 @@ class CATHeClassifier(pl.LightningModule):
             'acc': Accuracy,
             'f1': F1Score,
             'mcc': MatthewsCorrCoef,
-            'balanced_acc': lambda: Accuracy(average='macro')
+            'balanced_acc': lambda **kwargs: Accuracy(average='macro', **kwargs)
         }
         for stage in ['train', 'val', 'test']:
             for name, metric_cls in metrics.items():
