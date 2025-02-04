@@ -93,21 +93,19 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
-        # Add L1 and L2 regularization loss
+        
+        # Compute regularization only when needed
         if self.hparams.l1_reg > 0 or self.hparams.l2_reg > 0:
             loss += self._compute_regularization()
-
-        preds = torch.argmax(logits, dim=1)
-        # Update and log metrics
-        metrics = {
-            'loss': loss,
-            'acc': self.train_acc(preds, y),
-            'f1': self.train_f1(preds, y),
-            'mcc': self.train_mcc(preds, y),
-            'balanced_acc': self.train_balanced_acc(preds, y)
-        }
-        self.log_dict({f"train_{k}": v for k, v in metrics.items()},
-                      prog_bar=True, on_step=True, on_epoch=True)
+        
+        with torch.no_grad():  # Don't track metrics computation in autograd
+            preds = torch.argmax(logits, dim=1)
+            self.train_acc(preds, y)
+            self.train_f1(preds, y)
+            self.train_mcc(preds, y)
+            self.train_balanced_acc(preds, y)
+        
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch: tuple, batch_idx: int) -> dict:

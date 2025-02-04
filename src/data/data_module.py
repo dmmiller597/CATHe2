@@ -21,18 +21,12 @@ class CATHeDataset(Dataset):
             labels_path: Path to CSV file containing SF labels
         """
         try:
-            with np.load(embeddings_path) as data:
-                self.embeddings = torch.FloatTensor(data['arr_0'])
-        except Exception as e:
-            log.error(f"Error loading embeddings from {embeddings_path}: {e}")
-            raise
-        
-        try:
+            # Load data into memory more efficiently
+            self.embeddings = torch.from_numpy(np.load(embeddings_path)['arr_0']).float()
             labels_df = pd.read_csv(labels_path)
-            # Extract SF column and convert to categorical codes
-            self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes.copy())
+            self.labels = torch.from_numpy(pd.Categorical(labels_df['SF']).codes).long()
         except Exception as e:
-            log.error(f"Error loading labels from {labels_path}: {e}")
+            log.error(f"Error loading data: {e}")
             raise
         
     def __len__(self) -> int:
@@ -122,7 +116,9 @@ class CATHeDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2
         )
 
     def val_dataloader(self) -> DataLoader:
