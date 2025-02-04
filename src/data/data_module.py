@@ -24,7 +24,7 @@ class CATHeDataset(Dataset):
             # Load data into memory more efficiently
             self.embeddings = torch.from_numpy(np.load(embeddings_path)['arr_0']).float()
             labels_df = pd.read_csv(labels_path)
-            self.labels = torch.from_numpy(pd.Categorical(labels_df['SF']).codes).long()
+            self.labels = torch.from_numpy(pd.Categorical(labels_df['SF']).codes).copy()
         except Exception as e:
             log.error(f"Error loading data: {e}")
             raise
