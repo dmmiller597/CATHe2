@@ -50,16 +50,11 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self.criterion = nn.CrossEntropyLoss()
 
-        # Initialize metrics for each stage
-        metrics = {
-            'acc': Accuracy,
-            'f1': F1Score,
-            'mcc': MatthewsCorrCoef,
-            'balanced_acc': lambda **kwargs: Accuracy(average='macro', **kwargs)
-        }
-        for stage in ['train', 'val', 'test']:
-            for name, metric_cls in metrics.items():
-                setattr(self, f"{stage}_{name}", metric_cls(task="multiclass", num_classes=num_classes))
+        # Initialize metrics once and reuse them
+        self.accuracy = Accuracy(task="multiclass", num_classes=num_classes)
+        self.f1_score = F1Score(task="multiclass", num_classes=num_classes)
+        self.mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        self.balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -94,19 +89,27 @@ class CATHeClassifier(pl.LightningModule):
         logits = self(x)
         loss = self.criterion(logits, y)
         
-        # Compute regularization only when needed
         if self.hparams.l1_reg > 0 or self.hparams.l2_reg > 0:
             loss += self._compute_regularization()
         
-        with torch.no_grad():  # Don't track metrics computation in autograd
-            preds = torch.argmax(logits, dim=1)
-            self.train_acc(preds, y)
-            self.train_f1(preds, y)
-            self.train_mcc(preds, y)
-            self.train_balanced_acc(preds, y)
-        
+        # Only log loss during training steps
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        return loss
+        
+        # Return predictions for epoch-end metrics computation
+        return {"loss": loss, "preds": logits.detach(), "targets": y}
+
+    def training_epoch_end(self, outputs: List[dict]) -> None:
+        """Compute metrics at epoch end instead of every step"""
+        preds = torch.cat([x["preds"].argmax(dim=-1) for x in outputs])
+        targets = torch.cat([x["targets"] for x in outputs])
+        
+        # Compute metrics once per epoch
+        self.log_dict({
+            "train_acc": self.accuracy(preds, targets),
+            "train_f1": self.f1_score(preds, targets),
+            "train_mcc": self.mcc(preds, targets),
+            "train_balanced_acc": self.balanced_acc(preds, targets)
+        }, prog_bar=True, on_epoch=True)
 
     def validation_step(self, batch: tuple, batch_idx: int) -> dict:
         """
@@ -122,16 +125,23 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
-        preds = torch.argmax(logits, dim=1)
-        metrics = {
-            'loss': loss,
-            'acc': self.val_acc(preds, y),
-            'f1': self.val_f1(preds, y),
-            'mcc': self.val_mcc(preds, y),
-            'balanced_acc': self.val_balanced_acc(preds, y)
-        }
-        self.log_dict({f"val_{k}": v for k, v in metrics.items()}, prog_bar=True)
-        return {'loss': loss, 'preds': preds, 'targets': y}
+        
+        # Only log loss during validation steps
+        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        
+        return {"loss": loss, "preds": logits.detach(), "targets": y}
+
+    def validation_epoch_end(self, outputs: List[dict]) -> None:
+        """Compute metrics at epoch end"""
+        preds = torch.cat([x["preds"].argmax(dim=-1) for x in outputs])
+        targets = torch.cat([x["targets"] for x in outputs])
+        
+        self.log_dict({
+            "val_acc": self.accuracy(preds, targets),
+            "val_f1": self.f1_score(preds, targets),
+            "val_mcc": self.mcc(preds, targets),
+            "val_balanced_acc": self.balanced_acc(preds, targets)
+        }, prog_bar=True)
 
     def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """
@@ -150,8 +160,8 @@ class CATHeClassifier(pl.LightningModule):
         preds = torch.argmax(logits, dim=1)
         self.log_dict({
             "test_loss": loss,
-            "test_acc": self.test_acc(preds, y),
-            "test_f1": self.test_f1(preds, y)
+            "test_acc": self.accuracy(preds, y),
+            "test_f1": self.f1_score(preds, y)
         })
         return loss
 
