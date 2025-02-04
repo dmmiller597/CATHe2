@@ -22,7 +22,7 @@ def setup_callbacks(cfg: DictConfig) -> list:
     """Essential callbacks with dynamic metric handling"""
     return [
         ModelCheckpoint(
-            dirpath='outputs/checkpoints',
+            dirpath=cfg.training.checkpoint_dir,
             filename='{epoch:02d}-{val_acc:.4f}',
             monitor=cfg.training.monitor_metric,
             mode=cfg.training.monitor_mode,
@@ -42,12 +42,12 @@ def setup_callbacks(cfg: DictConfig) -> list:
 def setup_trainer(cfg: DictConfig) -> pl.Trainer:
     """Simplified trainer with automatic resource management"""
     # Create output directories
-    Path('outputs/checkpoints').mkdir(parents=True, exist_ok=True)
-    Path('outputs/logs').mkdir(parents=True, exist_ok=True)
+    Path(cfg.training.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    Path(cfg.training.log_dir).mkdir(parents=True, exist_ok=True)
     
     logger = WandbLogger(
         project="CATHe",
-        save_dir="outputs/logs",
+        save_dir=cfg.training.log_dir,
         log_model=True,
         config=OmegaConf.to_container(cfg, resolve=True)
     )

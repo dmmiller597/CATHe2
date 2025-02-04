@@ -13,10 +13,7 @@ class CATHeClassifier(pl.LightningModule):
         hidden_sizes: List[int],
         num_classes: int,
         dropout: float = 0.5,
-        learning_rate: float = 1e-5,
-        use_batch_norm: bool = True,
-        l1_reg: float = 1e-5,
-        l2_reg: float = 1e-4
+        learning_rate: float = 1e-4,
     ):
         """
         Initialize the CATH classifier.
@@ -27,33 +24,28 @@ class CATHeClassifier(pl.LightningModule):
             num_classes (int): Number of CATH superfamily classes.
             dropout (float): Dropout probability.
             learning_rate (float): Learning rate for optimizer.
-            use_batch_norm (bool): Whether to use batch normalization.
-            l1_reg (float): L1 regularization strength.
-            l2_reg (float): L2 regularization strength.
         """
         super().__init__()
         self.save_hyperparameters()
         
-        # Initialize lists to store predictions and targets
-        self.validation_step_outputs = []
-
-        # Build layers
+        # Build MLP layers
         layers = []
-        input_dim = embedding_dim        
+        in_features = embedding_dim
+        
         for hidden_size in hidden_sizes:
             layers.extend([
-                nn.Linear(input_dim, hidden_size),
-                nn.BatchNorm1d(hidden_size) if use_batch_norm else nn.Identity(),
-                nn.LeakyReLU(negative_slope=0.05),
+                nn.Linear(in_features, hidden_size),
+                nn.BatchNorm1d(hidden_size),
+                nn.ReLU(),
                 nn.Dropout(dropout)
             ])
-            input_dim = hidden_size
-
-        layers.append(nn.Linear(input_dim, num_classes))
+            in_features = hidden_size
+            
+        layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
+        
+        # Loss and metrics
         self.criterion = nn.CrossEntropyLoss()
-
-        # Initialize metrics once and reuse them
         self.accuracy = Accuracy(task="multiclass", num_classes=num_classes)
         self.f1_score = F1Score(task="multiclass", num_classes=num_classes)
         self.mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
@@ -71,12 +63,6 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def _compute_regularization(self) -> torch.Tensor:
-        """Compute combined L1 and L2 regularization losses."""
-        l1_loss = sum(torch.sum(torch.abs(p)) for p in self.parameters() if p.requires_grad)
-        l2_loss = sum(torch.sum(p ** 2) for p in self.parameters() if p.requires_grad)
-        return self.hparams.l1_reg * l1_loss + self.hparams.l2_reg * l2_loss
-
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         """
         Training step.
@@ -92,13 +78,9 @@ class CATHeClassifier(pl.LightningModule):
         logits = self(x)
         loss = self.criterion(logits, y)
         
-        if self.hparams.l1_reg > 0 or self.hparams.l2_reg > 0:
-            loss += self._compute_regularization()
-        
-        # Log metrics
-        preds = torch.argmax(logits, dim=1)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_acc", self.accuracy(preds, y), prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train_acc", self.accuracy(logits.argmax(1), y), 
+                prog_bar=True, on_step=False, on_epoch=True)
         
         return loss
 
@@ -106,46 +88,52 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
-        preds = torch.argmax(logits, dim=1)
+        preds = logits.argmax(1)
         
-        # Update metrics incrementally
+        # Update metrics
         self.accuracy.update(preds, y)
         self.f1_score.update(preds, y)
         self.mcc.update(preds, y)
         self.balanced_acc.update(preds, y)
         
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
 
     def on_validation_epoch_end(self) -> None:
-        # Compute all metrics from accumulated states
         metrics = {
-            "val_acc": self.accuracy.compute().item(),
-            "val_f1": self.f1_score.compute().item(),
-            "val_mcc": self.mcc.compute().item(),
-            "val_balanced_acc": self.balanced_acc.compute().item()
+            "val_acc": self.accuracy.compute(),
+            "val_f1": self.f1_score.compute(),
+            "val_mcc": self.mcc.compute(),
+            "val_balanced_acc": self.balanced_acc.compute()
         }
         self.log_dict(metrics, prog_bar=True, sync_dist=True)
         
-        # Reset internal states
-        self.accuracy.reset()
-        self.f1_score.reset()
-        self.mcc.reset()
-        self.balanced_acc.reset()
+        # Reset metrics
+        for metric in [self.accuracy, self.f1_score, self.mcc, self.balanced_acc]:
+            metric.reset()
 
-    @torch.inference_mode()
     def test_step(self, batch: tuple, batch_idx: int) -> None:
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
-        preds = torch.argmax(logits, dim=1)
+        preds = logits.argmax(1)
         
-        self.log_dict({
-            "test_loss": loss,
-            "test_acc": self.accuracy(preds, y),
-            "test_f1": self.f1_score(preds, y),
-            "test_mcc": self.mcc(preds, y),
-            "test_balanced_acc": self.balanced_acc(preds, y)
-        }, prog_bar=True, sync_dist=True)
+        # Update metrics
+        self.accuracy.update(preds, y)
+        self.f1_score.update(preds, y)
+        self.mcc.update(preds, y)
+        self.balanced_acc.update(preds, y)
+
+    def on_test_epoch_end(self) -> None:
+        metrics = {
+            "test_acc": self.accuracy.compute(),
+            "test_f1": self.f1_score.compute(),
+            "test_mcc": self.mcc.compute(),
+            "test_balanced_acc": self.balanced_acc.compute()
+        }
+        self.log_dict(metrics, prog_bar=True, sync_dist=True)
+        
+        # Reset metrics
+        for metric in [self.accuracy, self.f1_score, self.mcc, self.balanced_acc]:
+            metric.reset()
 
     def configure_optimizers(self) -> dict:
         """
@@ -154,7 +142,11 @@ class CATHeClassifier(pl.LightningModule):
         Returns:
             dict: Dictionary containing optimizer and lr scheduler configuration.
         """
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=0.01  # Built-in L2 regularization
+        )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='max', factor=0.1, patience=10
         )
