@@ -21,14 +21,14 @@ def setup_callbacks(cfg: DictConfig) -> list:
     return [
         ModelCheckpoint(
             dirpath='checkpoints',
-            filename='cathe-{epoch:02d}-{val_accuracy:.4f}',
-            monitor='val_accuracy',
+            filename='cathe-{epoch:02d}-{val_acc:.4f}',
+            monitor='val_acc',
             mode='max',
             save_top_k=cfg.training.save_top_k,
             save_last=True
         ),
         EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_acc',
             patience=cfg.training.early_stopping_patience,
             mode='max',
             verbose=True
