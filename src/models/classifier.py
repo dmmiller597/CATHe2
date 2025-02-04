@@ -103,65 +103,49 @@ class CATHeClassifier(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: tuple, batch_idx: int) -> None:
-        """
-        Validation step.
-
-        Args:
-            batch (tuple): Tuple of (embeddings, labels).
-            batch_idx (int): Current batch index.
-        """
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         
-        # Store predictions and targets for epoch end
-        self.validation_step_outputs.append({
-            "preds": preds,
-            "targets": y
-        })
+        # Update metrics incrementally
+        self.accuracy.update(preds, y)
+        self.f1_score.update(preds, y)
+        self.mcc.update(preds, y)
+        self.balanced_acc.update(preds, y)
         
-        # Log loss
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
     def on_validation_epoch_end(self) -> None:
-        """Compute metrics at epoch end"""
-        # Stack all predictions and targets
-        preds = torch.cat([x["preds"] for x in self.validation_step_outputs])
-        targets = torch.cat([x["targets"] for x in self.validation_step_outputs])
+        # Compute all metrics from accumulated states
+        metrics = {
+            "val_acc": self.accuracy.compute(),
+            "val_f1": self.f1_score.compute(),
+            "val_mcc": self.mcc.compute(),
+            "val_balanced_acc": self.balanced_acc.compute()
+        }
+        self.log_dict(metrics, prog_bar=True, sync_dist=True)
         
-        # Log metrics
-        self.log_dict({
-            "val_acc": self.accuracy(preds, targets),
-            "val_f1": self.f1_score(preds, targets),
-            "val_mcc": self.mcc(preds, targets),
-            "val_balanced_acc": self.balanced_acc(preds, targets)
-        }, prog_bar=True)
-        
-        # Clear saved predictions
-        self.validation_step_outputs.clear()
+        # Reset internal states
+        self.accuracy.reset()
+        self.f1_score.reset()
+        self.mcc.reset()
+        self.balanced_acc.reset()
 
+    @torch.inference_mode()
     def test_step(self, batch: tuple, batch_idx: int) -> None:
-        """
-        Test step.
-
-        Args:
-            batch (tuple): Tuple of (embeddings, labels).
-            batch_idx (int): Current batch index.
-        """
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         
-        # Log metrics
         self.log_dict({
             "test_loss": loss,
             "test_acc": self.accuracy(preds, y),
             "test_f1": self.f1_score(preds, y),
             "test_mcc": self.mcc(preds, y),
             "test_balanced_acc": self.balanced_acc(preds, y)
-        }, prog_bar=True)
+        }, prog_bar=True, sync_dist=True)
 
     def configure_optimizers(self) -> dict:
         """
