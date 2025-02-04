@@ -14,16 +14,22 @@ class CATHeClassifier(pl.LightningModule):
         num_classes: int,
         dropout: float = 0.5,
         learning_rate: float = 1e-4,
+        weight_decay: float = 0.01,
+        scheduler_factor: float = 0.1,
+        scheduler_patience: int = 10,
     ):
         """
         Initialize the CATH classifier.
 
         Args:
-            embedding_dim (int): Dimension of input protein embeddings.
-            hidden_sizes (List[int]): List of hidden layer sizes.
-            num_classes (int): Number of CATH superfamily classes.
-            dropout (float): Dropout probability.
-            learning_rate (float): Learning rate for optimizer.
+            embedding_dim: Dimension of input protein embeddings
+            hidden_sizes: List of hidden layer sizes
+            num_classes: Number of CATH superfamily classes
+            dropout: Dropout probability
+            learning_rate: Learning rate for optimizer
+            weight_decay: Weight decay for optimizer
+            scheduler_factor: Factor by which to reduce LR on plateau
+            scheduler_patience: Number of epochs to wait before reducing LR
         """
         super().__init__()
         self.save_hyperparameters()
@@ -31,7 +37,6 @@ class CATHeClassifier(pl.LightningModule):
         # Build MLP layers
         layers = []
         in_features = embedding_dim
-        
         for hidden_size in hidden_sizes:
             layers.extend([
                 nn.Linear(in_features, hidden_size),
@@ -40,16 +45,12 @@ class CATHeClassifier(pl.LightningModule):
                 nn.Dropout(dropout)
             ])
             in_features = hidden_size
-            
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
         
-        # Loss and metrics
+        # Standard metrics setup
         self.criterion = nn.CrossEntropyLoss()
-        self.accuracy = Accuracy(task="multiclass", num_classes=num_classes)
-        self.f1_score = F1Score(task="multiclass", num_classes=num_classes)
-        self.mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
-        self.balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        self._setup_metrics(num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -136,20 +137,20 @@ class CATHeClassifier(pl.LightningModule):
             metric.reset()
 
     def configure_optimizers(self) -> dict:
-        """
-        Configure optimizers and learning rate schedulers.
-
-        Returns:
-            dict: Dictionary containing optimizer and lr scheduler configuration.
-        """
+        """Configure optimizers and learning rate schedulers."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
-            weight_decay=0.01  # Built-in L2 regularization
+            weight_decay=self.hparams.weight_decay
         )
+        
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='max', factor=0.1, patience=10
+            optimizer,
+            mode='max',
+            factor=self.hparams.scheduler_factor,
+            patience=self.hparams.scheduler_patience
         )
+        
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -157,4 +158,10 @@ class CATHeClassifier(pl.LightningModule):
                 "monitor": "val_acc",
                 "frequency": 1
             }
-        } 
+        }
+
+    def _setup_metrics(self, num_classes: int):
+        self.accuracy = Accuracy(task="multiclass", num_classes=num_classes)
+        self.f1_score = F1Score(task="multiclass", num_classes=num_classes)
+        self.mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        self.balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro') 
