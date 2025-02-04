@@ -25,7 +25,6 @@ training:
   # Hardware configuration
   gpus: 1
   num_workers: 4
-  precision: 16
   
   # Advanced training options
   seed: 42
