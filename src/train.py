@@ -21,16 +21,16 @@ def setup_callbacks(cfg: DictConfig) -> list:
     return [
         ModelCheckpoint(
             dirpath='checkpoints',
-            filename='cathe-{epoch:02d}-{val_loss:.2f}',
-            monitor='val_loss',
-            mode='min',
+            filename='cathe-{epoch:02d}-{val_accuracy:.4f}',
+            monitor='val_accuracy',
+            mode='max',
             save_top_k=cfg.training.save_top_k,
             save_last=True
         ),
         EarlyStopping(
-            monitor='val_loss',
+            monitor='val_accuracy',
             patience=cfg.training.early_stopping_patience,
-            mode='min',
+            mode='max',
             verbose=True
         ),
         LearningRateMonitor(logging_interval='epoch'),
@@ -38,7 +38,10 @@ def setup_callbacks(cfg: DictConfig) -> list:
     ]
 
 def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
-    logger = WandbLogger(project="CATHe", name="cathe")
+    logger = WandbLogger(
+        project="CATHe",
+        log_model=True
+    )
     logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))
     
     accelerator = 'gpu' if torch.cuda.is_available() and cfg.training.gpus > 0 else 'cpu'
@@ -52,9 +55,13 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
         callbacks=callbacks,
         logger=logger,
         deterministic=True,
-        gradient_clip_val=cfg.training.get("gradient_clip_val", 0.0),
-        accumulate_grad_batches=cfg.training.get("accumulate_grad_batches", 1),
-        precision=cfg.training.get("precision", 32)
+        gradient_clip_val=cfg.training.gradient_clip_val,
+        accumulate_grad_batches=cfg.training.accumulate_grad_batches,
+        precision=cfg.training.precision,
+        enable_progress_bar=True,
+        log_every_n_steps=cfg.training.log_every_n_steps,
+        enable_checkpointing=True,
+        enable_model_summary=True
     )
 
 @hydra.main(config_path="../config", config_name="config", version_base="1.2")
