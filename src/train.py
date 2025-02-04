@@ -57,16 +57,19 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
         precision=cfg.training.get("precision", 32)
     )
 
-@hydra.main(config_path="../config", config_name="config", version_base="1.1")
+@hydra.main(config_path="../config", config_name="config", version_base="1.2")
 def main(cfg: DictConfig) -> None:
     """Main training function."""
+    # Get original working directory
+    original_cwd = hydra.utils.get_original_cwd()
+    
+    # Use Path to handle paths relative to original working directory
+    project_root = Path(original_cwd)
+    
     set_seed(cfg.training.seed)
     
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision("high")
-    
-    # Get the project root directory (parent of src)
-    project_root = Path(__file__).parent.parent.resolve()
     
     # Initialize data module with absolute path
     data_module = CATHeDataModule(
