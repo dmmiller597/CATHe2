@@ -2,7 +2,7 @@
 
 CATHe (short for CATH embeddings) is a deep learning tool designed to detect remote homologues (up to 20% sequence similarity) for superfamilies in the CATH database. CATHe consists of an artificial neural network model which was trained on sequence embeddings from the ProtT5 protein Language Model (pLM).
 
-CATHe is built using [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) for easier training, [Hydra](https://hydra.cc/docs/intro/) for simple configuration, and [Weights & Biases (wandb)](https://docs.wandb.ai/quickstart) for tracking experiments and results.
+CATHe is built using [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) for easier training, [Hydra](https://hydra.cc/docs/intro/) for simple configuration, and [Weights & Biases](https://docs.wandb.ai/quickstart) for tracking experiments and results.
 
 ## Project Structure
 
