@@ -33,6 +33,9 @@ class CATHeClassifier(pl.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
+        
+        # Initialize lists to store predictions and targets
+        self.validation_step_outputs = []
 
         # Build layers
         layers = []
@@ -92,75 +95,73 @@ class CATHeClassifier(pl.LightningModule):
         if self.hparams.l1_reg > 0 or self.hparams.l2_reg > 0:
             loss += self._compute_regularization()
         
-        # Only log loss during training steps
+        # Log metrics
+        preds = torch.argmax(logits, dim=1)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_acc", self.accuracy(preds, y), prog_bar=True, on_step=False, on_epoch=True)
         
-        # Return predictions for epoch-end metrics computation
-        return {"loss": loss, "preds": logits.detach(), "targets": y}
+        return loss
 
-    def on_train_epoch_end(self):
-        # Adjusted logic: If you need to aggregate outputs,
-        # store necessary values during training_step.
-        # For example, if you record loss in self.epoch_losses during training_step:
-        if hasattr(self, "epoch_losses") and self.epoch_losses:
-            avg_loss = torch.stack(self.epoch_losses).mean()
-            self.log("train_loss_epoch", avg_loss)
-            # Clear the stored losses for the next epoch
-            self.epoch_losses = []
-
-    def validation_step(self, batch: tuple, batch_idx: int) -> dict:
+    def validation_step(self, batch: tuple, batch_idx: int) -> None:
         """
         Validation step.
 
         Args:
             batch (tuple): Tuple of (embeddings, labels).
             batch_idx (int): Current batch index.
-            
-        Returns:
-            dict: Dictionary containing loss and metrics.
         """
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
+        preds = torch.argmax(logits, dim=1)
         
-        # Only log loss during validation steps
+        # Store predictions and targets for epoch end
+        self.validation_step_outputs.append({
+            "preds": preds,
+            "targets": y
+        })
+        
+        # Log loss
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
-        
-        return {"loss": loss, "preds": logits.detach(), "targets": y}
 
-    def validation_epoch_end(self, outputs: List[dict]) -> None:
+    def on_validation_epoch_end(self) -> None:
         """Compute metrics at epoch end"""
-        preds = torch.cat([x["preds"].argmax(dim=-1) for x in outputs])
-        targets = torch.cat([x["targets"] for x in outputs])
+        # Stack all predictions and targets
+        preds = torch.cat([x["preds"] for x in self.validation_step_outputs])
+        targets = torch.cat([x["targets"] for x in self.validation_step_outputs])
         
+        # Log metrics
         self.log_dict({
             "val_acc": self.accuracy(preds, targets),
             "val_f1": self.f1_score(preds, targets),
             "val_mcc": self.mcc(preds, targets),
             "val_balanced_acc": self.balanced_acc(preds, targets)
         }, prog_bar=True)
+        
+        # Clear saved predictions
+        self.validation_step_outputs.clear()
 
-    def test_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: tuple, batch_idx: int) -> None:
         """
         Test step.
 
         Args:
             batch (tuple): Tuple of (embeddings, labels).
             batch_idx (int): Current batch index.
-            
-        Returns:
-            torch.Tensor: Loss tensor.
         """
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
+        
+        # Log metrics
         self.log_dict({
             "test_loss": loss,
             "test_acc": self.accuracy(preds, y),
-            "test_f1": self.f1_score(preds, y)
-        })
-        return loss
+            "test_f1": self.f1_score(preds, y),
+            "test_mcc": self.mcc(preds, y),
+            "test_balanced_acc": self.balanced_acc(preds, y)
+        }, prog_bar=True)
 
     def configure_optimizers(self) -> dict:
         """
