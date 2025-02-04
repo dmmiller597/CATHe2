@@ -30,7 +30,7 @@ class CATHeDataset(Dataset):
         try:
             labels_df = pd.read_csv(labels_path)
             # Extract SF column and convert to categorical codes
-            self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes)
+            self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes.copy())
         except Exception as e:
             log.error(f"Error loading labels from {labels_path}: {e}")
             raise
