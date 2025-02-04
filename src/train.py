@@ -10,6 +10,7 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 import torch
 from pathlib import Path
+import yaml
 
 from utils import get_logger, set_seed
 from data.data_module import CATHeDataModule
@@ -18,6 +19,15 @@ from models.classifier import CATHeClassifier
 log = get_logger()
 
 def setup_callbacks(cfg: DictConfig) -> list:
+    """
+    Setup the list of callbacks for training.
+
+    Args:
+        cfg (DictConfig): Configuration object.
+
+    Returns:
+        list: List of PyTorch Lightning callbacks.
+    """
     return [
         ModelCheckpoint(
             dirpath='checkpoints',
@@ -38,6 +48,16 @@ def setup_callbacks(cfg: DictConfig) -> list:
     ]
 
 def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
+    """
+    Setup the PyTorch Lightning Trainer.
+
+    Args:
+        cfg (DictConfig): Configuration object.
+        callbacks (list): List of callbacks.
+
+    Returns:
+        pl.Trainer: Configured trainer.
+    """
     logger = WandbLogger(
         project="CATHe",
         log_model=True
@@ -66,7 +86,12 @@ def setup_trainer(cfg: DictConfig, callbacks: list) -> pl.Trainer:
 
 @hydra.main(config_path="../config", config_name="config", version_base="1.2")
 def main(cfg: DictConfig) -> None:
-    """Main training function."""
+    """
+    Main training function.
+
+    Args:
+        cfg (DictConfig): Configuration object.
+    """
     # Get original working directory
     original_cwd = hydra.utils.get_original_cwd()
     
@@ -107,17 +132,17 @@ def main(cfg: DictConfig) -> None:
     log.info("Starting training...")
     trainer.fit(model, data_module)
     
-    if trainer.checkpoint_callback.best_model_path:
-        log.info(f"Best model path: {trainer.checkpoint_callback.best_model_path}")
+    if getattr(trainer.checkpoint_callback, "best_model_path", None):
+        best_model_path = trainer.checkpoint_callback.best_model_path
+        log.info(f"Best model path: {best_model_path}")
         log.info("Testing best model...")
         trainer.test(model, data_module)
         
         # Save test metrics
-        test_results = Path('logs') / 'test_results.yaml'
-        with open(test_results, 'w') as f:
-            import yaml
+        test_results_path = Path('logs') / 'test_results.yaml'
+        with open(test_results_path, 'w') as f:
             yaml.dump(trainer.callback_metrics, f)
-        log.info(f"Test results saved to {test_results}")
+        log.info(f"Test results saved to {test_results_path}")
     
     log.info("Training completed successfully!")
 

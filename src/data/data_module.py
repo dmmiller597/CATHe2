@@ -20,14 +20,20 @@ class CATHeDataset(Dataset):
             embeddings_path: Path to NPZ file containing ProtT5 embeddings
             labels_path: Path to CSV file containing SF labels
         """
-        # Load embeddings
-        with np.load(embeddings_path) as data:
-            self.embeddings = torch.FloatTensor(data['arr_0'])
+        try:
+            with np.load(embeddings_path) as data:
+                self.embeddings = torch.FloatTensor(data['arr_0'])
+        except Exception as e:
+            log.error(f"Error loading embeddings from {embeddings_path}: {e}")
+            raise
         
-        # Load labels and convert to indices
-        labels_df = pd.read_csv(labels_path)
-        # Extract SF column and convert to categorical codes
-        self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes.copy())
+        try:
+            labels_df = pd.read_csv(labels_path)
+            # Extract SF column and convert to categorical codes
+            self.labels = torch.LongTensor(pd.Categorical(labels_df['SF']).codes)
+        except Exception as e:
+            log.error(f"Error loading labels from {labels_path}: {e}")
+            raise
         
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -91,7 +97,7 @@ class CATHeDataModule(pl.LightningDataModule):
         Args:
             stage: Current stage ('fit' or 'test')
         """
-        if stage == "fit" or stage is None:
+        if stage in (None, "fit"):
             self.datasets["train"] = CATHeDataset(
                 self.data_dir / self.train_embeddings,
                 self.data_dir / self.train_labels
