@@ -119,10 +119,10 @@ class CATHeClassifier(pl.LightningModule):
     def on_validation_epoch_end(self) -> None:
         # Compute all metrics from accumulated states
         metrics = {
-            "val_acc": self.accuracy.compute(),
-            "val_f1": self.f1_score.compute(),
-            "val_mcc": self.mcc.compute(),
-            "val_balanced_acc": self.balanced_acc.compute()
+            "val_acc": self.accuracy.compute().item(),
+            "val_f1": self.f1_score.compute().item(),
+            "val_mcc": self.mcc.compute().item(),
+            "val_balanced_acc": self.balanced_acc.compute().item()
         }
         self.log_dict(metrics, prog_bar=True, sync_dist=True)
         
