@@ -208,6 +208,6 @@ class CATHeClassifier(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_accuracy"
+                "monitor": "val_acc"
             }
         } 
