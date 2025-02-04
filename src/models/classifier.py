@@ -98,18 +98,15 @@ class CATHeClassifier(pl.LightningModule):
         # Return predictions for epoch-end metrics computation
         return {"loss": loss, "preds": logits.detach(), "targets": y}
 
-    def training_epoch_end(self, outputs: List[dict]) -> None:
-        """Compute metrics at epoch end instead of every step"""
-        preds = torch.cat([x["preds"].argmax(dim=-1) for x in outputs])
-        targets = torch.cat([x["targets"] for x in outputs])
-        
-        # Compute metrics once per epoch
-        self.log_dict({
-            "train_acc": self.accuracy(preds, targets),
-            "train_f1": self.f1_score(preds, targets),
-            "train_mcc": self.mcc(preds, targets),
-            "train_balanced_acc": self.balanced_acc(preds, targets)
-        }, prog_bar=True, on_epoch=True)
+    def on_train_epoch_end(self):
+        # Adjusted logic: If you need to aggregate outputs,
+        # store necessary values during training_step.
+        # For example, if you record loss in self.epoch_losses during training_step:
+        if hasattr(self, "epoch_losses") and self.epoch_losses:
+            avg_loss = torch.stack(self.epoch_losses).mean()
+            self.log("train_loss_epoch", avg_loss)
+            # Clear the stored losses for the next epoch
+            self.epoch_losses = []
 
     def validation_step(self, batch: tuple, batch_idx: int) -> dict:
         """
