@@ -100,10 +100,10 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         metrics = {
-            "val_acc": self.accuracy.compute(),
-            "val_f1": self.f1_score.compute(),
-            "val_mcc": self.mcc.compute(),
-            "val_balanced_acc": self.balanced_acc.compute()
+            "val_acc": self.accuracy.compute().float(),
+            "val_f1": self.f1_score.compute().float(),
+            "val_mcc": self.mcc.compute().float(),
+            "val_balanced_acc": self.balanced_acc.compute().float()
         }
         self.log_dict(metrics, prog_bar=True, sync_dist=True)
         
@@ -124,10 +124,10 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         metrics = {
-            "test_acc": self.accuracy.compute(),
-            "test_f1": self.f1_score.compute(),
-            "test_mcc": self.mcc.compute(),
-            "test_balanced_acc": self.balanced_acc.compute()
+            "test_acc": self.accuracy.compute().float(),
+            "test_f1": self.f1_score.compute().float(),
+            "test_mcc": self.mcc.compute().float(),
+            "test_balanced_acc": self.balanced_acc.compute().float()
         }
         self.log_dict(metrics, prog_bar=True, sync_dist=True)
         
