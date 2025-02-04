@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List, Dict
-from torchmetrics import Accuracy, F1Score
+from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
+import torchmetrics
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -12,9 +13,11 @@ class CATHeClassifier(pl.LightningModule):
         embedding_dim: int,
         hidden_sizes: List[int],
         num_classes: int,
-        dropout: float = 0.2,
-        learning_rate: float = 0.001,
-        use_batch_norm: bool = True
+        dropout: float = 0.5,
+        learning_rate: float = 1e-5,
+        use_batch_norm: bool = True,
+        l1_reg: float = 1e-5,
+        l2_reg: float = 1e-4
     ):
         """Initialize the CATH classifier.
         
@@ -25,6 +28,8 @@ class CATHeClassifier(pl.LightningModule):
             dropout: Dropout probability (default: 0.2)
             learning_rate: Learning rate for optimization (default: 0.001)
             use_batch_norm: Whether to use batch normalization (default: True)
+            l1_reg: L1 regularization strength (default: 1e-5)
+            l2_reg: L2 regularization strength (default: 1e-4)
         """
         super().__init__()
         self.save_hyperparameters()
@@ -35,15 +40,25 @@ class CATHeClassifier(pl.LightningModule):
         
         for hidden_size in hidden_sizes:
             layers.extend([
-                nn.Linear(input_dim, hidden_size),
+                nn.Linear(
+                    input_dim, 
+                    hidden_size,
+                    bias=True
+                ),
                 nn.BatchNorm1d(hidden_size) if use_batch_norm else nn.Identity(),
-                nn.ReLU(),
+                nn.LeakyReLU(negative_slope=0.05),
                 nn.Dropout(dropout)
             ])
             input_dim = hidden_size
             
         # Output layer
-        layers.append(nn.Linear(input_dim, num_classes))
+        layers.append(
+            nn.Linear(
+                input_dim, 
+                num_classes,
+                bias=True
+            )
+        )
         
         self.model = nn.Sequential(*layers)
         self.criterion = nn.CrossEntropyLoss()
@@ -55,6 +70,12 @@ class CATHeClassifier(pl.LightningModule):
         self.train_f1 = F1Score(task="multiclass", num_classes=num_classes)
         self.val_f1 = F1Score(task="multiclass", num_classes=num_classes)
         self.test_f1 = F1Score(task="multiclass", num_classes=num_classes)
+        self.train_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        self.val_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        self.train_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
         
         # Store predictions for epoch end analysis
         self.validation_step_outputs = []
@@ -178,15 +199,15 @@ class CATHeClassifier(pl.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode='min',
+            mode='max',
             factor=0.1,
-            patience=5
+            patience=10
         )
         
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss"
+                "monitor": "val_accuracy"
             }
         } 
