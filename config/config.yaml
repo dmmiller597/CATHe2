@@ -10,8 +10,8 @@ data:
 model:
   # Core architecture parameters
   embedding_dim: 1024
-  hidden_sizes: [128, 128, 128]
-  dropout: 0.5
+  hidden_sizes: [512, 256]
+  dropout: 0.2
   
   # Optimization parameters
   learning_rate: 1e-4
