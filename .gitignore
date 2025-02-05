@@ -21,3 +21,6 @@ data/
 
 # Venv
 venv/
+
+# Outputs
+outputs/
