@@ -8,6 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 from models.classifier import CATHeClassifier
 from utils import get_logger
 import torchmetrics
+from tqdm import tqdm
 
 # Use centralized logger from utils.py
 log = get_logger()
@@ -29,7 +30,11 @@ def load_embeddings(embeddings_path: Union[str, Path]) -> np.ndarray:
         raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
 
     with np.load(embeddings_path) as data:
-        return data['arr_0']
+        # Wrap the data loading with tqdm for a simple progress bar
+        with tqdm(total=1, desc="Loading Embeddings", unit="file") as pbar:
+            embeddings = data['arr_0']
+            pbar.update(1)
+        return embeddings
 
 def predict(
     model: CATHeClassifier,
@@ -102,7 +107,11 @@ def load_annotations(annotations_path: Union[str, Path]) -> np.ndarray:
     annotations_path = Path(annotations_path)
     if not annotations_path.exists():
         raise FileNotFoundError(f"Annotations file not found: {annotations_path}")
-    df = pd.read_csv(annotations_path)
+
+    # Wrap the file reading with tqdm
+    with tqdm(total=1, desc="Loading Annotations", unit="file") as pbar:
+        df = pd.read_csv(annotations_path)
+        pbar.update(1)
     # Assuming the ground truth SF is in a column named 'SF'
     return df['SF'].to_numpy()
 
