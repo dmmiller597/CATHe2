@@ -78,12 +78,6 @@ You can optionally override any config parameters via command line:
 python src/train.py training.batch_size=64 training.learning_rate=0.0001
 ```
 
-### Run Inference
-Generate predictions using the inference script:
-```bash
-python src/inference.py --checkpoint path/to/model.ckpt --embeddings path/to/embeddings.npz --output predictions.csv
-```
-
 ### Monitor training:
 After starting training, visit your Weights & Biases dashboard at https://wandb.ai.
 If you haven't already, run:
