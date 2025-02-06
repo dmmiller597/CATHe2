@@ -53,27 +53,17 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Configure your experiment in `config/config.yaml`:
+Edit `config/config.yaml` to set paths and parameters:
 ```yaml
 data:
   data_dir: "data"
-  train_embeddings: "embeddings/SF_Train_ProtT5.npz"
-  val_embeddings: "embeddings/SF_Val_ProtT5.npz"
-  test_embeddings: "embeddings/SF_Test_ProtT5.npz"
-  train_labels: "annotations/Y_Train_SF.csv"
   ...
 
 model:
   embedding_dim: 1024
-  hidden_sizes: [128, 128, 128]
-  dropout: 0.5
+  hidden_sizes: [512, 256]
   ...
 
-training:
-  seed: 42
-  batch_size: 256
-  max_epochs: 200
-  ...
 ```
 
 ## Usage
@@ -99,9 +89,9 @@ After starting training, visit your Weights & Biases dashboard at https://wandb.
 If you haven't already, run:
 ```bash
 wandb login
-```
-to set up your W&B credentials.
+```to set up your W&B credentials.
 
 ## License
 
 MIT License - See LICENSE file for details
+
