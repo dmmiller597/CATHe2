@@ -25,7 +25,6 @@ def setup_callbacks(cfg: DictConfig) -> list:
             filename='{epoch:02d}-{val_acc:.4f}',
             monitor=cfg.training.monitor_metric,
             mode=cfg.training.monitor_mode,
-            save_top_k=cfg.training.save_top_k,
             save_last=True,
             auto_insert_metric_name=False
         ),

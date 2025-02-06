@@ -2,7 +2,24 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List
-from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, FocalLoss
+from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0):
+        """
+        Initialize Focal Loss.
+        
+        Args:
+            gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
+        """
+        super().__init__()
+        self.gamma = gamma
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -17,6 +34,7 @@ class CATHeClassifier(pl.LightningModule):
         weight_decay: float = 0.01,
         scheduler_factor: float = 0.1,
         scheduler_patience: int = 10,
+        focal_gamma: float = 2.0,
     ):
         """
         Initialize the CATH classifier.
@@ -30,6 +48,7 @@ class CATHeClassifier(pl.LightningModule):
             weight_decay: Weight decay for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
             scheduler_patience: Number of epochs to wait before reducing LR
+            focal_gamma: Focus parameter for focal loss (default: 2.0)
         """
         super().__init__()
         self.save_hyperparameters()
@@ -48,12 +67,9 @@ class CATHeClassifier(pl.LightningModule):
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
         
-        # Standard metrics setup
-        self.criterion = FocalLoss(
-            task="multiclass",
-            num_classes=num_classes,
-            gamma=2.0
-        )
+        # Replace CrossEntropyLoss with FocalLoss
+        self.criterion = FocalLoss(gamma=focal_gamma)
+        
         self._setup_metrics(num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
