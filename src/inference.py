@@ -7,6 +7,7 @@ from typing import Union
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 from models.classifier import CATHeClassifier
 from utils import get_logger
+import torchmetrics
 
 # Use centralized logger from utils.py
 log = get_logger()
@@ -86,6 +87,61 @@ def save_predictions(
     df.to_csv(output_path, index=False)
     log.info(f"Predictions saved to {output_path}")
 
+def load_annotations(annotations_path: Union[str, Path]) -> np.ndarray:
+    """Load ground truth annotations from a CSV file.
+
+    Args:
+        annotations_path: Path to the CSV file containing annotations.
+
+    Returns:
+        NumPy array of ground truth classes.
+
+    Raises:
+        FileNotFoundError: If the annotations file doesn't exist.
+    """
+    annotations_path = Path(annotations_path)
+    if not annotations_path.exists():
+        raise FileNotFoundError(f"Annotations file not found: {annotations_path}")
+    df = pd.read_csv(annotations_path)
+    # Assuming the ground truth SF is in a column named 'SF'
+    return df['SF'].to_numpy()
+
+
+def evaluate_predictions(
+    predictions: np.ndarray,
+    ground_truth: np.ndarray,
+    num_classes: int,
+    device: str
+) -> None:
+    """Evaluate predictions against ground truth and log metrics.
+
+    Args:
+        predictions: Array of predicted classes.
+        ground_truth: Array of ground truth classes.
+        num_classes: The total number of classes
+        device: The device for metric calculation.
+    """
+
+    # Ensure predictions and ground truth are on the CPU and in the correct format
+    predictions = torch.tensor(predictions, dtype=torch.int64, device='cpu')
+    ground_truth = torch.tensor(ground_truth, dtype=torch.int64, device='cpu')
+
+    # Initialize metrics
+    accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
+    f1_score = torchmetrics.F1Score(task="multiclass", num_classes=num_classes, average='macro')
+    mcc = torchmetrics.MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+
+    # Calculate metrics
+    acc = accuracy(predictions, ground_truth)
+    f1 = f1_score(predictions, ground_truth)
+    mcc_val = mcc(predictions, ground_truth)
+
+    # Log metrics
+    log.info(f"Accuracy: {acc:.4f}")
+    log.info(f"F1 Score (Macro): {f1:.4f}")
+    log.info(f"MCC: {mcc_val:.4f}")
+
+
 def main(args: argparse.Namespace) -> None:
     """Run the inference pipeline.
 
@@ -102,6 +158,7 @@ def main(args: argparse.Namespace) -> None:
             args.checkpoint,
             map_location=args.device
         )
+        num_classes = model.hparams.num_classes # Access num_classes
 
 
         # Check if the specified device is available
@@ -118,6 +175,18 @@ def main(args: argparse.Namespace) -> None:
         )
 
         save_predictions(predictions, args.output)
+
+        if args.annotations:
+            log.info(f"Loading annotations from {args.annotations}")
+            ground_truth = load_annotations(args.annotations)
+            # Check if lengths of predictions and ground truth match
+            if len(predictions) != len(ground_truth):
+                raise ValueError(
+                    "Number of predictions and ground truth annotations do not match."
+                )
+            evaluate_predictions(predictions, ground_truth, num_classes, args.device)
+
+
         log.info("Inference completed successfully!")
 
     except Exception as e:
@@ -157,6 +226,12 @@ if __name__ == '__main__':
         type=str,
         default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to run inference on (cuda/cpu, default: cuda if available).'
+    )
+    parser.add_argument(
+        '--annotations',
+        type=str,
+        default=None,
+        help='Path to the CSV file containing ground truth annotations (optional).'
     )
 
     args = parser.parse_args()
