@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List
-from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
-from torchmetrics.classification import FocalLoss
+from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, FocalLoss
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
