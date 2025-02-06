@@ -10,7 +10,6 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 import torch
 from pathlib import Path
-import wandb
 
 from utils import get_logger, set_seed
 from data.data_module import CATHeDataModule
@@ -39,32 +38,22 @@ def setup_callbacks(cfg: DictConfig) -> list:
         RichProgressBar()
     ]
 
-def setup_trainer(cfg: DictConfig) -> pl.Trainer:
+def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger) -> pl.Trainer:
     """Simplified trainer with automatic resource management"""
-    # Create output directories
-    Path(cfg.training.checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    Path(cfg.training.log_dir).mkdir(parents=True, exist_ok=True)
-    
-    logger = WandbLogger(
-        project="CATHe",
-        save_dir=cfg.training.log_dir,
-        log_model=True,
-        config=OmegaConf.to_container(cfg, resolve=True)
-    )
-    
     return pl.Trainer(
         accelerator='auto',
         devices='auto',
         max_epochs=cfg.training.max_epochs,
         callbacks=setup_callbacks(cfg),
-        logger=logger,
+        logger=wandb_logger,
         deterministic=cfg.training.seed is not None,
         gradient_clip_val=cfg.training.gradient_clip_val,
         accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         precision=cfg.training.precision,
         log_every_n_steps=cfg.training.log_every_n_steps,
         enable_progress_bar=True,
-        enable_model_summary=True
+        enable_model_summary=True,
+        default_root_dir=cfg.training.output_dir
     )
 
 @hydra.main(config_path="../config", config_name="config", version_base="1.2")
@@ -72,8 +61,7 @@ def main(cfg: DictConfig) -> None:
     """Complete training workflow with automatic setup"""
     # Reproducibility
     set_seed(cfg.training.seed)
-    torch.set_float32_matmul_precision("high" if cfg.training.precision == 16 else "medium")
-    
+
     # Data setup
     data_dir = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir
     data_module = CATHeDataModule(
@@ -90,17 +78,23 @@ def main(cfg: DictConfig) -> None:
         num_classes=data_module.num_classes
     )
     
+    # Wandb Logger Setup
+    wandb_logger = WandbLogger(
+        project="CATHe",
+        save_dir=cfg.training.log_dir,
+        log_model=True,
+        config=OmegaConf.to_container(cfg, resolve=True)
+    )
+    
     # Training
-    trainer = setup_trainer(cfg)
+    trainer = setup_trainer(cfg, wandb_logger)
     trainer.fit(model, data_module)
     
     # Final testing
-    if trainer.checkpoint_callback.best_model_path:
-        trainer.test(model, data_module, ckpt_path="best")
+    trainer.test(model, data_module, ckpt_path="best")
     
-    # Cleanup
-    if wandb.run is not None:
-        wandb.finish()
+    # Finish Wandb run
+    wandb_logger.experiment.finish()
 
 if __name__ == "__main__":
     main() 
