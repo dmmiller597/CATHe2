@@ -89,7 +89,8 @@ After starting training, visit your Weights & Biases dashboard at https://wandb.
 If you haven't already, run:
 ```bash
 wandb login
-```to set up your W&B credentials.
+```
+to set up your W&B credentials.
 
 ## License
 
