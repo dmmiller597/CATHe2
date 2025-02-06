@@ -13,14 +13,14 @@ from tqdm import tqdm
 # Use centralized logger from utils.py
 log = get_logger()
 
-def load_embeddings(embeddings_path: Union[str, Path]) -> np.ndarray:
+def load_embeddings(embeddings_path: Union[str, Path]) -> torch.Tensor:
     """Load protein embeddings from an NPZ file.
 
     Args:
         embeddings_path: Path to the NPZ file containing embeddings.
 
     Returns:
-        Protein embeddings array.
+        Protein embeddings tensor.
 
     Raises:
         FileNotFoundError: If the embeddings file doesn't exist.
@@ -32,16 +32,16 @@ def load_embeddings(embeddings_path: Union[str, Path]) -> np.ndarray:
     with np.load(embeddings_path) as data:
         # Wrap the data loading with tqdm for a simple progress bar
         with tqdm(total=1, desc="Loading Embeddings", unit="file") as pbar:
-            embeddings = data['arr_0']
+            embeddings = torch.from_numpy(data['arr_0']).float() # Load directly as float32 tensor
             pbar.update(1)
         return embeddings
 
 def predict(
     model: CATHeClassifier,
-    embeddings: np.ndarray,
+    embeddings: torch.Tensor, # Changed to torch.Tensor
     batch_size: int = 32,
     device: str = 'cuda'
-) -> np.ndarray:
+) -> torch.Tensor: # Changed to torch.Tensor
     """Run inference on protein embeddings using the provided model.
 
     Args:
@@ -67,17 +67,17 @@ def predict(
         task = progress.add_task("[cyan]Running inference...", total=len(embeddings))
 
         for i in range(0, len(embeddings), batch_size):
-            batch = torch.FloatTensor(embeddings[i:i + batch_size]).to(device)
+            batch = embeddings[i:i + batch_size].to(device) # No need for torch.FloatTensor
             logits = model(batch)
             preds = torch.argmax(logits, dim=1)
             all_predictions.append(preds.cpu())  # Append to list
             progress.update(task, advance=batch.shape[0])
 
-    return torch.cat(all_predictions).numpy() # Efficient concatenation
+    return torch.cat(all_predictions) # Return as tensor
 
 
 def save_predictions(
-    predictions: np.ndarray,
+    predictions: torch.Tensor, # Changed to torch.Tensor
     output_path: Union[str, Path]
 ) -> None:
     """Save predictions to a CSV file.
@@ -88,18 +88,18 @@ def save_predictions(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame({'predicted_class': predictions})
+    df = pd.DataFrame({'predicted_class': predictions.numpy()}) # Convert to numpy for pandas
     df.to_csv(output_path, index=False)
     log.info(f"Predictions saved to {output_path}")
 
-def load_annotations(annotations_path: Union[str, Path]) -> np.ndarray:
+def load_annotations(annotations_path: Union[str, Path]) -> torch.Tensor:
     """Load ground truth annotations from a CSV file.
 
     Args:
         annotations_path: Path to the CSV file containing annotations.
 
     Returns:
-        NumPy array of ground truth classes.
+        Tensor of ground truth classes.
 
     Raises:
         FileNotFoundError: If the annotations file doesn't exist.
@@ -113,12 +113,14 @@ def load_annotations(annotations_path: Union[str, Path]) -> np.ndarray:
         df = pd.read_csv(annotations_path)
         pbar.update(1)
     # Assuming the ground truth SF is in a column named 'SF'
-    return df['SF'].to_numpy()
+    # Convert to categorical codes, then to a tensor, like in the data_module
+    codes = pd.Categorical(df['SF']).codes
+    return torch.tensor(codes, dtype=torch.long)
 
 
 def evaluate_predictions(
-    predictions: np.ndarray,
-    ground_truth: np.ndarray,
+    predictions: torch.Tensor, # Changed to torch.Tensor
+    ground_truth: torch.Tensor, # Changed to torch.Tensor
     num_classes: int,
     device: str
 ) -> None:
@@ -132,8 +134,8 @@ def evaluate_predictions(
     """
 
     # Ensure predictions and ground truth are on the CPU and in the correct format
-    predictions = torch.tensor(predictions, dtype=torch.int64, device='cpu')
-    ground_truth = torch.tensor(ground_truth, dtype=torch.int64, device='cpu')
+    predictions = predictions.to('cpu') # Already tensors, just move to CPU
+    ground_truth = ground_truth.to('cpu') # Already tensors, just move to CPU
 
     # Initialize metrics
     accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes)
