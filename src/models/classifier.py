@@ -3,6 +3,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
+from torchmetrics.classification import FocalLoss
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -49,7 +50,11 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         
         # Standard metrics setup
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = FocalLoss(
+            task="multiclass",
+            num_classes=num_classes,
+            gamma=2.0
+        )
         self._setup_metrics(num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -155,7 +160,7 @@ class CATHeClassifier(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_acc",
+                "monitor": "val_balanced_acc",
                 "frequency": 1
             }
         }
