@@ -11,13 +11,14 @@ model:
   # Core architecture parameters
   embedding_dim: 1024
   hidden_sizes: [512, 256]
-  dropout: 0.3
+  dropout: 0.5
   
   # Optimization parameters
   learning_rate: 1e-4
   weight_decay: 0.03
-  scheduler_factor: 0.2
+  scheduler_factor: 0.1
   scheduler_patience: 5
+  focal_gamma: 3.0
 
 training:
   # Basic training parameters
