@@ -41,7 +41,7 @@ def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger) -> pl.Trainer:
     """Simplified trainer with automatic resource management"""
     return pl.Trainer(
         accelerator='auto',
-        devices='auto',
+        devices=cfg.training.accelerator.devices,
         max_epochs=cfg.training.max_epochs,
         callbacks=setup_callbacks(cfg),
         logger=wandb_logger,
@@ -60,6 +60,9 @@ def main(cfg: DictConfig) -> None:
     """Complete training workflow with automatic setup"""
     # Reproducibility
     set_seed(cfg.training.seed)
+
+    # Set float32 matmul precision
+    torch.set_float32_matmul_precision(cfg.training.accelerator.float32_matmul_precision)
 
     # Data setup
     data_dir = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir

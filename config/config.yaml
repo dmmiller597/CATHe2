@@ -28,6 +28,9 @@ training:
   
   # Hardware configuration
   num_workers: 4
+  accelerator:
+    float32_matmul_precision: "high"
+    devices: "auto"
   
   # Advanced training options
   seed: 42
