@@ -10,29 +10,29 @@ data:
 model:
   # Core architecture parameters
   embedding_dim: 1024
-  hidden_sizes: [512, 256]
-  dropout: 0.5
+  hidden_sizes: [512, 256, 128]
+  dropout: 0.3
   
   # Optimization parameters
   learning_rate: 5e-5
   weight_decay: 0.01
-  scheduler_factor: 0.1
+  scheduler_factor: 0.2
   scheduler_patience: 7
   focal_gamma: 2.0
 
 training:
   # Basic training parameters
-  batch_size: 256
-  max_epochs: 200
-  early_stopping_patience: 20
+  batch_size: 128
+  max_epochs: 300
+  early_stopping_patience: 15
   
   # Hardware configuration
   num_workers: 4
   
   # Advanced training options
   seed: 42
-  gradient_clip_val: 0.5
-  accumulate_grad_batches: 4
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 2
   precision: "16-mixed"
   
   # Logging and checkpointing
