@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import pytorch_lightning as pl
 from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
@@ -105,6 +105,16 @@ class CATHeDataModule(pl.LightningDataModule):
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
+            # Calculate class weights for training set
+            class_counts = np.bincount(self.datasets["train"].labels)
+            class_weights = 1.0 / class_counts
+            sample_weights = class_weights[self.datasets["train"].labels]
+            self.train_sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(self.datasets["train"].labels),
+                replacement=True
+            )
+            
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
                 self.data_dir / self.test_embeddings,
@@ -116,7 +126,7 @@ class CATHeDataModule(pl.LightningDataModule):
         return DataLoader(
             self.datasets["train"],
             batch_size=self.batch_size,
-            shuffle=True,
+            sampler=self.train_sampler,
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
