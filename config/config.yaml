@@ -14,11 +14,11 @@ model:
   dropout: 0.5
   
   # Optimization parameters
-  learning_rate: 1e-4
-  weight_decay: 0.03
+  learning_rate: 5e-5
+  weight_decay: 0.01
   scheduler_factor: 0.1
-  scheduler_patience: 5
-  focal_gamma: 3.0
+  scheduler_patience: 7
+  focal_gamma: 2.0
 
 training:
   # Basic training parameters
