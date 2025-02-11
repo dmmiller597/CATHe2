@@ -44,8 +44,9 @@ class CATHeClassifier(pl.LightningModule):
         hidden_sizes: List[int],
         num_classes: int,
         dropout: float = 0.5,
-        learning_rate: float = 1e-4,
-        weight_decay: float = 0.01,
+        leaky_relu_alpha: float = 0.05,
+        learning_rate: float = 1e-5,
+        weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
         scheduler_patience: int = 10,
         focal_gamma: float = 2.0,
@@ -59,8 +60,9 @@ class CATHeClassifier(pl.LightningModule):
             hidden_sizes: List of hidden layer sizes
             num_classes: Number of CATH superfamily classes
             dropout: Dropout probability
+            leaky_relu_alpha: Alpha value for LeakyReLU
             learning_rate: Learning rate for optimizer
-            weight_decay: Weight decay for optimizer
+            weight_decay: Weight decay (L2 regularization) for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
             scheduler_patience: Number of epochs to wait before reducing LR
             focal_gamma: Focus parameter for focal loss
@@ -75,8 +77,8 @@ class CATHeClassifier(pl.LightningModule):
         for hidden_size in hidden_sizes:
             layers.extend([
                 nn.Linear(in_features, hidden_size),
+                nn.LeakyReLU(leaky_relu_alpha),
                 nn.BatchNorm1d(hidden_size),
-                nn.ReLU(),
                 nn.Dropout(dropout)
             ])
             in_features = hidden_size
@@ -184,7 +186,8 @@ class CATHeClassifier(pl.LightningModule):
             optimizer,
             mode='max',
             factor=self.hparams.scheduler_factor,
-            patience=self.hparams.scheduler_patience
+            patience=self.hparams.scheduler_patience,
+            min_lr=1e-8
         )
         
         return {

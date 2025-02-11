@@ -10,22 +10,23 @@ data:
 model:
   # Core architecture parameters
   embedding_dim: 1024
-  hidden_sizes: [1024, 512]
+  hidden_sizes: [128, 128, 128]  # Three layers of 128 units
   dropout: 0.5
+  leaky_relu_alpha: 0.05
   
-  # Optimization parameters
-  learning_rate: 2e-4
-  weight_decay: 0.1
-  scheduler_factor: 0.5
-  scheduler_patience: 5
+  # Optimization parameters (weight_decay provides L2 regularization)
+  learning_rate: 1e-5
+  weight_decay: 1e-4  # Keep weight_decay for L2
+  scheduler_factor: 0.1
+  scheduler_patience: 10
   focal_gamma: 2.0
   label_smoothing: 0.1
 
 training:
   # Basic training parameters
-  batch_size: 256
-  max_epochs: 100
-  early_stopping_patience: 10
+  batch_size: 128
+  max_epochs: 200
+  early_stopping_patience: 30
   
   # Hardware configuration
   num_workers: 4
