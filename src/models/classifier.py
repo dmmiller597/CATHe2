@@ -6,34 +6,44 @@ from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
 import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, label_smoothing=0.1):
+    def __init__(self, gamma=2.0, label_smoothing=0.1, alpha=0.25):
         """
-        Initialize Focal Loss.
+        Initialize Focal Loss with alpha balancing.
         
         Args:
-            gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
+            gamma: Focus parameter for hard examples (default: 2.0)
             label_smoothing: Label smoothing factor (default: 0.1)
+            alpha: Weight factor for positive class (default: 0.25)
         """
         super().__init__()
         self.gamma = gamma
         self.label_smoothing = label_smoothing
-
+        self.alpha = alpha
+        
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # Convert targets to one-hot with smoothing
         num_classes = inputs.shape[1]
         with torch.no_grad():
+            # Convert targets to one-hot with smoothing
             targets_one_hot = torch.zeros_like(inputs).scatter_(
                 1, targets.unsqueeze(1), 1
             )
             targets_smooth = targets_one_hot * (1 - self.label_smoothing) + \
                            self.label_smoothing / num_classes
-        
-        # Compute focal loss with label smoothing
+            
+        # Compute probabilities
         log_probs = F.log_softmax(inputs, dim=1)
+        probs = torch.exp(log_probs)
+        
+        # Alpha balancing for positive/negative examples
+        alpha_weight = self.alpha * targets_smooth + (1 - self.alpha) * (1 - targets_smooth)
+        
+        # Focal loss computation with alpha balancing
         ce_loss = -(targets_smooth * log_probs).sum(dim=1)
         pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-        return focal_loss.mean()
+        focal_weight = (1 - pt) ** self.gamma
+        
+        loss = alpha_weight.sum(dim=1) * focal_weight * ce_loss
+        return loss.mean()
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
