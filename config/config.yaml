@@ -10,13 +10,11 @@ data:
 model:
   # Core architecture parameters
   embedding_dim: 1024
-  hidden_sizes: [128, 128, 128]  # Three layers of 128 units
+  hidden_sizes: [128, 128, 128]
   dropout: 0.5
-  leaky_relu_alpha: 0.05
   
-  # Optimization parameters (weight_decay provides L2 regularization)
   learning_rate: 1e-5
-  weight_decay: 1e-4  # Keep weight_decay for L2
+  weight_decay: 1e-4  
   scheduler_factor: 0.1
   scheduler_patience: 10
   focal_gamma: 2.0
