@@ -3,20 +3,34 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
+import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0):
+    def __init__(self, gamma=2.0, label_smoothing=0.1):
         """
         Initialize Focal Loss.
         
         Args:
             gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
+            label_smoothing: Label smoothing factor (default: 0.1)
         """
         super().__init__()
         self.gamma = gamma
+        self.label_smoothing = label_smoothing
 
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
+        # Convert targets to one-hot with smoothing
+        num_classes = inputs.shape[1]
+        with torch.no_grad():
+            targets_one_hot = torch.zeros_like(inputs).scatter_(
+                1, targets.unsqueeze(1), 1
+            )
+            targets_smooth = targets_one_hot * (1 - self.label_smoothing) + \
+                           self.label_smoothing / num_classes
+        
+        # Compute focal loss with label smoothing
+        log_probs = F.log_softmax(inputs, dim=1)
+        ce_loss = -(targets_smooth * log_probs).sum(dim=1)
         pt = torch.exp(-ce_loss)
         focal_loss = (1 - pt) ** self.gamma * ce_loss
         return focal_loss.mean()
