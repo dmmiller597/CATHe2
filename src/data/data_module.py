@@ -106,9 +106,10 @@ class CATHeDataModule(pl.LightningDataModule):
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
             # Calculate class weights for training set
-            class_counts = np.bincount(self.datasets["train"].labels)
+            labels = self.datasets["train"].labels
+            class_counts = torch.bincount(labels).float()
             class_weights = 1.0 / class_counts
-            sample_weights = class_weights[self.datasets["train"].labels]
+            sample_weights = class_weights[labels]
             self.train_sampler = WeightedRandomSampler(
                 weights=sample_weights,
                 num_samples=len(self.datasets["train"].labels),
