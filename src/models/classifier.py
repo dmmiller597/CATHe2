@@ -44,7 +44,6 @@ class CATHeClassifier(pl.LightningModule):
         hidden_sizes: List[int],
         num_classes: int,
         dropout: float = 0.5,
-        leaky_relu_alpha: float = 0.05,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
@@ -60,7 +59,6 @@ class CATHeClassifier(pl.LightningModule):
             hidden_sizes: List of hidden layer sizes
             num_classes: Number of CATH superfamily classes
             dropout: Dropout probability
-            leaky_relu_alpha: Alpha value for LeakyReLU
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
@@ -77,7 +75,7 @@ class CATHeClassifier(pl.LightningModule):
         for hidden_size in hidden_sizes:
             layers.extend([
                 nn.Linear(in_features, hidden_size),
-                nn.LeakyReLU(leaky_relu_alpha),
+                nn.ReLU(),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
             ])
