@@ -49,6 +49,7 @@ class CATHeClassifier(pl.LightningModule):
         scheduler_factor: float = 0.1,
         scheduler_patience: int = 10,
         focal_gamma: float = 2.0,
+        label_smoothing: float = 0.1,
     ):
         """
         Initialize the CATH classifier.
@@ -62,7 +63,8 @@ class CATHeClassifier(pl.LightningModule):
             weight_decay: Weight decay for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
             scheduler_patience: Number of epochs to wait before reducing LR
-            focal_gamma: Focus parameter for focal loss (default: 2.0)
+            focal_gamma: Focus parameter for focal loss
+            label_smoothing: Label smoothing factor
         """
         super().__init__()
         self.save_hyperparameters()
@@ -81,8 +83,8 @@ class CATHeClassifier(pl.LightningModule):
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
         
-        # Replace CrossEntropyLoss with FocalLoss
-        self.criterion = FocalLoss(gamma=focal_gamma)
+        # Initialize FocalLoss with label smoothing
+        self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
         self._setup_metrics(num_classes)
 
