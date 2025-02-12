@@ -44,6 +44,8 @@ class CATHeClassifier(pl.LightningModule):
         hidden_sizes: List[int],
         num_classes: int,
         dropout: float = 0.5,
+        use_leaky_relu: bool = True,
+        leaky_relu_slope: float = 0.05,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
@@ -59,6 +61,8 @@ class CATHeClassifier(pl.LightningModule):
             hidden_sizes: List of hidden layer sizes
             num_classes: Number of CATH superfamily classes
             dropout: Dropout probability
+            use_leaky_relu: Whether to use LeakyReLU instead of ReLU
+            leaky_relu_slope: Slope for LeakyReLU
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
@@ -69,17 +73,22 @@ class CATHeClassifier(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
-        # Build MLP layers
+        # Build layers
         layers = []
         in_features = embedding_dim
         for hidden_size in hidden_sizes:
             layers.extend([
-                nn.Linear(in_features, hidden_size),
-                nn.ReLU(),
+                nn.Linear(
+                    in_features, 
+                    hidden_size,
+                    bias=True
+                ),
+                nn.LeakyReLU(leaky_relu_slope) if use_leaky_relu else nn.ReLU(),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
             ])
             in_features = hidden_size
+            
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
         
