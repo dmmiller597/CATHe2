@@ -182,7 +182,7 @@ class CATHeClassifier(pl.LightningModule):
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode='max',
+            mode='min',
             factor=self.hparams.scheduler_factor,
             patience=self.hparams.scheduler_patience,
             min_lr=1e-8
@@ -192,7 +192,7 @@ class CATHeClassifier(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_balanced_acc",
+                "monitor": "val_loss",
                 "frequency": 1
             }
         }
