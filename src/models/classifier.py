@@ -105,81 +105,77 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
+    def _step(self, batch: tuple, phase: str) -> torch.Tensor:
         """
-        Training step.
-
+        Generic step function for training, validation and testing.
+        
         Args:
-            batch (tuple): Tuple of (embeddings, labels).
-            batch_idx (int): Current batch index.
+            batch (tuple): Tuple of (embeddings, labels)
+            phase (str): One of 'train', 'val', or 'test'
             
         Returns:
-            torch.Tensor: Loss tensor.
+            torch.Tensor: Loss tensor (None for test phase)
         """
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
         preds = logits.argmax(1)
         
-        # Log metrics
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_acc", self.accuracy(preds, y), 
-                prog_bar=True, on_step=False, on_epoch=True)
-        self.log("train_balanced_acc", self.balanced_acc(preds, y),
-                prog_bar=True, on_step=False, on_epoch=True)
+        # Update all metrics
+        self.accuracy.update(preds, y)
+        self.f1_score.update(preds, y)
+        self.mcc.update(preds, y)
+        self.balanced_acc.update(preds, y)
         
-        return loss
+        # Compute loss for train and val phases
+        if phase != 'test':
+            loss = self.criterion(logits, y)
+            self.log(f"{phase}_loss", loss, 
+                    prog_bar=True, 
+                    on_step=(phase == 'train'), 
+                    on_epoch=True,
+                    sync_dist=(phase != 'train'))
+            return loss
+        return None
+
+    def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
+        return self._step(batch, "train")
 
     def validation_step(self, batch: tuple, batch_idx: int) -> None:
-        x, y = batch
-        logits = self(x)
-        loss = self.criterion(logits, y)
-        preds = logits.argmax(1)
-        
-        # Update metrics
-        self.accuracy.update(preds, y)
-        self.f1_score.update(preds, y)
-        self.mcc.update(preds, y)
-        self.balanced_acc.update(preds, y)
-        
-        self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
-
-    def on_validation_epoch_end(self) -> None:
-        metrics = {
-            "val_acc": self.accuracy.compute().float(),
-            "val_f1": self.f1_score.compute().float(),
-            "val_mcc": self.mcc.compute().float(),
-            "val_balanced_acc": self.balanced_acc.compute().float()
-        }
-        self.log_dict(metrics, prog_bar=True, sync_dist=True)
-        
-        # Reset metrics
-        for metric in [self.accuracy, self.f1_score, self.mcc, self.balanced_acc]:
-            metric.reset()
+        self._step(batch, "val")
 
     def test_step(self, batch: tuple, batch_idx: int) -> None:
-        x, y = batch
-        logits = self(x)
-        preds = logits.argmax(1)
-        
-        # Update metrics
-        self.accuracy.update(preds, y)
-        self.f1_score.update(preds, y)
-        self.mcc.update(preds, y)
-        self.balanced_acc.update(preds, y)
+        self._step(batch, "test")
 
-    def on_test_epoch_end(self) -> None:
-        metrics = {
-            "test_acc": self.accuracy.compute().float(),
-            "test_f1": self.f1_score.compute().float(),
-            "test_mcc": self.mcc.compute().float(),
-            "test_balanced_acc": self.balanced_acc.compute().float()
-        }
-        self.log_dict(metrics, prog_bar=True, sync_dist=True)
+    def _compute_and_log_metrics(self, phase: str) -> None:
+        """
+        Compute, log, and reset metrics for the given phase.
         
-        # Reset metrics
+        Args:
+            phase (str): One of 'train', 'val', or 'test'
+        """
+        metrics = {
+            f"{phase}_acc": self.accuracy.compute().float(),
+            f"{phase}_f1": self.f1_score.compute().float(),
+            f"{phase}_mcc": self.mcc.compute().float(),
+            f"{phase}_balanced_acc": self.balanced_acc.compute().float()
+        }
+        
+        self.log_dict(metrics, 
+                     prog_bar=True, 
+                     sync_dist=(phase != 'train'))
+        
+        # Reset all metrics
         for metric in [self.accuracy, self.f1_score, self.mcc, self.balanced_acc]:
             metric.reset()
+
+    def on_training_epoch_end(self) -> None:
+        self._compute_and_log_metrics("train")
+
+    def on_validation_epoch_end(self) -> None:
+        self._compute_and_log_metrics("val")
+
+    def on_test_epoch_end(self) -> None:
+        self._compute_and_log_metrics("test")
 
     def configure_optimizers(self) -> dict:
         """Configure optimizers and learning rate schedulers."""
@@ -191,7 +187,7 @@ class CATHeClassifier(pl.LightningModule):
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode='min',
+            mode='max',
             factor=self.hparams.scheduler_factor,
             patience=self.hparams.scheduler_patience,
             min_lr=1e-8
