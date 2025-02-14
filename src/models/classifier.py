@@ -91,7 +91,18 @@ class CATHeClassifier(pl.LightningModule):
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        self._setup_metrics(num_classes)
+        # Initialize metrics once for all stages
+        self.metrics = MetricCollection({
+            'accuracy': Accuracy(task="multiclass", num_classes=num_classes),
+            'f1_score': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        })
+        
+        # Create metric instances for each stage
+        self.train_metrics = self.metrics.clone(prefix='train_')
+        self.val_metrics = self.metrics.clone(prefix='val_')
+        self.test_metrics = self.metrics.clone(prefix='test_')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -105,91 +116,51 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def _setup_metrics(self, num_classes: int) -> None:
-        """Initialize metrics for training, validation and testing."""
-        metrics = MetricCollection({
-            'accuracy': Accuracy(task="multiclass", num_classes=num_classes),
-            'f1_score': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
-            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
-        })
-        
-        # Create separate metric instances for each stage
-        self.train_metrics = metrics.clone(prefix='train/')
-        self.val_metrics = metrics.clone(prefix='val/')
-        self.test_metrics = metrics.clone(prefix='test/')
-
-    def _log_metrics(self, metrics: MetricCollection, loss: torch.Tensor, stage: str) -> None:
-        """Centralized logging function for metrics and loss."""
-        on_step = stage == 'train'  # Only log steps during training
-        sync_dist = stage != 'train'  # Sync metrics across GPUs for val/test
-        
-        # Log loss
-        self.log(
-            f"{stage}/loss",
-            loss,
-            on_step=on_step,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-            sync_dist=sync_dist
-        )
-        
-        # Log metrics
-        self.log_dict(
-            metrics,
-            on_step=on_step,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-            sync_dist=sync_dist
-        )
-
-    def _step(self, batch: tuple, stage: str) -> torch.Tensor:
-        """Unified step function for training, validation and testing."""
+    def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         x, y = batch
         logits = self(x)
-        preds = logits.argmax(dim=1)
         loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
         
-        # Select appropriate metrics
-        metrics = getattr(self, f"{stage}_metrics")
-        metrics.update(preds, y)
-        
-        # Log metrics
-        self._log_metrics(metrics, loss, stage)
+        # Only update metrics (don't log yet)
+        self.train_metrics.update(preds, y)
+        # Only log loss per step
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         
         return loss
 
-    def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
-        return self._step(batch, "train")
-
     def validation_step(self, batch: tuple, batch_idx: int) -> None:
-        self._step(batch, "val")
+        x, y = batch
+        logits = self(x)
+        loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
+        
+        # Update and log metrics
+        metrics = self.val_metrics(preds, y)
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch: tuple, batch_idx: int) -> None:
-        self._step(batch, "test")
-
-    def _epoch_end(self, stage: str) -> None:
-        """Unified epoch end function for all stages."""
-        metrics = getattr(self, f"{stage}_metrics")
-        self.log_dict(
-            metrics.compute(),
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-            sync_dist=stage != 'train'
-        )
-        metrics.reset()
+        x, y = batch
+        logits = self(x)
+        loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
+        
+        # Update and log metrics
+        metrics = self.test_metrics(preds, y)
+        self.log("test_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self) -> None:
-        self._epoch_end('train')
+        # Compute and log all metrics at epoch end
+        self.log_dict(self.train_metrics.compute(), on_epoch=True)
+        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self._epoch_end('val')
+        self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        self._epoch_end('test')
+        self.test_metrics.reset()
 
     def configure_optimizers(self) -> dict:
         """Configure optimizers and learning rate schedulers."""
