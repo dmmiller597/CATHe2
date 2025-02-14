@@ -91,18 +91,18 @@ class CATHeClassifier(pl.LightningModule):
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        # Initialize metrics once for all stages
-        self.metrics = MetricCollection({
+        # Initialize metrics - simplified for training
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        
+        # Full metrics set for validation and test
+        val_metrics = {
             'accuracy': Accuracy(task="multiclass", num_classes=num_classes),
             'f1_score': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
-        })
-        
-        # Create metric instances for each stage
-        self.train_metrics = self.metrics.clone(prefix='train_')
-        self.val_metrics = self.metrics.clone(prefix='val_')
-        self.test_metrics = self.metrics.clone(prefix='test_')
+        }
+        self.val_metrics = MetricCollection(val_metrics).clone(prefix='val_')
+        self.test_metrics = MetricCollection(val_metrics).clone(prefix='test_')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -122,9 +122,9 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Only update metrics (don't log yet)
-        self.train_metrics.update(preds, y)
-        # Only log loss per step
+        # Only update accuracy
+        self.train_acc.update(preds, y)
+        # Log loss per step
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         
         return loss
@@ -152,9 +152,9 @@ class CATHeClassifier(pl.LightningModule):
         self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self) -> None:
-        # Compute and log all metrics at epoch end
-        self.log_dict(self.train_metrics.compute(), on_epoch=True)
-        self.train_metrics.reset()
+        # Compute and log accuracy at epoch end
+        self.log("train_accuracy", self.train_acc.compute(), on_epoch=True)
+        self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
         self.val_metrics.reset()
