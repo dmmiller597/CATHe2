@@ -135,10 +135,10 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Update and log metrics
-        metrics = self.val_metrics(preds, y)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
+        # Update metrics
+        self.val_metrics.update(preds, y)
+        # Log loss per step if needed
+        self.log("val_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
 
     def test_step(self, batch: tuple, batch_idx: int) -> None:
         x, y = batch
@@ -146,19 +146,25 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Update and log metrics
-        metrics = self.test_metrics(preds, y)
-        self.log("test_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
-        self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
+        # Update metrics
+        self.test_metrics.update(preds, y)
+        # Log loss per step if needed
+        self.log("test_loss", loss, on_step=True, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self) -> None:
         self.log("train_acc", self.train_acc.compute(), on_epoch=True)
         self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
+        # Compute and log metrics at epoch end
+        metrics = self.val_metrics.compute()
+        self.log_dict(metrics)
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
+        # Compute and log metrics at epoch end
+        metrics = self.test_metrics.compute()
+        self.log_dict(metrics)
         self.test_metrics.reset()
 
     def configure_optimizers(self) -> dict:
