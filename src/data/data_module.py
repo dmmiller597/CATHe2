@@ -13,17 +13,24 @@ log = get_logger()
 class CATHeDataset(Dataset):
     """Dataset class for CATH superfamily classification."""
     
-    def __init__(self, embeddings_path: Path, labels_path: Path):
+    def __init__(self, embeddings_path: Path, labels_path: Path, debug_shuffle_embeddings: bool = False):
         """Initialize dataset with protein embeddings and their corresponding labels.
         
         Args:
             embeddings_path: Path to NPZ file containing ProtT5 embeddings
             labels_path: Path to CSV file containing SF labels
+            debug_shuffle_embeddings: If True, randomly shuffles embeddings while keeping labels fixed
         """
         try:
             # Load embeddings and labels
             self.embeddings = torch.from_numpy(np.load(embeddings_path)['arr_0']).float()
             labels_df = pd.read_csv(labels_path)
+            
+            if debug_shuffle_embeddings:
+                # Create a shuffled index
+                shuffle_idx = torch.randperm(len(self.embeddings))
+                self.embeddings = self.embeddings[shuffle_idx]
+                log.warning("DEBUG MODE: Embeddings have been randomly shuffled!")
             
             # Verify that indices in labels match the embedding order
             expected_indices = np.arange(len(self.embeddings))
@@ -74,6 +81,7 @@ class CATHeDataModule(pl.LightningDataModule):
         test_labels: str = None,
         batch_size: int = 32,
         num_workers: int = 4,
+        debug_shuffle_embeddings: bool = False,
     ):
         """Initialize data module.
         
@@ -87,6 +95,7 @@ class CATHeDataModule(pl.LightningDataModule):
             test_labels: Path to test labels file (optional)
             batch_size: Number of samples per batch
             num_workers: Number of subprocesses for data loading
+            debug_shuffle_embeddings: If True, randomly shuffles embeddings while keeping labels fixed
         """
         super().__init__()
         # Convert data_dir to absolute path if it's relative
@@ -99,6 +108,7 @@ class CATHeDataModule(pl.LightningDataModule):
         self.test_labels = test_labels
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.debug_shuffle_embeddings = debug_shuffle_embeddings
         self.datasets: Dict[str, CATHeDataset] = {}
 
     def setup(self, stage: Optional[str] = None):
@@ -110,11 +120,13 @@ class CATHeDataModule(pl.LightningDataModule):
         if stage in (None, "fit"):
             self.datasets["train"] = CATHeDataset(
                 self.data_dir / self.train_embeddings,
-                self.data_dir / self.train_labels
+                self.data_dir / self.train_labels,
+                debug_shuffle_embeddings=self.debug_shuffle_embeddings
             )
             self.datasets["val"] = CATHeDataset(
                 self.data_dir / self.val_embeddings,
-                self.data_dir / self.val_labels
+                self.data_dir / self.val_labels,
+                debug_shuffle_embeddings=self.debug_shuffle_embeddings
             )
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())

@@ -6,6 +6,7 @@ data:
   train_labels: "annotations/Y_Train_SF.csv"
   val_labels: "annotations/Y_Val_SF.csv"
   test_labels: "annotations/Y_Test_SF.csv"
+  debug_shuffle_embeddings: true
 
 model:
   # Architecture
