@@ -95,14 +95,14 @@ class CATHeClassifier(pl.LightningModule):
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Full metrics set for validation and test
-        val_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+        eval_metrics = {
+            'acc': Accuracy(task="multiclass", num_classes=num_classes, average='micro'),
             'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
         }
-        self.val_metrics = MetricCollection(val_metrics).clone(prefix='val_')
-        self.test_metrics = MetricCollection(val_metrics).clone(prefix='test_')
+        self.val_metrics = MetricCollection(eval_metrics).clone(prefix='val_')
+        self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
