@@ -98,10 +98,10 @@ class CATHeClassifier(pl.LightningModule):
         
         # Evaluation metrics
         eval_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes, average='micro'),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
-            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+            'acc': Accuracy(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='micro'),
+            'balanced_acc': Accuracy(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='macro'),
+            'f1': F1Score(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='macro'),
+            'mcc': MatthewsCorrCoef(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes)
         }
         
         # Create separate collections for validation and test
@@ -124,11 +124,11 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
-        preds = logits.argmax(dim=1)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         
         # Update accuracy and loss
+        preds = logits.argmax(dim=1)
         acc = self.train_acc(preds, y)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log("train_acc", acc, on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
