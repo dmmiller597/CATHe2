@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from typing import List
-from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef
+from typing import List, Dict, Any
+from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, Metric
 import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
@@ -105,37 +105,61 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def _step(self, batch: tuple, phase: str) -> torch.Tensor:
-        """
-        Generic step function for training, validation and testing.
+    def _setup_metrics(self, num_classes: int) -> None:
+        """Initialize metrics for training, validation and testing."""
+        metrics = MetricCollection({
+            'accuracy': Accuracy(task="multiclass", num_classes=num_classes),
+            'f1_score': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        })
         
-        Args:
-            batch (tuple): Tuple of (embeddings, labels)
-            phase (str): One of 'train', 'val', or 'test'
-            
-        Returns:
-            torch.Tensor: Loss tensor (None for test phase)
-        """
+        # Create separate metric instances for each stage
+        self.train_metrics = metrics.clone(prefix='train/')
+        self.val_metrics = metrics.clone(prefix='val/')
+        self.test_metrics = metrics.clone(prefix='test/')
+
+    def _log_metrics(self, metrics: MetricCollection, loss: torch.Tensor, stage: str) -> None:
+        """Centralized logging function for metrics and loss."""
+        on_step = stage == 'train'  # Only log steps during training
+        sync_dist = stage != 'train'  # Sync metrics across GPUs for val/test
+        
+        # Log loss
+        self.log(
+            f"{stage}/loss",
+            loss,
+            on_step=on_step,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            sync_dist=sync_dist
+        )
+        
+        # Log metrics
+        self.log_dict(
+            metrics,
+            on_step=on_step,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            sync_dist=sync_dist
+        )
+
+    def _step(self, batch: tuple, stage: str) -> torch.Tensor:
+        """Unified step function for training, validation and testing."""
         x, y = batch
         logits = self(x)
-        preds = logits.argmax(1)
+        preds = logits.argmax(dim=1)
+        loss = self.criterion(logits, y)
         
-        # Update all metrics
-        self.accuracy.update(preds, y)
-        self.f1_score.update(preds, y)
-        self.mcc.update(preds, y)
-        self.balanced_acc.update(preds, y)
+        # Select appropriate metrics
+        metrics = getattr(self, f"{stage}_metrics")
+        metrics.update(preds, y)
         
-        # Compute loss for train and val phases
-        if phase != 'test':
-            loss = self.criterion(logits, y)
-            self.log(f"{phase}_loss", loss, 
-                    prog_bar=True, 
-                    on_step=(phase == 'train'), 
-                    on_epoch=True,
-                    sync_dist=(phase != 'train'))
-            return loss
-        return None
+        # Log metrics
+        self._log_metrics(metrics, loss, stage)
+        
+        return loss
 
     def training_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
         return self._step(batch, "train")
@@ -146,36 +170,26 @@ class CATHeClassifier(pl.LightningModule):
     def test_step(self, batch: tuple, batch_idx: int) -> None:
         self._step(batch, "test")
 
-    def _compute_and_log_metrics(self, phase: str) -> None:
-        """
-        Compute, log, and reset metrics for the given phase.
-        
-        Args:
-            phase (str): One of 'train', 'val', or 'test'
-        """
-        metrics = {
-            f"{phase}_acc": self.accuracy.compute().float(),
-            f"{phase}_f1": self.f1_score.compute().float(),
-            f"{phase}_mcc": self.mcc.compute().float(),
-            f"{phase}_balanced_acc": self.balanced_acc.compute().float()
-        }
-        
-        self.log_dict(metrics, 
-                     prog_bar=True, 
-                     sync_dist=(phase != 'train'))
-        
-        # Reset all metrics
-        for metric in [self.accuracy, self.f1_score, self.mcc, self.balanced_acc]:
-            metric.reset()
+    def _epoch_end(self, stage: str) -> None:
+        """Unified epoch end function for all stages."""
+        metrics = getattr(self, f"{stage}_metrics")
+        self.log_dict(
+            metrics.compute(),
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            sync_dist=stage != 'train'
+        )
+        metrics.reset()
 
-    def on_training_epoch_end(self) -> None:
-        self._compute_and_log_metrics("train")
+    def on_train_epoch_end(self) -> None:
+        self._epoch_end('train')
 
     def on_validation_epoch_end(self) -> None:
-        self._compute_and_log_metrics("val")
+        self._epoch_end('val')
 
     def on_test_epoch_end(self) -> None:
-        self._compute_and_log_metrics("test")
+        self._epoch_end('test')
 
     def configure_optimizers(self) -> dict:
         """Configure optimizers and learning rate schedulers."""
@@ -200,10 +214,4 @@ class CATHeClassifier(pl.LightningModule):
                 "monitor": "val_balanced_acc",
                 "frequency": 1
             }
-        }
-
-    def _setup_metrics(self, num_classes: int):
-        self.accuracy = Accuracy(task="multiclass", num_classes=num_classes)
-        self.f1_score = F1Score(task="multiclass", num_classes=num_classes)
-        self.mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
-        self.balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro') 
+        } 
