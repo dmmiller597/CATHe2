@@ -21,12 +21,26 @@ class CATHeDataset(Dataset):
             labels_path: Path to CSV file containing SF labels
         """
         try:
-            # Load data into memory more efficiently
+            # Load embeddings and labels
             self.embeddings = torch.from_numpy(np.load(embeddings_path)['arr_0']).float()
             labels_df = pd.read_csv(labels_path)
+            
+            # Verify that indices in labels match the embedding order
+            expected_indices = np.arange(len(self.embeddings))
+            actual_indices = labels_df['Unnamed: 0'].values
+            
+            if not np.array_equal(expected_indices, actual_indices):
+                raise ValueError(
+                    "Mismatch between embeddings and labels ordering. "
+                    "The 'Unnamed: 0' column in labels must match the embedding indices."
+                )
+            
+            # Convert labels to categorical codes
             codes = pd.Categorical(labels_df['SF']).codes
-            # Use torch.tensor to force a copy and create a writable tensor
             self.labels = torch.tensor(codes, dtype=torch.long)
+            
+            log.info(f"Loaded {len(self.embeddings)} samples with {len(np.unique(codes))} unique classes")
+            
         except Exception as e:
             log.error(f"Error loading data: {e}")
             raise
