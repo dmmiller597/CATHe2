@@ -98,10 +98,29 @@ class CATHeClassifier(pl.LightningModule):
         
         # Evaluation metrics
         eval_metrics = {
-            'acc': Accuracy(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='micro'),
-            'balanced_acc': Accuracy(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes, average='macro'),
-            'mcc': MatthewsCorrCoef(task="multiclass", on_step=False, on_epoch=True, num_classes=num_classes)
+            'acc': Accuracy(task="multiclass", 
+                          on_step=False, 
+                          on_epoch=True, 
+                          num_classes=num_classes, 
+                          average='micro',
+                          sync_dist=True),
+            'balanced_acc': Accuracy(task="multiclass", 
+                                  on_step=False, 
+                                  on_epoch=True, 
+                                  num_classes=num_classes, 
+                                  average='macro',
+                                  sync_dist=True),
+            'f1': F1Score(task="multiclass", 
+                         on_step=False, 
+                         on_epoch=True, 
+                         num_classes=num_classes, 
+                         average='macro',
+                         sync_dist=True),
+            'mcc': MatthewsCorrCoef(task="multiclass", 
+                                   on_step=False, 
+                                   on_epoch=True, 
+                                   num_classes=num_classes,
+                                   sync_dist=True)
         }
         
         # Create separate collections for validation and test
