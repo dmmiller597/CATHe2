@@ -122,10 +122,10 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Only update accuracy
-        self.train_acc.update(preds, y)
-        # Log loss per step
+        # Update accuracy and loss
+        acc = self.train_acc(preds, y)
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train_acc", acc, on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
 
