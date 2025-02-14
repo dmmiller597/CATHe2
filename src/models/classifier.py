@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, Metric
 import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, label_smoothing=0.1):
+    def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.1):
         """
         Initialize Focal Loss.
         
@@ -120,54 +120,65 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Execute training step and return loss."""
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
         
-        # Log metrics
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.train_acc(logits.argmax(dim=1), y)
-        self.log("train_acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+        # Compute and log metrics
+        acc = self.train_acc(preds, y)
+        self.log("train_loss", loss, on_step=False, on_epoch=True)
+        self.log("train_acc", acc, on_step=False, on_epoch=True)
         
         return loss
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Execute validation step and log metrics."""
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
         
-        # Update and log metrics
-        self.val_metrics(logits.argmax(dim=1), y)
-        self.log("val_loss", loss, prog_bar=True)
+        # Update all metrics at once
+        metric_dict = self.val_metrics(preds, y)
+        
+        # Log metrics individually
+        self.log("val_loss", loss, on_epoch=True)
+        for name, value in metric_dict.items():
+            self.log(name, value, on_epoch=True)
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Execute test step and log metrics."""
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
+        preds = logits.argmax(dim=1)
         
-        # Update and log metrics
-        self.test_metrics(logits.argmax(dim=1), y)
-        self.log("test_loss", loss)
+        # Update all metrics at once
+        metric_dict = self.test_metrics(preds, y)
+        
+        # Log metrics individually
+        self.log("test_loss", loss, on_epoch=True)
+        for name, value in metric_dict.items():
+            self.log(name, value, on_epoch=True)
 
     def on_train_epoch_end(self) -> None:
-        """Log and reset training metrics."""
+        """Reset training metrics."""
         self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
-        """Log and reset validation metrics."""
-        self.log_dict(self.val_metrics.compute(), prog_bar=True)
+        """Compute final validation metrics and reset."""
+        metrics = self.val_metrics.compute()
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        """Log and reset test metrics."""
-        self.log_dict(self.test_metrics.compute())
+        """Compute final test metrics and reset."""
+        metrics = self.test_metrics.compute()
         self.test_metrics.reset()
 
-    def configure_optimizers(self) -> dict:
+    def configure_optimizers(self) -> Dict[str, Any]:
         """Configure optimizers and learning rate schedulers."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
