@@ -93,7 +93,9 @@ def main(cfg: DictConfig) -> None:
     trainer.fit(model, data_module)
     
     # Final testing
+    log.info("Starting final testing phase...")
     trainer.test(model, data_module, ckpt_path="best")
+    log.info("Testing completed - check W&B dashboard for metrics")
     
     # Finish Wandb run
     wandb_logger.experiment.finish()
