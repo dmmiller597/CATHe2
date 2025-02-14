@@ -11,15 +11,15 @@ model:
   # Architecture
   embedding_dim: 1024
   hidden_sizes: [1024]
-  dropout: 0.4
+  dropout: 0.3
   
   # Optimization
   learning_rate: 1e-5
-  weight_decay: 1e-3
+  weight_decay: 5e-4
   scheduler_factor: 0.5
   scheduler_patience: 5
-  focal_gamma: 6
-  label_smoothing: 0.1
+  focal_gamma: 4
+  label_smoothing: 0
 
 training:
   # Training parameters
