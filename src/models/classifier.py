@@ -91,13 +91,13 @@ class CATHeClassifier(pl.LightningModule):
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        # Initialize metrics - simplified for training
+        # Initialize metrics - accuracy for training
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Full metrics set for validation and test
         val_metrics = {
-            'accuracy': Accuracy(task="multiclass", num_classes=num_classes),
-            'f1_score': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
         }
@@ -152,8 +152,7 @@ class CATHeClassifier(pl.LightningModule):
         self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self) -> None:
-        # Compute and log accuracy at epoch end
-        self.log("train_accuracy", self.train_acc.compute(), on_epoch=True)
+        self.log("train_acc", self.train_acc.compute(), on_epoch=True)
         self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
