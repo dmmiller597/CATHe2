@@ -44,8 +44,6 @@ class CATHeClassifier(pl.LightningModule):
         hidden_sizes: List[int],
         num_classes: int,
         dropout: float = 0.5,
-        use_leaky_relu: bool = True,
-        leaky_relu_slope: float = 0.05,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
@@ -61,8 +59,6 @@ class CATHeClassifier(pl.LightningModule):
             hidden_sizes: List of hidden layer sizes
             num_classes: Number of CATH superfamily classes
             dropout: Dropout probability
-            use_leaky_relu: Whether to use LeakyReLU instead of ReLU
-            leaky_relu_slope: Slope for LeakyReLU
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
@@ -83,7 +79,7 @@ class CATHeClassifier(pl.LightningModule):
                     hidden_size,
                     bias=True
                 ),
-                nn.LeakyReLU(leaky_relu_slope) if use_leaky_relu else nn.ReLU(),
+                nn.ReLU(),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
             ])
@@ -123,9 +119,13 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
+        preds = logits.argmax(1)
         
+        # Log metrics
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_acc", self.accuracy(logits.argmax(1), y), 
+        self.log("train_acc", self.accuracy(preds, y), 
+                prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train_balanced_acc", self.balanced_acc(preds, y),
                 prog_bar=True, on_step=False, on_epoch=True)
         
         return loss
@@ -201,7 +201,7 @@ class CATHeClassifier(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",
+                "monitor": "val_balanced_acc",
                 "frequency": 1
             }
         }

@@ -22,7 +22,7 @@ def setup_callbacks(cfg: DictConfig) -> list:
     return [
         ModelCheckpoint(
             dirpath=cfg.training.checkpoint_dir,
-            filename='{epoch:02d}-{val_acc:.4f}',
+            filename='{epoch:02d}-{val_balanced_acc:.4f}',
             monitor=cfg.training.monitor_metric,
             mode=cfg.training.monitor_mode,
             save_last=True,
