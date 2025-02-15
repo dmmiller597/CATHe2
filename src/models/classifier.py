@@ -94,7 +94,7 @@ class CATHeClassifier(pl.LightningModule):
         # Validation and test metrics
         eval_metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
             'f1': F1Score(task="multiclass", num_classes=num_classes),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
