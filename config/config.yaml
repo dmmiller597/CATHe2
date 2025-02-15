@@ -18,8 +18,8 @@ model:
   weight_decay: 5e-4
   scheduler_factor: 0.5
   scheduler_patience: 5
-  focal_gamma: 4
-  label_smoothing: 0
+  # focal_gamma: 4
+  # label_smoothing: 0
 
 training:
   # Training parameters
