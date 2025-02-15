@@ -86,16 +86,14 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
         
         # Initialize metrics
-        metric_params = {"task": "multiclass", "num_classes": num_classes}
-        metrics = MetricCollection({
-            'acc': Accuracy(**metric_params),
-            'balanced_acc': Accuracy(**metric_params, average='macro'),
-            'f1': F1Score(**metric_params),
-            'mcc': MatthewsCorrCoef(**metric_params)
-        })
-        self.train_metrics = metrics.clone(prefix='train/')
-        self.val_metrics = metrics.clone(prefix='val/')
-        self.test_metrics = metrics.clone(prefix='test/')
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        self.val_metrics = MetricCollection({
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            'f1': F1Score(task="multiclass", num_classes=num_classes),
+            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        }, prefix='val/')
+        self.test_metrics = self.val_metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
     
@@ -136,56 +134,40 @@ class CATHeClassifier(pl.LightningModule):
         """Training step."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log the training loss
-        self.log('train/loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=False)
-        # Log only accuracy from the train_metrics
-        self.log('train/acc', self.train_metrics['acc'](preds, targets), on_step=False, on_epoch=True, prog_bar=True, sync_dist=False)
-        # Update all training metrics.  Crucially, we only *log* loss and acc.
-        self.train_metrics.update(preds, targets)
-
+        # Log only loss and accuracy during training
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train/acc', self.train_acc(preds, targets), on_step=False, on_epoch=True, prog_bar=True)
+        
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Validation step."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Log the validation loss
-        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        # Update val metrics
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.val_metrics.update(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Log the test loss
-        self.log('test/loss', loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        # Update test metrics
+        self.log('test/loss', loss, on_step=False, on_epoch=True)
         self.test_metrics.update(preds, targets)
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
-        # Compute and log the validation metrics
-        self.log_dict(self.val_metrics.compute(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        
-        # Update and log best accuracy
-        self.val_acc_best.update(self.val_metrics.compute()['val/balanced_acc'])
-        self.log("val/balanced_acc_best", self.val_acc_best.compute(), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        
-        # Reset all validation metrics
+        metrics = self.val_metrics.compute()
+        self.log_dict(metrics, on_epoch=True, prog_bar=True)
+        self.val_acc_best.update(metrics['val/balanced_acc'])
+        self.log("val/balanced_acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True)
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end."""
-        # Compute and log the test metrics
-        self.log_dict(self.test_metrics.compute(), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
-        # Reset the test metrics
+        self.log_dict(self.test_metrics.compute(), on_epoch=True)
         self.test_metrics.reset()
 
     def on_train_epoch_end(self) -> None:
         """Reset training metrics at epoch end."""
-        # Reset the training metrics
-        self.train_metrics.reset()
+        self.train_acc.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Configure optimizers and learning rate schedulers."""
