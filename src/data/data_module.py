@@ -105,17 +105,17 @@ class CATHeDataModule(pl.LightningDataModule):
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
-            # Calculate class weights for training set
-            labels = self.datasets["train"].labels
-            class_counts = torch.bincount(labels).float()
-            class_weights = 1.0 / class_counts
-            sample_weights = class_weights[labels]
-            self.train_sampler = WeightedRandomSampler(
-                weights=sample_weights,
-                num_samples=len(self.datasets["train"].labels),
-                replacement=True
-            )
-            
+            # # Calculate class weights for training set
+            # labels = self.datasets["train"].labels
+            # class_counts = torch.bincount(labels).float()
+            # class_weights = 1.0 / class_counts
+            # sample_weights = class_weights[labels]
+            # self.train_sampler = WeightedRandomSampler(
+            #     weights=sample_weights,
+            #     num_samples=len(self.datasets["train"].labels),
+            #     replacement=True
+            # )
+
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
                 self.data_dir / self.test_embeddings,
@@ -127,7 +127,8 @@ class CATHeDataModule(pl.LightningDataModule):
         return DataLoader(
             self.datasets["train"],
             batch_size=self.batch_size,
-            sampler=self.train_sampler,
+            # sampler=self.train_sampler,
+            shuffle=True,  # Enable shuffling instead of weighted sampling
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
