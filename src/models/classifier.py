@@ -75,6 +75,7 @@ class CATHeClassifier(pl.LightningModule):
         for hidden_size in hidden_sizes:
             layers.extend([
                 nn.Linear(in_features, hidden_size, bias=True),
+                nn.LayerNorm(hidden_size),
                 nn.LeakyReLU(negative_slope=0.01, inplace=True),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
