@@ -135,7 +135,7 @@ class CATHeClassifier(pl.LightningModule):
         loss, preds, targets = self.model_step(batch)
         
         # Log only loss and accuracy during training
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False)
         self.log('train/acc', self.train_acc(preds, targets), on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
