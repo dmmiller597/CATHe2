@@ -74,11 +74,7 @@ class CATHeClassifier(pl.LightningModule):
         in_features = embedding_dim
         for hidden_size in hidden_sizes:
             layers.extend([
-                nn.Linear(
-                    in_features, 
-                    hidden_size,
-                    bias=True
-                ),
+                nn.Linear(in_features, hidden_size, bias=True),
                 nn.ReLU(),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
@@ -87,27 +83,27 @@ class CATHeClassifier(pl.LightningModule):
             
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
-        self._init_weights()  # Initialize weights
+        self._init_weights()
         
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        # Training metric
-        self.train_acc = Accuracy(task="multiclass", 
-                                num_classes=num_classes,
-                                average='micro')
-        
-        # Evaluation metrics
-        eval_metrics = {
+        # Define metrics with consistent averaging strategies
+        metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes, average='micro'),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
             'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
-        # Create separate collections for validation and test
-        self.val_metrics = MetricCollection(eval_metrics).clone(prefix='val_')
-        self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
+        # Training metrics
+        self.train_metrics = MetricCollection(metrics).clone(prefix='train_')
+        
+        # Validation metrics
+        self.val_metrics = MetricCollection(metrics).clone(prefix='val_')
+        
+        # Test metrics
+        self.test_metrics = MetricCollection(metrics).clone(prefix='test_')
     
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization."""
@@ -140,10 +136,10 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Compute and log metrics
-        acc = self.train_acc(preds, y)
-        self.log("train_loss", loss, on_step=True, on_epoch=True)
-        self.log("train_acc", acc, on_step=False, on_epoch=True)
+        # Update and log all training metrics
+        metric_dict = self.train_metrics(preds, y)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log_dict(metric_dict, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return loss
 
@@ -154,13 +150,10 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Update all metrics at once
+        # Update validation metrics
         metric_dict = self.val_metrics(preds, y)
-        
-        # Log metrics individually
-        self.log("val_loss", loss, on_epoch=True)
-        for name, value in metric_dict.items():
-            self.log(name, value, on_epoch=True)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log_dict(metric_dict, on_epoch=True, prog_bar=True, sync_dist=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Execute test step and log metrics."""
@@ -169,26 +162,24 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Update all metrics at once
+        # Update test metrics
         metric_dict = self.test_metrics(preds, y)
-        
-        # Log metrics individually
-        self.log("test_loss", loss, on_epoch=True)
-        for name, value in metric_dict.items():
-            self.log(name, value, on_epoch=True)
+        self.log("test_loss", loss, on_epoch=True, sync_dist=True)
+        self.log_dict(metric_dict, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self) -> None:
-        """Reset training metrics."""
-        self.train_acc.reset()
+        """Compute final training metrics and reset."""
+        self.train_metrics.compute()
+        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
         """Compute final validation metrics and reset."""
-        metrics = self.val_metrics.compute()
+        self.val_metrics.compute()
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Compute final test metrics and reset."""
-        metrics = self.test_metrics.compute()
+        self.test_metrics.compute()
         self.test_metrics.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
