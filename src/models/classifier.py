@@ -85,30 +85,20 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
         
-        # Initialize FocalLoss with label smoothing
-        self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
-        
-        # Add mean metrics for loss tracking
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
-        
-        # Track best validation metrics
+        # Initialize metrics
+        metric_params = {"task": "multiclass", "num_classes": num_classes}
+        metrics = MetricCollection({
+            'loss': MeanMetric(),
+            'acc': Accuracy(**metric_params),
+            'balanced_acc': Accuracy(**metric_params, average='macro'),
+            'f1': F1Score(**metric_params),
+            'mcc': MatthewsCorrCoef(**metric_params)
+        })
+        self.train_metrics = metrics.clone(prefix='train/')
+        self.val_metrics = metrics.clone(prefix='val/')
+        self.test_metrics = metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
-        
-        # Training metrics
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
-        
-        # Validation and test metrics
-        eval_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes),
-            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
-        }
-        
-        self.val_metrics = MetricCollection(eval_metrics).clone(prefix='val_')
-        self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
+        self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
     
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization with Leaky ReLU."""
@@ -144,64 +134,57 @@ class CATHeClassifier(pl.LightningModule):
         return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Execute training step and return loss."""
+        """Training step."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics
-        self.train_loss(loss)
-        self.train_acc(preds, targets)
-        
-        # Log with improved naming convention
-        self.log("train_loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("train_acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.train_metrics(preds, targets)
+        self.train_metrics.loss.update(loss)
+        self.log_dict(self.train_metrics,
+                      on_step=False,
+                      on_epoch=True,
+                      prog_bar=True,
+                      sync_dist=False
+        )
         
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Execute validation step."""
+        """Validation step."""
         loss, preds, targets = self.model_step(batch)
         
         # Update metrics
-        self.val_loss(loss)
-        self.val_metrics.update(preds, targets)
-        self.log("val_loss", self.val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.val_metrics(preds, targets)
+        self.val_metrics.loss.update(loss)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Execute test step."""
+        """Test step."""
         loss, preds, targets = self.model_step(batch)
         
         # Update metrics
-        self.test_loss(loss)
-        self.test_metrics.update(preds, targets)
-        self.log("test_loss", self.test_loss, on_epoch=True, sync_dist=True)
-
-    def on_train_epoch_end(self) -> None:
-        """Reset training metrics at epoch end."""
-        self.train_loss.reset()
-        self.train_acc.reset()
+        self.test_metrics(preds, targets)
+        self.test_metrics.loss.update(loss)
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
         metrics = self.val_metrics.compute()
-        self.log_dict(metrics, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log_dict(metrics, sync_dist=True)
         
-        # Track best accuracy
-        self.val_acc_best(metrics['val_balanced_acc'])
-        self.log("val_balanced_acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        # Update and log best accuracy
+        self.val_acc_best(metrics['val/balanced_acc'])
+        self.log("val/balanced_acc_best", self.val_acc_best.compute(), sync_dist=True)
         
-        # Reset metrics
-        self.val_loss.reset()
+        # Reset all metrics
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end."""
-        self.log_dict(
-            self.test_metrics.compute(),
-            on_epoch=True,
-            sync_dist=True
-        )
-        self.test_loss.reset()
+        metrics = self.test_metrics.compute()
+        self.log_dict(metrics, sync_dist=True)
         self.test_metrics.reset()
+
+    def on_train_epoch_end(self) -> None:
+        """Reset training metrics at epoch end."""
+        self.train_metrics.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Configure optimizers and learning rate schedulers."""
@@ -223,7 +206,8 @@ class CATHeClassifier(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_balanced_acc",
+                "monitor": "val/balanced_acc",
+                "interval": "epoch",
                 "frequency": 1
             }
         }
