@@ -75,7 +75,7 @@ class CATHeClassifier(pl.LightningModule):
         for hidden_size in hidden_sizes:
             layers.extend([
                 nn.Linear(in_features, hidden_size, bias=True),
-                nn.ReLU(),
+                nn.LeakyReLU(negative_slope=0.01, inplace=True),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
             ])
@@ -103,16 +103,17 @@ class CATHeClassifier(pl.LightningModule):
         self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
     
     def _init_weights(self) -> None:
-        """Initialize network weights using Kaiming initialization."""
+        """Initialize network weights using Kaiming initialization with Leaky ReLU."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.kaiming_normal_(
                     module.weight,
                     mode='fan_in',
-                    nonlinearity='relu'
+                    nonlinearity='leaky_relu',
+                    a=0.01  # Matching the LeakyReLU negative_slope
                 )
                 if module.bias is not None:
-                    nn.init.zeros_(module.bias) 
+                    nn.init.zeros_(module.bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
