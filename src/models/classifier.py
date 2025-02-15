@@ -89,13 +89,13 @@ class CATHeClassifier(pl.LightningModule):
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
         # Only track loss during training, use full metrics for val/test
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, average='micro')
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Validation and test metrics
         eval_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes, average='micro'),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'f1': F1Score(task="multiclass", num_classes=num_classes),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
