@@ -142,7 +142,7 @@ class CATHeClassifier(pl.LightningModule):
         
         # Compute and log metrics
         acc = self.train_acc(preds, y)
-        self.log("train_loss", loss, on_step=False, on_epoch=True)
+        self.log("train_loss", loss, on_step=True, on_epoch=True)
         self.log("train_acc", acc, on_step=False, on_epoch=True)
         
         return loss
