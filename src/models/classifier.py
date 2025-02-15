@@ -88,22 +88,19 @@ class CATHeClassifier(pl.LightningModule):
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        # Define metrics with consistent averaging strategies
-        metrics = {
+        # Only track loss during training, use full metrics for val/test
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, average='micro')
+        
+        # Validation and test metrics
+        eval_metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes, average='micro'),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
             'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
-        # Training metrics
-        self.train_metrics = MetricCollection(metrics).clone(prefix='train_')
-        
-        # Validation metrics
-        self.val_metrics = MetricCollection(metrics).clone(prefix='val_')
-        
-        # Test metrics
-        self.test_metrics = MetricCollection(metrics).clone(prefix='test_')
+        self.val_metrics = MetricCollection(eval_metrics).clone(prefix='val_')
+        self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
     
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization."""
@@ -136,50 +133,48 @@ class CATHeClassifier(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
-        # Update and log all training metrics
-        metric_dict = self.train_metrics(preds, y)
+        # Only track loss and basic accuracy during training
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log_dict(metric_dict, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_acc", self.train_acc(preds, y), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Execute validation step and log metrics."""
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
         # Update validation metrics
-        metric_dict = self.val_metrics(preds, y)
+        self.val_metrics.update(preds, y)
         self.log("val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log_dict(metric_dict, on_epoch=True, prog_bar=True, sync_dist=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Execute test step and log metrics."""
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
         
         # Update test metrics
-        metric_dict = self.test_metrics(preds, y)
-        self.log("test_loss", loss, on_epoch=True, sync_dist=True)
-        self.log_dict(metric_dict, on_epoch=True, sync_dist=True)
-
-    def on_train_epoch_end(self) -> None:
-        """Compute final training metrics and reset."""
-        self.train_metrics.compute()
-        self.train_metrics.reset()
+        self.test_metrics.update(preds, y)
 
     def on_validation_epoch_end(self) -> None:
-        """Compute final validation metrics and reset."""
-        self.val_metrics.compute()
+        # Compute and log all validation metrics at once
+        self.log_dict(
+            self.val_metrics.compute(),
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True
+        )
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        """Compute final test metrics and reset."""
-        self.test_metrics.compute()
+        # Compute and log all test metrics at once
+        self.log_dict(
+            self.test_metrics.compute(),
+            on_epoch=True,
+            sync_dist=True
+        )
         self.test_metrics.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
