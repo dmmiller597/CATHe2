@@ -5,35 +5,35 @@ from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
 
-class FocalLoss(nn.Module):
-    def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.1):
-        """
-        Initialize Focal Loss.
+# class FocalLoss(nn.Module):
+#     def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.1):
+#         """
+#         Initialize Focal Loss.
         
-        Args:
-            gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
-            label_smoothing: Label smoothing factor (default: 0.1)
-        """
-        super().__init__()
-        self.gamma = gamma
-        self.label_smoothing = label_smoothing
+#         Args:
+#             gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
+#             label_smoothing: Label smoothing factor (default: 0.1)
+#         """
+#         super().__init__()
+#         self.gamma = gamma
+#         self.label_smoothing = label_smoothing
 
-    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # Convert targets to one-hot with smoothing
-        num_classes = inputs.shape[1]
-        with torch.no_grad():
-            targets_one_hot = torch.zeros_like(inputs).scatter_(
-                1, targets.unsqueeze(1), 1
-            )
-            targets_smooth = targets_one_hot * (1 - self.label_smoothing) + \
-                           self.label_smoothing / num_classes
+#     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+#         # Convert targets to one-hot with smoothing
+#         num_classes = inputs.shape[1]
+#         with torch.no_grad():
+#             targets_one_hot = torch.zeros_like(inputs).scatter_(
+#                 1, targets.unsqueeze(1), 1
+#             )
+#             targets_smooth = targets_one_hot * (1 - self.label_smoothing) + \
+#                            self.label_smoothing / num_classes
         
-        # Compute focal loss with label smoothing
-        log_probs = F.log_softmax(inputs, dim=1)
-        ce_loss = -(targets_smooth * log_probs).sum(dim=1)
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-        return focal_loss.mean()
+#         # Compute focal loss with label smoothing
+#         log_probs = F.log_softmax(inputs, dim=1)
+#         ce_loss = -(targets_smooth * log_probs).sum(dim=1)
+#         pt = torch.exp(-ce_loss)
+#         focal_loss = (1 - pt) ** self.gamma * ce_loss
+#         return focal_loss.mean()
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -48,8 +48,8 @@ class CATHeClassifier(pl.LightningModule):
         weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
         scheduler_patience: int = 10,
-        focal_gamma: float = 2.0,
-        label_smoothing: float = 0.1,
+        #focal_gamma: float = 2.0,
+        #label_smoothing: float = 0.1,
     ):
         """
         Initialize the CATH classifier.
@@ -76,7 +76,7 @@ class CATHeClassifier(pl.LightningModule):
             layers.extend([
                 nn.Linear(in_features, hidden_size, bias=True),
                 nn.LayerNorm(hidden_size),
-                nn.LeakyReLU(negative_slope=0.01, inplace=True),
+                nn.ReLU(),
                 nn.BatchNorm1d(hidden_size),
                 nn.Dropout(dropout)
             ])
@@ -96,17 +96,16 @@ class CATHeClassifier(pl.LightningModule):
         }, prefix='val/')
         self.test_metrics = self.val_metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
-        self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
+        self.criterion = nn.CrossEntropyLoss()
     
     def _init_weights(self) -> None:
-        """Initialize network weights using Kaiming initialization with Leaky ReLU."""
+        """Initialize network weights using Kaiming initialization with GELU."""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.kaiming_normal_(
                     module.weight,
                     mode='fan_in',
-                    nonlinearity='leaky_relu',
-                    a=0.01  # Matching the LeakyReLU negative_slope
+                    nonlinearity='relu'
                 )
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
