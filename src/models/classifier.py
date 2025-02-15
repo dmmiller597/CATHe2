@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List, Dict, Any, Tuple
-from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, Metric
+from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
 
 class FocalLoss(nn.Module):
@@ -88,7 +88,15 @@ class CATHeClassifier(pl.LightningModule):
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
         
-        # Only track loss during training, use full metrics for val/test
+        # Add mean metrics for loss tracking
+        self.train_loss = MeanMetric()
+        self.val_loss = MeanMetric()
+        self.test_loss = MeanMetric()
+        
+        # Track best validation metrics
+        self.val_acc_best = MaxMetric()
+        
+        # Training metrics
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Validation and test metrics
@@ -127,55 +135,72 @@ class CATHeClassifier(pl.LightningModule):
         """
         return self.model(x)
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Execute training step and return loss."""
+    def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Perform a single model step on a batch of data."""
         x, y = batch
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = logits.argmax(dim=1)
+        return loss, preds, y
+
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Execute training step and return loss."""
+        loss, preds, targets = self.model_step(batch)
         
-        # Only track loss and basic accuracy during training
-        self.log("train_loss", loss, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train_acc", self.train_acc(preds, y), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # Update metrics
+        self.train_loss(loss)
+        self.train_acc(preds, targets)
+        
+        # Log with improved naming convention
+        self.log("train_loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        x, y = batch
-        logits = self(x)
-        loss = self.criterion(logits, y)
-        preds = logits.argmax(dim=1)
+        """Execute validation step."""
+        loss, preds, targets = self.model_step(batch)
         
-        # Update validation metrics
-        self.val_metrics.update(preds, y)
-        self.log("val_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        # Update metrics
+        self.val_loss(loss)
+        self.val_metrics.update(preds, targets)
+        self.log("val_loss", self.val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Execute test step and log metrics."""
-        x, y = batch
-        logits = self(x)
-        preds = logits.argmax(dim=1)
+        """Execute test step."""
+        loss, preds, targets = self.model_step(batch)
         
-        # Update test metrics
-        self.test_metrics.update(preds, y)
+        # Update metrics
+        self.test_loss(loss)
+        self.test_metrics.update(preds, targets)
+        self.log("test_loss", self.test_loss, on_epoch=True, sync_dist=True)
+
+    def on_train_epoch_end(self) -> None:
+        """Reset training metrics at epoch end."""
+        self.train_loss.reset()
+        self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
-        # Compute and log all validation metrics at once
-        self.log_dict(
-            self.val_metrics.compute(),
-            on_epoch=True,
-            prog_bar=True,
-            sync_dist=True
-        )
+        """Handle validation epoch end."""
+        metrics = self.val_metrics.compute()
+        self.log_dict(metrics, on_epoch=True, prog_bar=True, sync_dist=True)
+        
+        # Track best accuracy
+        self.val_acc_best(metrics['val_balanced_acc'])
+        self.log("val_balanced_acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        
+        # Reset metrics
+        self.val_loss.reset()
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        # Compute and log all test metrics at once
+        """Handle test epoch end."""
         self.log_dict(
             self.test_metrics.compute(),
             on_epoch=True,
             sync_dist=True
         )
+        self.test_loss.reset()
         self.test_metrics.reset()
 
     def configure_optimizers(self) -> Dict[str, Any]:
