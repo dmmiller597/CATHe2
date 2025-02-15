@@ -134,7 +134,7 @@ class CATHeClassifier(pl.LightningModule):
         preds = logits.argmax(dim=1)
         
         # Only track loss and basic accuracy during training
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train_acc", self.train_acc(preds, y), on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return loss
