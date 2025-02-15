@@ -87,6 +87,7 @@ class CATHeClassifier(pl.LightningModule):
             
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
+        self._init_weights()  # Initialize weights
         
         # Initialize FocalLoss with label smoothing
         self.criterion = FocalLoss(gamma=focal_gamma, label_smoothing=label_smoothing)
@@ -107,7 +108,19 @@ class CATHeClassifier(pl.LightningModule):
         # Create separate collections for validation and test
         self.val_metrics = MetricCollection(eval_metrics).clone(prefix='val_')
         self.test_metrics = MetricCollection(eval_metrics).clone(prefix='test_')
-
+    
+    def _init_weights(self) -> None:
+        """Initialize network weights using Kaiming initialization."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_normal_(
+                    module.weight,
+                    mode='fan_in',
+                    nonlinearity='relu'
+                )
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias) 
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -201,4 +214,5 @@ class CATHeClassifier(pl.LightningModule):
                 "monitor": "val_balanced_acc",
                 "frequency": 1
             }
-        } 
+        }
+        
