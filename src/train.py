@@ -82,6 +82,7 @@ def main(cfg: DictConfig) -> None:
         dropout=cfg.model.dropout,
         learning_rate=cfg.model.learning_rate,
         weight_decay=cfg.model.weight_decay,
+        lr_scheduler=cfg.model.lr_scheduler
     )
     
     # Wandb Logger Setup

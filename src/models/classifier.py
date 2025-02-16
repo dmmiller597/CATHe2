@@ -132,7 +132,10 @@ class CATHeClassifier(pl.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            **self.hparams.lr_scheduler
+            mode=self.hparams.lr_scheduler["mode"],
+            factor=self.hparams.lr_scheduler["factor"],
+            patience=self.hparams.lr_scheduler["patience"],
+            min_lr=self.hparams.lr_scheduler["min_lr"]
         )
         return {
             "optimizer": optimizer,
