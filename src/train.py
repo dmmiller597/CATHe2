@@ -76,8 +76,12 @@ def main(cfg: DictConfig) -> None:
     
     # Model setup
     model = CATHeClassifier(
-        **cfg.model,
+        embedding_dim=cfg.model.embedding_dim,
+        hidden_sizes=cfg.model.hidden_sizes,
         num_classes=data_module.num_classes,
+        dropout=cfg.model.dropout,
+        learning_rate=cfg.model.learning_rate,
+        weight_decay=cfg.model.weight_decay,
     )
     
     # Wandb Logger Setup
