@@ -16,6 +16,7 @@ class CATHeClassifier(pl.LightningModule):
         dropout: float = 0.5,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
+        lr_scheduler: Dict[str, Any] = None
     ):
         """
         Initialize the CATH classifier.
