@@ -16,8 +16,6 @@ class CATHeClassifier(pl.LightningModule):
         dropout: float = 0.5,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
-        scheduler_factor: float = 0.1,
-        scheduler_patience: int = 10,
     ):
         """
         Initialize the CATH classifier.
@@ -29,8 +27,6 @@ class CATHeClassifier(pl.LightningModule):
             dropout: Dropout probability
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
-            scheduler_factor: Factor by which to reduce LR on plateau
-            scheduler_patience: Number of epochs to wait before reducing LR
         """
         super().__init__()
         self.save_hyperparameters()
@@ -128,10 +124,25 @@ class CATHeClassifier(pl.LightningModule):
         self.train_acc.reset()
 
     def configure_optimizers(self):
-        """Configure optimizer only - scheduler handled by callbacks."""
-        return torch.optim.AdamW(
+        """Configure optimizer and learning rate scheduler."""
+        optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=self.hparams.scheduler_mode,
+            factor=self.hparams.scheduler_factor,
+            patience=self.hparams.scheduler_patience,
+            min_lr=self.hparams.scheduler_min_lr
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val/balanced_acc",
+                "interval": "epoch"
+            }
+        }
         
