@@ -24,10 +24,10 @@ class CATHeDataset(Dataset):
             data = np.load(embeddings_path)['arr_0']
             labels_df = pd.read_csv(labels_path)
             
-            # # Filter out problematic indices if they exist in this dataset
-            # mask = ~np.isin(np.arange(len(data)), [194048, 200243])
-            # data = data[mask]
-            # labels_df = labels_df[mask]
+            # Filter out problematic indices if they exist in this dataset
+            mask = ~np.isin(np.arange(len(data)), [194048, 200243])
+            data = data[mask]
+            labels_df = labels_df[mask]
             
             self.embeddings = torch.from_numpy(data).float()
             codes = pd.Categorical(labels_df['SF']).codes
