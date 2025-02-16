@@ -41,14 +41,7 @@ class CATHeDataset(Dataset):
         return len(self.embeddings)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get a sample from the dataset.
-        
-        Args:
-            idx: Index of the sample
-            
-        Returns:
-            Tuple of (embedding, label) 
-        """
+        """Get a sample from the dataset."""
         return self.embeddings[idx], self.labels[idx]
 
 class CATHeDataModule(pl.LightningDataModule):
@@ -93,14 +86,7 @@ class CATHeDataModule(pl.LightningDataModule):
         self.datasets: Dict[str, CATHeDataset] = {}
 
     def _create_weighted_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
-        """Create a weighted sampler to handle class imbalance.
-        
-        Args:
-            labels: Tensor of class labels
-            
-        Returns:
-            WeightedRandomSampler instance
-        """
+        """Create a weighted sampler to handle class imbalance."""
         try:
             # Calculate class weights
             class_counts = torch.bincount(labels).float()
@@ -121,11 +107,7 @@ class CATHeDataModule(pl.LightningDataModule):
             raise
 
     def setup(self, stage: Optional[str] = None):
-        """Set up datasets for each stage of training.
-        
-        Args:
-            stage: Current stage ('fit' or 'test')
-        """
+        """Set up datasets for each stage of training."""
         if stage in (None, "fit"):
             self.datasets["train"] = CATHeDataset(
                 self.data_dir / self.train_embeddings,

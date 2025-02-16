@@ -5,36 +5,6 @@ from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
 
-# class FocalLoss(nn.Module):
-#     def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.1):
-#         """
-#         Initialize Focal Loss.
-        
-#         Args:
-#             gamma: Focus parameter that modulates loss for hard examples (default: 2.0)
-#             label_smoothing: Label smoothing factor (default: 0.1)
-#         """
-#         super().__init__()
-#         self.gamma = gamma
-#         self.label_smoothing = label_smoothing
-
-#     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-#         # Convert targets to one-hot with smoothing
-#         num_classes = inputs.shape[1]
-#         with torch.no_grad():
-#             targets_one_hot = torch.zeros_like(inputs).scatter_(
-#                 1, targets.unsqueeze(1), 1
-#             )
-#             targets_smooth = targets_one_hot * (1 - self.label_smoothing) + \
-#                            self.label_smoothing / num_classes
-        
-#         # Compute focal loss with label smoothing
-#         log_probs = F.log_softmax(inputs, dim=1)
-#         ce_loss = -(targets_smooth * log_probs).sum(dim=1)
-#         pt = torch.exp(-ce_loss)
-#         focal_loss = (1 - pt) ** self.gamma * ce_loss
-#         return focal_loss.mean()
-
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
     
@@ -48,8 +18,6 @@ class CATHeClassifier(pl.LightningModule):
         weight_decay: float = 1e-4,
         scheduler_factor: float = 0.1,
         scheduler_patience: int = 10,
-        #focal_gamma: float = 2.0,
-        #label_smoothing: float = 0.1,
     ):
         """
         Initialize the CATH classifier.
@@ -63,8 +31,6 @@ class CATHeClassifier(pl.LightningModule):
             weight_decay: Weight decay (L2 regularization) for optimizer
             scheduler_factor: Factor by which to reduce LR on plateau
             scheduler_patience: Number of epochs to wait before reducing LR
-            focal_gamma: Focus parameter for focal loss
-            label_smoothing: Label smoothing factor
         """
         super().__init__()
         self.save_hyperparameters()
@@ -111,15 +77,7 @@ class CATHeClassifier(pl.LightningModule):
                     nn.init.zeros_(module.bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the model.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, embedding_dim).
-
-        Returns:
-            torch.Tensor: Logits tensor of shape (batch_size, num_classes).
-        """
+        """Forward pass through the model."""
         return self.model(x)
 
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -179,17 +137,17 @@ class CATHeClassifier(pl.LightningModule):
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode='max',
-            factor=self.hparams.scheduler_factor,
-            patience=self.hparams.scheduler_patience,
-            min_lr=1e-8
+            mode=self.trainer.config.training.lr_scheduler.mode,
+            factor=self.trainer.config.training.lr_scheduler.factor,
+            patience=self.trainer.config.training.lr_scheduler.patience,
+            min_lr=self.trainer.config.training.lr_scheduler.min_lr
         )
         
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val/balanced_acc",
+                "monitor": self.trainer.config.training.lr_scheduler.monitor,
                 "interval": "epoch",
                 "frequency": 1
             }

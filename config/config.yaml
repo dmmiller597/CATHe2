@@ -16,17 +16,26 @@ model:
   # Optimization
   learning_rate: 1e-5
   weight_decay: 5e-4
-  scheduler_factor: 0.5
-  scheduler_patience: 5
-  # focal_gamma: 4
-  # label_smoothing: 0
+  
+  # Learning rate scheduler
+  lr_scheduler:
+    monitor: "val/balanced_acc"
+    mode: "max"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-8
 
 training:
   # Training parameters
   batch_size: 256
   max_epochs: 100
-  early_stopping_patience: 5
   accumulate_grad_batches: 4
+
+  # Monitoring
+  monitor_metric: "val/balanced_acc"  # Used by both checkpoint and early stopping
+  monitor_mode: "max"                 # Used by both checkpoint and early stopping
+  early_stopping_patience: 5
+  log_every_n_steps: 50
   
   # Hardware configuration
   num_workers: 4
@@ -34,17 +43,13 @@ training:
     float32_matmul_precision: "high"
     devices: 1
   
-  # Advanced training options
+  # Training options
   seed: 42
   gradient_clip_val: 1.0
   precision: "16-mixed"
-  
-  # Logging and checkpointing
-  log_every_n_steps: 50
-  monitor_metric: "val/balanced_acc"
-  monitor_mode: "max"
-  
+
   # Output paths
   output_dir: "outputs"
   checkpoint_dir: "${training.output_dir}/checkpoints"
-  log_dir: "${training.output_dir}/logs" 
+  log_dir: "${training.output_dir}/logs"
+  
