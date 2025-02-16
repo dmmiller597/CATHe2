@@ -21,11 +21,16 @@ class CATHeDataset(Dataset):
             labels_path: Path to CSV file containing SF labels
         """
         try:
-            # Load data into memory more efficiently
-            self.embeddings = torch.from_numpy(np.load(embeddings_path)['arr_0']).float()
+            data = np.load(embeddings_path)['arr_0']
             labels_df = pd.read_csv(labels_path)
+            
+            # Filter out problematic indices if they exist in this dataset
+            mask = ~np.isin(np.arange(len(data)), [194048, 200243])
+            data = data[mask]
+            labels_df = labels_df[mask]
+            
+            self.embeddings = torch.from_numpy(data).float()
             codes = pd.Categorical(labels_df['SF']).codes
-            # Use torch.tensor to force a copy and create a writable tensor
             self.labels = torch.tensor(codes, dtype=torch.long)
         except Exception as e:
             log.error(f"Error loading data: {e}")
@@ -87,6 +92,34 @@ class CATHeDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.datasets: Dict[str, CATHeDataset] = {}
 
+    def _create_weighted_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
+        """Create a weighted sampler to handle class imbalance.
+        
+        Args:
+            labels: Tensor of class labels
+            
+        Returns:
+            WeightedRandomSampler instance
+        """
+        try:
+            # Calculate class weights
+            class_counts = torch.bincount(labels).float()
+            # Add small epsilon to prevent division by zero
+            class_weights = 1.0 / (class_counts + 1e-8)
+            # Normalize weights to sum to 1
+            class_weights = class_weights / class_weights.sum()
+            # Map weights to samples
+            sample_weights = class_weights[labels]
+            
+            return WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(labels),
+                replacement=True
+            )
+        except Exception as e:
+            log.error(f"Error creating weighted sampler: {e}")
+            raise
+
     def setup(self, stage: Optional[str] = None):
         """Set up datasets for each stage of training.
         
@@ -105,17 +138,9 @@ class CATHeDataModule(pl.LightningDataModule):
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
-            # # Calculate class weights for training set
-            # labels = self.datasets["train"].labels
-            # class_counts = torch.bincount(labels).float()
-            # class_weights = 1.0 / class_counts
-            # sample_weights = class_weights[labels]
-            # self.train_sampler = WeightedRandomSampler(
-            #     weights=sample_weights,
-            #     num_samples=len(self.datasets["train"].labels),
-            #     replacement=True
-            # )
-
+            # Create weighted sampler for training
+            self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
+            
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
                 self.data_dir / self.test_embeddings,
@@ -127,8 +152,7 @@ class CATHeDataModule(pl.LightningDataModule):
         return DataLoader(
             self.datasets["train"],
             batch_size=self.batch_size,
-            # sampler=self.train_sampler,
-            shuffle=True,  # Enable shuffling instead of weighted sampling
+            sampler=self.train_sampler,
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
