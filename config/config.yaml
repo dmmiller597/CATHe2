@@ -14,8 +14,8 @@ model:
   dropout: 0.3
   
   # Optimization
-  learning_rate: 1e-5
-  weight_decay: 5e-4
+  learning_rate: 1e-4
+  weight_decay: 1e-4
 
   # Learning rate scheduler
   lr_scheduler:
