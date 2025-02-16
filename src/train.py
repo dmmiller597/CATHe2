@@ -78,7 +78,6 @@ def main(cfg: DictConfig) -> None:
     model = CATHeClassifier(
         **cfg.model,
         num_classes=data_module.num_classes,
-        lr_scheduler=cfg.training.lr_scheduler
     )
     
     # Wandb Logger Setup
