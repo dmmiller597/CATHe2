@@ -16,14 +16,6 @@ model:
   # Optimization
   learning_rate: 1e-5
   weight_decay: 5e-4
-  
-  # Learning rate scheduler
-  lr_scheduler:
-    monitor: "val/balanced_acc"
-    mode: "max"
-    factor: 0.5
-    patience: 5
-    min_lr: 1e-8
 
 training:
   # Training parameters
@@ -52,4 +44,12 @@ training:
   output_dir: "outputs"
   checkpoint_dir: "${training.output_dir}/checkpoints"
   log_dir: "${training.output_dir}/logs"
+  
+  # Learning rate scheduler
+  lr_scheduler:
+    monitor: "val/balanced_acc"
+    mode: "max"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-8
   

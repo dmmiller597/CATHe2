@@ -127,29 +127,11 @@ class CATHeClassifier(pl.LightningModule):
         """Reset training metrics at epoch end."""
         self.train_acc.reset()
 
-    def configure_optimizers(self) -> Dict[str, Any]:
-        """Configure optimizers and learning rate schedulers."""
-        optimizer = torch.optim.AdamW(
+    def configure_optimizers(self):
+        """Configure optimizer only - scheduler handled by callbacks."""
+        return torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-        
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode=self.trainer.config.training.lr_scheduler.mode,
-            factor=self.trainer.config.training.lr_scheduler.factor,
-            patience=self.trainer.config.training.lr_scheduler.patience,
-            min_lr=self.trainer.config.training.lr_scheduler.min_lr
-        )
-        
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": self.trainer.config.training.lr_scheduler.monitor,
-                "interval": "epoch",
-                "frequency": 1
-            }
-        }
         

@@ -34,6 +34,7 @@ def setup_callbacks(cfg: DictConfig) -> list:
             mode=cfg.training.monitor_mode
         ),
         LearningRateMonitor(logging_interval="epoch"),
+        pl.callbacks.ReduceLROnPlateau(**cfg.training.lr_scheduler),
         RichProgressBar()
     ]
 
