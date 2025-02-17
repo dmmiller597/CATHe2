@@ -78,7 +78,7 @@ class SequenceClusterer:
         
         try:
             logger.info(f"Running clustering at {seq_id:.2f} sequence identity")
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            subprocess.run(cmd, check=True, text=True)
             
             # MMseqs2 easy-cluster outputs results to cluster_prefix_cluster.tsv
             result_path = Path(f"{cluster_prefix}_cluster.tsv")
