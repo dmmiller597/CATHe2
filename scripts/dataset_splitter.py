@@ -42,6 +42,10 @@ class DatasetSplitter:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
         
+        # Create tmp directory in project root
+        self.tmp_dir = Path("tmp")
+        self.tmp_dir.mkdir(exist_ok=True, parents=True)
+        
         logger.info(f"Loading data from {input_parquet}")
         # Only load required columns and rename H_group to SF
         self.df = pd.read_parquet(
@@ -185,17 +189,19 @@ class DatasetSplitter:
             logger.warning("Empty DataFrame provided for similarity search")
             return set()
             
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir = Path(tmp_dir)
-            
-            query_fasta = tmp_dir / "query.fasta"
-            target_fasta = tmp_dir / "target.fasta"
-            results_file = tmp_dir / "results.tsv"
+        # Use project-specific tmp directory instead of system temp
+        search_dir = self.tmp_dir / f"mmseqs_search_{hash(str(query_df.head(1)))}"
+        search_dir.mkdir(exist_ok=True, parents=True)
+        
+        try:
+            query_fasta = search_dir / "query.fasta"
+            target_fasta = search_dir / "target.fasta"
+            results_file = search_dir / "results.tsv"
             
             self._save_fasta(query_df, query_fasta)
             self._save_fasta(target_df, target_fasta)
             
-            self._run_mmseqs_search(query_fasta, target_fasta, results_file, tmp_dir)
+            self._run_mmseqs_search(query_fasta, target_fasta, results_file, search_dir)
             
             similar_sequences = set()
             if results_file.exists():
@@ -205,6 +211,11 @@ class DatasetSplitter:
                 }
             
             return similar_sequences
+        finally:
+            # Clean up temporary files
+            if search_dir.exists():
+                import shutil
+                shutil.rmtree(search_dir)
 
     def _get_split_stats(self, df: pd.DataFrame) -> SplitStats:
         """Calculate statistics for a dataset split."""
