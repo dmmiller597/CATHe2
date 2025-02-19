@@ -7,7 +7,6 @@ import re
 
 def load_prot_t5():
     """Load ProtT5 model and tokenizer"""
-    # Changed to T5Model and correct model name
     model = T5Model.from_pretrained('Rostlab/prot_t5_xl_bfd')
     tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False)
     
@@ -21,10 +20,10 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
     """Get ProtT5 embeddings for a list of sequences"""
     all_embeddings = []
     
-    for i in range(0, len(sequences), batch_size):
+    for i in tqdm(range(0, len(sequences), batch_size)):
         batch_sequences = sequences[i:i + batch_size]
         
-        # Replace U, Z, O, B with X as per example
+        # Replace U, Z, O, B with X
         batch_sequences = [re.sub(r"[UZOB]", "X", sequence) for sequence in batch_sequences]
         
         # Tokenize sequences
@@ -40,13 +39,12 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
                            attention_mask=attention_mask,
                            decoder_input_ids=None)
             
-            # Use encoder embeddings (embedding[2]) as recommended
+            # Use encoder embeddings
             encoder_embedding = embedding[2]
             
-            # Average pool the embeddings (excluding padding tokens)
+            # Average pool the embeddings
             embeddings = []
             for j, mask in enumerate(attention_mask):
-                # Get mean of embeddings where attention mask is 1
                 seq_embedding = encoder_embedding[j][mask.bool()].mean(dim=0)
                 embeddings.append(seq_embedding.cpu().numpy())
             
@@ -54,34 +52,42 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
     
     return np.array(all_embeddings)
 
+def process_split(split_name, model, tokenizer, device):
+    """Process a single data split"""
+    print(f"\nProcessing {split_name} split...")
+    
+    # Load data
+    df = pd.read_parquet(f"data/splits/{split_name}.parquet")
+    
+    # Filter for s30_rep = True only for train split
+    if split_name == 'train':
+        df = df[df['s30_rep'] == True].reset_index(drop=True)
+    
+    # Get embeddings
+    print(f"Generating embeddings for {len(df)} sequences...")
+    sequences = df['sequence'].tolist()
+    embeddings = get_embeddings(model, tokenizer, sequences, device)
+    
+    # Get labels
+    labels = df['SF'].values
+    
+    # Save results
+    output_file = f'prot_t5_embeddings_{split_name}.npz'
+    np.savez_compressed(output_file,
+                       embeddings=embeddings,
+                       labels=labels)
+    
+    print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
+    print(f"Number of unique superfamilies: {len(np.unique(labels))}")
+
 def main():
-    # Load parquet file
-    print("Loading data...")
-    df = pd.read_parquet("data/splits/train.parquet")
-    
-    # Filter for s30_rep = True
-    df_filtered = df[df['s30_rep'] == True].reset_index(drop=True)
-    
     # Load model and tokenizer
     print("Loading ProtT5 model...")
     model, tokenizer, device = load_prot_t5()
     
-    # Get embeddings
-    print("Generating embeddings...")
-    sequences = df_filtered['sequence'].tolist()
-    embeddings = get_embeddings(model, tokenizer, sequences, device)
-    
-    # Get labels
-    labels = df_filtered['SF'].values
-    
-    # Save results
-    print("Saving results...")
-    np.savez_compressed('train_s30_prott5.npz',
-                       embeddings=embeddings,
-                       labels=labels)
-    
-    print(f"Saved embeddings shape: {embeddings.shape}")
-    print(f"Number of unique superfamilies: {len(np.unique(labels))}")
+    # Process all splits
+    for split in ['train', 'val', 'test']:
+        process_split(split, model, tokenizer, device)
 
 if __name__ == "__main__":
     main()
