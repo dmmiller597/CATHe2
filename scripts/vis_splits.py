@@ -123,6 +123,11 @@ if __name__ == "__main__":
     val_df = pd.read_parquet("data/splits/val.parquet")
     test_df = pd.read_parquet("data/splits/test.parquet")
     
+    # Add sequence length column to each DataFrame
+    for df in [train_df, val_df, test_df]:
+        # Replace 'sequence' with your actual sequence column name
+        df['length'] = df['sequence'].str.len()
+    
     plot_dataset_distributions(
         train_df,
         val_df,
