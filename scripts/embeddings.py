@@ -12,13 +12,21 @@ def load_prot_t5():
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
+    # Convert to half precision
+    model = model.half()  
     model = model.eval()
     
     return model, tokenizer, device
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
+def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
     """Get ProtT5 embeddings for a list of sequences"""
     all_embeddings = []
+    
+    # Sort sequences by length for more efficient batching
+    seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
+    seq_lengths.sort(key=lambda x: x[1])
+    sorted_indices = [x[0] for x in seq_lengths]
+    sequences = [sequences[i] for i in sorted_indices]
     
     for i in tqdm(range(0, len(sequences), batch_size)):
         batch_sequences = sequences[i:i + batch_size]
@@ -29,27 +37,32 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
         # Tokenize sequences
         ids = tokenizer.batch_encode_plus(batch_sequences, 
                                         add_special_tokens=True, 
-                                        padding=True)
+                                        padding=True,
+                                        return_tensors='pt')
         
-        input_ids = torch.tensor(ids['input_ids']).to(device)
-        attention_mask = torch.tensor(ids['attention_mask']).to(device)
+        input_ids = ids['input_ids'].to(device)
+        attention_mask = ids['attention_mask'].to(device)
         
         with torch.no_grad():
+            # Use half precision for inference
+            input_ids = input_ids.half()
+            attention_mask = attention_mask.half()
+            
             embedding = model(input_ids=input_ids,
                            attention_mask=attention_mask)
             
             # Get last hidden states
             last_hidden_states = embedding.last_hidden_state
             
-            # Average pool the embeddings
-            embeddings = []
-            for j, mask in enumerate(attention_mask):
-                seq_embedding = last_hidden_states[j][mask.bool()].mean(dim=0)
-                embeddings.append(seq_embedding.cpu().numpy())
+            # Vectorized mean pooling
+            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
+            sum_embeddings = torch.sum(last_hidden_states * mask_expanded, 1)
+            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+            embeddings = (sum_embeddings / sum_mask).cpu().numpy()
             
             all_embeddings.extend(embeddings)
     
-    return np.array(all_embeddings)
+    return np.array(all_embeddings), sorted_indices
 
 def process_split(split_name, model, tokenizer, device):
     """Process a single data split"""
@@ -65,10 +78,10 @@ def process_split(split_name, model, tokenizer, device):
     # Get embeddings
     print(f"Generating embeddings for {len(df)} sequences...")
     sequences = df['sequence'].tolist()
-    embeddings = get_embeddings(model, tokenizer, sequences, device)
+    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device)
     
-    # Get labels
-    labels = df['SF'].values
+    # Get labels in the same order as the embeddings
+    labels = df['SF'].values[sorted_indices]
     
     # Save results
     output_file = f'prot_t5_embeddings_{split_name}.npz'
