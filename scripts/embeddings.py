@@ -40,19 +40,16 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
                                         padding=True,
                                         return_tensors='pt')
         
-        input_ids = ids['input_ids'].to(device)
-        attention_mask = ids['attention_mask'].to(device)
+        input_ids = ids['input_ids'].to(device)  # Keep as Long
+        attention_mask = ids['attention_mask'].to(device)  # Keep as Long
         
         with torch.no_grad():
-            # Use half precision for inference
-            input_ids = input_ids.half()
-            attention_mask = attention_mask.half()
-            
             embedding = model(input_ids=input_ids,
                            attention_mask=attention_mask)
             
             # Get last hidden states
-            last_hidden_states = embedding.last_hidden_state
+            last_hidden_states = embedding.last_hidden_state.half()  # Convert to half here
+            attention_mask = attention_mask.half()  # Convert to half here
             
             # Vectorized mean pooling
             mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
