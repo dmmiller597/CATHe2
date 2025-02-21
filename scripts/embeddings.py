@@ -1,13 +1,13 @@
 import pandas as pd
 import torch
-from transformers import T5Model, T5Tokenizer
+from transformers import T5EncoderModel, T5Tokenizer
 import numpy as np
 from tqdm import tqdm
 import re
 
 def load_prot_t5():
     """Load ProtT5 model and tokenizer"""
-    model = T5Model.from_pretrained('Rostlab/prot_t5_xl_bfd')
+    model = T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')
     tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,16 +36,15 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=4):
         
         with torch.no_grad():
             embedding = model(input_ids=input_ids,
-                           attention_mask=attention_mask,
-                           decoder_input_ids=None)
+                           attention_mask=attention_mask)
             
-            # Use encoder embeddings
-            encoder_embedding = embedding[2]
+            # Get last hidden states
+            last_hidden_states = embedding.last_hidden_state
             
             # Average pool the embeddings
             embeddings = []
             for j, mask in enumerate(attention_mask):
-                seq_embedding = encoder_embedding[j][mask.bool()].mean(dim=0)
+                seq_embedding = last_hidden_states[j][mask.bool()].mean(dim=0)
                 embeddings.append(seq_embedding.cpu().numpy())
             
             all_embeddings.extend(embeddings)
