@@ -12,7 +12,7 @@ import torch
 from pathlib import Path
 
 from utils import get_logger, set_seed
-from data.data_module_ted import CATHeTEDDataModule
+from data.data_module_ted import CATHeDataModule
 from models.classifier import CATHeClassifier
 
 log = get_logger()
@@ -66,7 +66,7 @@ def main(cfg: DictConfig) -> None:
 
     # Data setup
     data_dir = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir
-    data_module = CATHeTEDDataModule(
+    data_module = CATHeDataModule(
         data_dir=data_dir,
         **{k: v for k, v in cfg.data.items() if k != "data_dir"},
         batch_size=cfg.training.batch_size,
