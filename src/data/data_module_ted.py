@@ -13,15 +13,16 @@ log = get_logger()
 class CATHeDataset(Dataset):
     """Dataset class for CATH superfamily classification."""
     
-    def __init__(self, embeddings_path: Path):
+    def __init__(self, embeddings_file: Path, allow_pickle: bool = True):
         """Initialize dataset with protein embeddings and their corresponding labels.
         
         Args:
-            embeddings_path: Path to NPZ file containing ProtT5 embeddings and labels
+            embeddings_file: Path to NPZ file containing ProtT5 embeddings and labels
+            allow_pickle: Whether to allow pickle for loading the data
         """
         try:
             # Load both embeddings and labels from the same file
-            data = np.load(embeddings_path)
+            data = np.load(embeddings_file, allow_pickle=allow_pickle)
             embeddings = data['embeddings']
             labels = data['labels']
             
@@ -95,24 +96,24 @@ class CATHeDataModule(pl.LightningDataModule):
             raise
 
     def setup(self, stage: Optional[str] = None):
-        """Set up datasets for each stage of training."""
-        if stage in (None, "fit"):
-            self.datasets["train"] = CATHeDataset(
-                self.data_dir / self.train_embeddings
-            )
-            self.datasets["val"] = CATHeDataset(
-                self.data_dir / self.val_embeddings
-            )
-            # Store number of classes for model configuration
-            self.num_classes = len(self.datasets["train"].label_encoder.categories)
-            
-            # Create weighted sampler for training
-            self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
-            
-        if stage == "test" and self.test_embeddings:
-            self.datasets["test"] = CATHeDataset(
-                self.data_dir / self.test_embeddings
-            )
+        """Set up the datasets with explicit pickle allowance"""
+        self.datasets["train"] = CATHeDataset(
+            embeddings_file=self.data_dir / self.train_embeddings,
+            allow_pickle=True
+        )
+        self.datasets["val"] = CATHeDataset(
+            embeddings_file=self.data_dir / self.val_embeddings,
+            allow_pickle=True
+        )
+        self.datasets["test"] = CATHeDataset(
+            embeddings_file=self.data_dir / self.test_embeddings,
+            allow_pickle=True
+        )
+        # Store number of classes for model configuration
+        self.num_classes = len(self.datasets["train"].label_encoder.categories)
+        
+        # Create weighted sampler for training
+        self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
 
     def train_dataloader(self) -> DataLoader:
         """Create training data loader."""
