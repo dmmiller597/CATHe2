@@ -10,7 +10,7 @@ from utils import get_logger
 
 log = get_logger()
 
-class CATHeDataset(Dataset):
+class CATHeTEDDataset(Dataset):
     """Dataset class for CATH superfamily classification."""
     
     def __init__(self, embeddings_path: Path):
@@ -42,7 +42,7 @@ class CATHeDataset(Dataset):
         """Get a sample from the dataset."""
         return self.embeddings[idx], self.labels[idx]
 
-class CATHeDataModule(pl.LightningDataModule):
+class CATHeTEDDataModule(pl.LightningDataModule):
     """PyTorch Lightning data module for CATH superfamily classification."""
     
     def __init__(
