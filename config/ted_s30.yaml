@@ -1,0 +1,52 @@
+data:
+  data_dir: "data"
+  train_embeddings: "TED/prot_t5_embeddings_train.npz"
+  val_embeddings: "TED/prot_t5_embeddings_val.npz"
+  test_embeddings: "TED/prot_t5_embeddings_test.npz"
+
+model:
+  # Architecture
+  embedding_dim: 1024
+  hidden_sizes: [1024]
+  dropout: 0.3
+  
+  # Optimization
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+
+  # Learning rate scheduler
+  lr_scheduler:
+    monitor: "val/balanced_acc"
+    mode: "max"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-8
+
+training:
+  # Training parameters
+  batch_size: 256
+  max_epochs: 100
+  accumulate_grad_batches: 4
+
+  # Monitoring
+  monitor_metric: "val/balanced_acc"  # Used by both checkpoint and early stopping
+  monitor_mode: "max"                 # Used by both checkpoint and early stopping
+  early_stopping_patience: 5
+  log_every_n_steps: 50
+  
+  # Hardware configuration
+  num_workers: 4
+  accelerator:
+    float32_matmul_precision: "high"
+    devices: 1
+  
+  # Training options
+  seed: 42
+  gradient_clip_val: 1.0
+  precision: "16-mixed"
+
+  # Output paths
+  output_dir: "outputs"
+  checkpoint_dir: "${training.output_dir}/checkpoints"
+  log_dir: "${training.output_dir}/logs"
+  
