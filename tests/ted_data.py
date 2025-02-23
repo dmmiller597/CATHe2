@@ -1,11 +1,11 @@
 import torch
 import numpy as np
 from pathlib import Path
-from src.data.data_module_ted import CATHeTEDDataModule
+from src.data.data_module_ted import CATHeDataModule
 
 def test_data_loading():
     # Initialize the data module
-    data_module = CATHeTEDDataModule(
+    data_module = CATHeDataModule(
         data_dir="data/TED",
         train_embeddings="prot_t5_embeddings_train.npz",
         val_embeddings="prot_t5_embeddings_val.npz",
