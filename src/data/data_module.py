@@ -21,20 +21,20 @@ class CATHeDataset(Dataset):
             labels_path: Path to CSV file containing SF labels
         """
         try:
-            data = np.load(embeddings_path)['arr_0']
+            data = np.load(embeddings_path)
+            self.embeddings = data['embeddings']
             labels_df = pd.read_csv(labels_path)
             
             # Filter out problematic indices if they exist in this dataset
-            mask = ~np.isin(np.arange(len(data)), [194048, 200243])
-            data = data[mask]
+            mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
+            self.embeddings = self.embeddings[mask]
             labels_df = labels_df[mask]
             
-            self.embeddings = torch.from_numpy(data).float()
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
         except Exception as e:
             log.error(f"Error loading data: {e}")
-            raise
+            raise ValueError(f"Error loading embeddings from {embeddings_path}: {str(e)}")
         
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
