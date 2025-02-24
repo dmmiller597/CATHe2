@@ -22,14 +22,20 @@ class CATHeDataset(Dataset):
         """
         try:
             # Load both embeddings and labels from the same file
-            data = np.load(embeddings_file, allow_pickle=allow_pickle)
-            embeddings = data['embeddings']
-            labels = data['labels']
+            data = np.load(embeddings_file, allow_pickle=True)  # Force allow_pickle=True
+            self.embeddings = torch.from_numpy(data['embeddings']).float()
             
-            self.embeddings = torch.from_numpy(embeddings).float()
-            # Convert string labels to categorical codes
-            self.label_encoder = pd.Categorical(labels)
+            # Handle string labels properly
+            raw_labels = data['labels']
+            self.label_encoder = pd.Categorical(raw_labels)
             self.labels = torch.tensor(self.label_encoder.codes, dtype=torch.long)
+            
+            # Store original string labels and indices for testing
+            self.original_labels = raw_labels
+            self.indices = np.arange(len(self.embeddings))
+            
+            log.info(f"Loaded dataset with {len(self.embeddings)} samples and {len(self.label_encoder.categories)} classes")
+            log.info(f"Embedding dimension: {self.embeddings.shape[1]}")
             
         except Exception as e:
             log.error(f"Error loading data: {e}")
