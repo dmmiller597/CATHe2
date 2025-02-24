@@ -4,6 +4,9 @@ import pytorch_lightning as pl
 from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
+import logging
+
+log = logging.getLogger(__name__)
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -49,15 +52,28 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
         
-        # Initialize metrics
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
-        self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes),
+        # Debug logging for metrics setup
+        log.info(f"Initializing metrics for {num_classes} classes")
+        
+        # Initialize metrics with reduced memory footprint
+        self.train_acc = Accuracy(
+            task="multiclass",
+            num_classes=num_classes,
+            average='macro'  # Use macro averaging to reduce memory
+        )
+        
+        # Split metrics into separate collections to reduce memory pressure
+        self.val_acc_metrics = MetricCollection({
+            'acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        }, prefix='val/')
+        
+        self.val_other_metrics = MetricCollection({
+            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }, prefix='val/')
-        self.test_metrics = self.val_metrics.clone(prefix='test/')
+        
+        self.test_metrics = self.val_acc_metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
         self.criterion = nn.CrossEntropyLoss()
     
@@ -98,8 +114,16 @@ class CATHeClassifier(pl.LightningModule):
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Validation step."""
         loss, preds, targets = self.model_step(batch)
+        
+        # Log CUDA memory status
+        if batch_idx == 0:
+            log.info(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+            log.info(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+        
+        # Update metrics separately to manage memory
+        self.val_acc_metrics.update(preds, targets)
+        self.val_other_metrics.update(preds, targets)
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.val_metrics.update(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
@@ -109,11 +133,12 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
-        metrics = self.val_metrics.compute()
+        metrics = self.val_acc_metrics.compute()
         self.log_dict(metrics, on_epoch=True, prog_bar=True)
         self.val_acc_best.update(metrics['val/balanced_acc'])
         self.log("val/balanced_acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True)
-        self.val_metrics.reset()
+        self.val_acc_metrics.reset()
+        self.val_other_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end."""
