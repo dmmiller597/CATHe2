@@ -49,12 +49,11 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
         
-        # Initialize metrics with reduced memory footprint
+        # Initialize only memory-efficient metrics
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         self.val_metrics = MetricCollection({
             'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro')
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
         }, prefix='val/')
         self.test_metrics = self.val_metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
