@@ -8,9 +8,9 @@ import logging
 from pathlib import Path
 import pandas as pd
 import subprocess
-from typing import Dict, Set
+from typing import Set
 import shutil
-from tqdm import tqdm
+import argparse
 
 # Configure logging
 logging.basicConfig(
@@ -134,14 +134,48 @@ class SequenceClusterer:
             if self.tmp_dir.exists():
                 shutil.rmtree(self.tmp_dir)
                 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="""
+        Cluster protein sequences using MMseqs2 at various sequence identity thresholds.
+        Input file must be a Parquet file containing at minimum these columns:
+        - sequence_id (str): Unique identifier for each sequence
+        - sequence (str): Protein sequence in single-letter amino acid code
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        '-i', '--input',
+        type=str,
+        required=True,
+        help='Path to input Parquet file containing sequence data'
+    )
+    parser.add_argument(
+        '-o', '--output_dir',
+        type=str,
+        required=True,
+        help='Directory where results will be saved'
+    )
+    parser.add_argument(
+        '-t', '--thresholds',
+        type=float,
+        nargs='+',
+        default=[0.8, 0.7, 0.6, 0.5, 0.4, 0.3],
+        help='Sequence identity thresholds (between 0 and 1) for clustering'
+    )
+    return parser.parse_args()
+
 def main():
     """Main entry point with error handling."""
     try:
+        args = parse_args()
+
         clusterer = SequenceClusterer(
-            input_parquet="data/splits/train.parquet",
-            output_dir="data/splits"
+            input_parquet=args.input,
+            output_dir=args.output_dir
         )
-        clusterer.cluster_sequences()
+        clusterer.cluster_sequences(thresholds=args.thresholds)
         logger.info("Sequence clustering completed successfully")
         
     except Exception as e:
