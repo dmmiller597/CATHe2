@@ -1,107 +1,109 @@
 import pandas as pd
 import torch
-import torch.nn.functional as F
 from transformers import T5EncoderModel, T5Tokenizer
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import re
-from dataclasses import dataclass
-from typing import List
-import h5py
 
-@dataclass
-class EmbeddingConfig:
-    """Configuration for embedding generation"""
-    batch_size: int = 16
-    max_length: int = 1024
-    normalize: bool = True
-    cache_dir: str = "data/embedding_cache"
+def load_prot_t5():
+    """Load ProtT5 model and tokenizer"""
+    model = T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False)
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    # Convert to half precision
+    model = model.half()  
+    model = model.eval()
+    
+    return model, tokenizer, device
 
-class ProteinEmbeddingGenerator:
-    def __init__(self, config: EmbeddingConfig):
-        self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd').to(self.device).half().eval()
-        self.tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False)
-        self.valid_aas = set("ACDEFGHIKLMNPQRSTVWYX")
-        Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
-
-    def _clean_sequence(self, sequence: str) -> str:
-        """Clean and validate protein sequence"""
-        if not sequence:
-            return ""
-        sequence = sequence.upper()
-        return re.sub(r"[^ACDEFGHIKLMNPQRSTVWYX]", "X", sequence)
-
-    def generate_embeddings(self, sequences: List[str]) -> np.ndarray:
-        """Generate embeddings for protein sequences"""
-        # Clean sequences
-        sequences = [self._clean_sequence(seq) for seq in sequences if seq]
+def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
+    """Get ProtT5 embeddings for a list of sequences"""
+    all_embeddings = []
+    
+    # Sort sequences by length for more efficient batching
+    seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
+    seq_lengths.sort(key=lambda x: x[1])
+    sorted_indices = [x[0] for x in seq_lengths]
+    sequences = [sequences[i] for i in sorted_indices]
+    
+    for i in tqdm(range(0, len(sequences), batch_size)):
+        batch_sequences = sequences[i:i + batch_size]
         
-        # Generate embeddings in batches
-        all_embeddings = []
-        for i in tqdm(range(0, len(sequences), self.config.batch_size)):
-            batch = sequences[i:i + self.config.batch_size]
+        # Replace U, Z, O, B with X
+        batch_sequences = [re.sub(r"[UZOB]", "X", sequence) for sequence in batch_sequences]
+        
+        # Tokenize sequences
+        ids = tokenizer.batch_encode_plus(batch_sequences, 
+                                        add_special_tokens=True, 
+                                        padding=True,
+                                        return_tensors='pt')
+        
+        input_ids = ids['input_ids'].to(device)  # Keep as Long
+        attention_mask = ids['attention_mask'].to(device)  # Keep as Long
+        
+        with torch.no_grad():
+            embedding = model(input_ids=input_ids,
+                           attention_mask=attention_mask)
             
-            # Tokenize
-            inputs = self.tokenizer.batch_encode_plus(
-                batch,
-                add_special_tokens=True,
-                padding=True,
-                max_length=self.config.max_length,
-                truncation=True,
-                return_tensors='pt'
-            ).to(self.device)
+            # Get last hidden states
+            last_hidden_states = embedding.last_hidden_state.half()  # Convert to half here
+            attention_mask = attention_mask.half()  # Convert to half here
+            
+            # Vectorized mean pooling
+            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
+            sum_embeddings = torch.sum(last_hidden_states * mask_expanded, 1)
+            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+            embeddings = (sum_embeddings / sum_mask).cpu().numpy()
+            
+            all_embeddings.extend(embeddings)
+    
+    return np.array(all_embeddings), sorted_indices
 
-            # Generate embeddings
-            with torch.no_grad():
-                outputs = self.model(input_ids=inputs['input_ids'], 
-                                  attention_mask=inputs['attention_mask'])
-                
-                # Mean pool and normalize
-                mask = inputs['attention_mask'].unsqueeze(-1).expand(
-                    outputs.last_hidden_state.size()).half()
-                sum_embeddings = torch.sum(outputs.last_hidden_state * mask, 1)
-                sum_mask = torch.clamp(mask.sum(1), min=1e-9)
-                embeddings = sum_embeddings / sum_mask
-                
-                if self.config.normalize:
-                    embeddings = F.normalize(embeddings, p=2, dim=1)
-                
-                all_embeddings.extend(embeddings.cpu().numpy())
-
-        return np.array(all_embeddings)
-
-    def process_split(self, split_name: str):
-        """Process a data split and save embeddings"""
-        print(f"Processing {split_name} split...")
-        
-        # Load sequences
-        df = pd.read_parquet(f"data/splits/{split_name}.parquet")
-        if split_name == 'train':
-            df = df[df['s30_rep']].reset_index(drop=True)
-        
-        # Generate embeddings
-        embeddings = self.generate_embeddings(df['sequence'].tolist())
-        labels = df['SF'].values
-        
-        # Save results
-        output_dir = Path('data/embeddings')
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        with h5py.File(output_dir / f'{split_name}.h5', 'w') as f:
-            f.create_dataset('embeddings', data=embeddings, compression='gzip')
-            f.create_dataset('labels', data=labels, compression='gzip')
-            f.attrs['date'] = str(pd.Timestamp.now())
-            f.attrs['model'] = 'Rostlab/prot_t5_xl_bfd'
+def process_split(split_name, model, tokenizer, device):
+    """Process a single data split"""
+    print(f"\nProcessing {split_name} split...")
+    
+    # Load data
+    df = pd.read_parquet(f"data/splits/{split_name}.parquet")
+    
+    # Filter for s30_rep = True only for train split
+    if split_name == 'train':
+        df = df[df['s30_rep'] == True].reset_index(drop=True)
+    
+    # Get embeddings
+    print(f"Generating embeddings for {len(df)} sequences...")
+    sequences = df['sequence'].tolist()
+    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device)
+    
+    # Get labels in the same order as the embeddings
+    labels = df['SF'].values[sorted_indices]
+    
+    # Save embeddings
+    output_dir = Path('data/TED')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f'prot_t5_embeddings_{split_name}.npz'
+    np.savez_compressed(output_file, embeddings=embeddings)
+    
+    # Save labels as CSV
+    labels_df = pd.DataFrame({'SF': labels})
+    labels_file = output_dir / f'Y_{split_name.capitalize()}_SF.csv'
+    labels_df.to_csv(labels_file)
+    
+    print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
+    print(f"Saved labels to {labels_file}")
+    print(f"Number of unique superfamilies: {len(np.unique(labels))}")
 
 def main():
-    config = EmbeddingConfig()
-    generator = ProteinEmbeddingGenerator(config)
+    # Load model and tokenizer
+    print("Loading ProtT5 model...")
+    model, tokenizer, device = load_prot_t5()
     
+    # Process all splits
     for split in ['train', 'val', 'test']:
-        generator.process_split(split)
+        process_split(split, model, tokenizer, device)
 
 if __name__ == "__main__":
     main()
