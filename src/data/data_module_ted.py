@@ -119,49 +119,51 @@ class CATHeDataModule(pl.LightningDataModule):
             raise
 
     def setup(self, stage: Optional[str] = None):
-        """Set up the datasets with filtering to ensure label consistency."""
-        # Load training set first
+        """Set up the datasets with memory-efficient filtering."""
+        # Load training set categories first
+        data = np.load(self.data_dir / self.train_embeddings, allow_pickle=True)
+        train_categories = set(pd.Categorical(data['labels']).categories)
+        log.info(f"Number of training classes: {len(train_categories)}")
+        
+        # Now load full training set
         self.datasets["train"] = CATHeDataset(
             embeddings_file=self.data_dir / self.train_embeddings,
             allow_pickle=True
         )
         
-        # Get training set categories
-        train_categories = set(self.datasets["train"].label_encoder.categories)
-        log.info(f"Number of training classes: {len(train_categories)}")
+        # Load and filter validation set with pre-filtering
+        data = np.load(self.data_dir / self.val_embeddings, allow_pickle=True)
+        val_mask = np.array([label in train_categories for label in data['labels']])
+        filtered_embeddings = data['embeddings'][val_mask]
+        filtered_labels = data['labels'][val_mask]
         
-        # Load and filter validation set
-        val_dataset = CATHeDataset(
-            embeddings_file=self.data_dir / self.val_embeddings,
-            allow_pickle=True
-        )
-        val_mask = [label in train_categories for label in val_dataset.original_labels]
-        val_dataset.filter_by_mask(val_mask)
-        self.datasets["val"] = val_dataset
-        log.info(f"Validation samples after filtering: {len(self.datasets['val'])}")
+        # Create temporary NPZ file for filtered data
+        tmp_val_path = self.data_dir / 'tmp_val.npz'
+        np.savez(tmp_val_path, embeddings=filtered_embeddings, labels=filtered_labels)
+        self.datasets["val"] = CATHeDataset(embeddings_file=tmp_val_path)
+        tmp_val_path.unlink()  # Clean up temporary file
         
-        # Load and filter test set
-        test_dataset = CATHeDataset(
-            embeddings_file=self.data_dir / self.test_embeddings,
-            allow_pickle=True
-        )
-        test_mask = [label in train_categories for label in test_dataset.original_labels]
-        test_dataset.filter_by_mask(test_mask)
-        self.datasets["test"] = test_dataset
-        log.info(f"Test samples after filtering: {len(self.datasets['test'])}")
+        # Same for test set
+        if self.test_embeddings:
+            data = np.load(self.data_dir / self.test_embeddings, allow_pickle=True)
+            test_mask = np.array([label in train_categories for label in data['labels']])
+            filtered_embeddings = data['embeddings'][test_mask]
+            filtered_labels = data['labels'][test_mask]
+            
+            tmp_test_path = self.data_dir / 'tmp_test.npz'
+            np.savez(tmp_test_path, embeddings=filtered_embeddings, labels=filtered_labels)
+            self.datasets["test"] = CATHeDataset(embeddings_file=tmp_test_path)
+            tmp_test_path.unlink()  # Clean up temporary file
         
         # Store number of classes for model configuration
         self.num_classes = len(train_categories)
-        
-        # Create weighted sampler for training
-        self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
 
     def train_dataloader(self) -> DataLoader:
         """Create training data loader."""
         return DataLoader(
             self.datasets["train"],
             batch_size=self.batch_size,
-            sampler=self.train_sampler,
+            sampler=self._create_weighted_sampler(self.datasets["train"].labels),
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
