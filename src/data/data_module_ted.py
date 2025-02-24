@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import pytorch_lightning as pl
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
 
 from utils import get_logger
@@ -48,6 +48,23 @@ class CATHeDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get a sample from the dataset."""
         return self.embeddings[idx], self.labels[idx]
+
+    def filter_by_mask(self, mask: List[bool]) -> None:
+        """Filter dataset to keep only samples specified by mask.
+        
+        Args:
+            mask: List of boolean values indicating which samples to keep
+        """
+        mask = torch.tensor(mask)
+        self.embeddings = self.embeddings[mask]
+        self.original_labels = self.original_labels[mask]
+        
+        # Re-encode labels to ensure consecutive indices
+        self.label_encoder = pd.Categorical(self.original_labels)
+        self.labels = torch.tensor(self.label_encoder.codes, dtype=torch.long)
+        self.indices = np.arange(len(self.embeddings))
+        
+        log.info(f"Dataset filtered to {len(self)} samples with {len(self.label_encoder.categories)} classes")
 
 class CATHeDataModule(pl.LightningDataModule):
     """PyTorch Lightning data module for CATH superfamily classification."""
@@ -102,21 +119,39 @@ class CATHeDataModule(pl.LightningDataModule):
             raise
 
     def setup(self, stage: Optional[str] = None):
-        """Set up the datasets with explicit pickle allowance"""
+        """Set up the datasets with filtering to ensure label consistency."""
+        # Load training set first
         self.datasets["train"] = CATHeDataset(
             embeddings_file=self.data_dir / self.train_embeddings,
             allow_pickle=True
         )
-        self.datasets["val"] = CATHeDataset(
+        
+        # Get training set categories
+        train_categories = set(self.datasets["train"].label_encoder.categories)
+        log.info(f"Number of training classes: {len(train_categories)}")
+        
+        # Load and filter validation set
+        val_dataset = CATHeDataset(
             embeddings_file=self.data_dir / self.val_embeddings,
             allow_pickle=True
         )
-        self.datasets["test"] = CATHeDataset(
+        val_mask = [label in train_categories for label in val_dataset.original_labels]
+        val_dataset.filter_by_mask(val_mask)
+        self.datasets["val"] = val_dataset
+        log.info(f"Validation samples after filtering: {len(self.datasets['val'])}")
+        
+        # Load and filter test set
+        test_dataset = CATHeDataset(
             embeddings_file=self.data_dir / self.test_embeddings,
             allow_pickle=True
         )
+        test_mask = [label in train_categories for label in test_dataset.original_labels]
+        test_dataset.filter_by_mask(test_mask)
+        self.datasets["test"] = test_dataset
+        log.info(f"Test samples after filtering: {len(self.datasets['test'])}")
+        
         # Store number of classes for model configuration
-        self.num_classes = len(self.datasets["train"].label_encoder.categories)
+        self.num_classes = len(train_categories)
         
         # Create weighted sampler for training
         self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
