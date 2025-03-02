@@ -1,11 +1,11 @@
 data:
   data_dir: "data"
   train_embeddings: "TED/prot_t5_embeddings_train.npz"
-  val_embeddings: "TED/prot_t5_embeddings_val.npz"
-  test_embeddings: "TED/prot_t5_embeddings_test.npz"
+  val_embeddings: "TED/prot_t5_embeddings_val_filtered.npz"
+  test_embeddings: "TED/prot_t5_embeddings_test_filtered.npz"
   train_labels: "TED/Y_Train_SF.csv"
-  val_labels: "TED/Y_Val_SF.csv"
-  test_labels: "TED/Y_Test_SF.csv"
+  val_labels: "TED/Y_Val_SF_filtered.csv"
+  test_labels: "TED/Y_Test_SF_filtered.csv"
 
 model:
   # Architecture
