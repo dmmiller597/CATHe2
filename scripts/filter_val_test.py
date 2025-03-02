@@ -7,14 +7,14 @@ def filter_and_save_data():
     data_dir = Path("data/TED")
     
     # Load training labels to get valid label set
-    train_labels = pd.read_csv(data_dir / "Y_Train_SF.csv").iloc[:, 0].values
+    train_labels = pd.read_csv(data_dir / "Y_Train_SF.csv")['SF'].values
     valid_labels = np.unique(train_labels)
     print(f"Number of unique training labels: {len(valid_labels)}")
 
     # Process validation and test sets
     for split in ["val", "test"]:
         # Load current data
-        labels = pd.read_csv(data_dir / f"Y_{split.capitalize()}_SF.csv").iloc[:, 0].values
+        labels = pd.read_csv(data_dir / f"Y_{split.capitalize()}_SF.csv")['SF'].values
         embeddings = np.load(data_dir / f"prot_t5_embeddings_{split}.npz")['embeddings']
         
         # Filter data
