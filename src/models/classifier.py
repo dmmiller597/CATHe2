@@ -50,11 +50,10 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
 
         # Initialize only memory-efficient metrics
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, compute_on_cpu=True)
         self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
-
+            'acc': Accuracy(task="multiclass", num_classes=num_classes, compute_on_cpu=True),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro', compute_on_cpu=True)
         }, prefix='val/')
         self.test_metrics = self.val_metrics.clone(prefix='test/')
         self.val_acc_best = MaxMetric()
@@ -90,7 +89,8 @@ class CATHeClassifier(pl.LightningModule):
 
         # Log only loss and accuracy during training
         self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False)
-        self.log('train/acc', self.train_acc(preds, targets), on_step=False, on_epoch=True, prog_bar=True)
+        # Move predictions and targets to CPU before updating metrics
+        self.log('train/acc', self.train_acc(preds.cpu(), targets.cpu()), on_step=False, on_epoch=True, prog_bar=True)
 
         return loss
 
@@ -98,13 +98,15 @@ class CATHeClassifier(pl.LightningModule):
         """Validation step."""
         loss, preds, targets = self.model_step(batch)
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.val_metrics.update(preds, targets)
+        # Move predictions and targets to CPU before updating metrics
+        self.val_metrics.update(preds.cpu(), targets.cpu())
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
         loss, preds, targets = self.model_step(batch)
         self.log('test/loss', loss, on_step=False, on_epoch=True)
-        self.test_metrics.update(preds, targets)
+        # Move predictions and targets to CPU before updating metrics
+        self.test_metrics.update(preds.cpu(), targets.cpu())
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
