@@ -28,7 +28,8 @@ def filter_and_save_data():
         
         # Save filtered data
         np.savez(data_dir / f"prot_t5_embeddings_{split}_filtered.npz", embeddings=filtered_embeddings)
-        pd.DataFrame(filtered_labels).to_csv(data_dir / f"Y_{split.capitalize()}_SF_filtered.csv", index=False)
+        # Create DataFrame with 'SF' as column name to maintain the original structure
+        pd.DataFrame({'SF': filtered_labels}).to_csv(data_dir / f"Y_{split.capitalize()}_SF_filtered.csv", index=False)
 
 if __name__ == "__main__":
     filter_and_save_data()
