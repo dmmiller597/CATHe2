@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
-    
+
     def __init__(
         self,
         embedding_dim: int,
@@ -31,7 +31,7 @@ class CATHeClassifier(pl.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
-        
+
         # Build layers
         layers = []
         in_features = embedding_dim
@@ -44,45 +44,22 @@ class CATHeClassifier(pl.LightningModule):
                 nn.Dropout(dropout)
             ])
             in_features = hidden_size
-            
+
         layers.append(nn.Linear(in_features, num_classes))
         self.model = nn.Sequential(*layers)
         self._init_weights()
-        
-        # Loss function
-        self.criterion = nn.CrossEntropyLoss()
-        
-        # Initialize metrics (will be properly set up in setup method)
-        self.num_classes = num_classes
-        self.train_loss = None
-        self.train_acc = None
-        self.val_metrics = None
-        self.test_metrics = None
-        self.val_acc_best = None
-    
-    def setup(self, stage=None):
-        """
-        Set up metrics on the appropriate device.
-        This is called by Lightning after the model has been moved to the target device.
-        """
-        # Initialize metrics on the same device as the model
-        device = next(self.parameters()).device
-        
-        # Simple training metrics
-        self.train_loss = MeanMetric().to(device)
-        
-        # For CPU-based metrics, we'll keep them on CPU and handle device conversion in the step methods
-        self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes).to('cpu')
-        
-        # Create metrics collections
+
+        # Initialize only memory-efficient metrics
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=self.num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=self.num_classes, average='macro')
-        }, prefix='val/').to('cpu')
-        
-        self.test_metrics = self.val_metrics.clone(prefix='test/').to('cpu')
-        self.val_acc_best = MaxMetric().to('cpu')
-    
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+
+        }, prefix='val/')
+        self.test_metrics = self.val_metrics.clone(prefix='test/')
+        self.val_acc_best = MaxMetric()
+        self.criterion = nn.CrossEntropyLoss()
+
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization with GELU."""
         for module in self.modules():
@@ -94,7 +71,7 @@ class CATHeClassifier(pl.LightningModule):
                 )
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the model."""
         return self.model(x)
@@ -110,48 +87,24 @@ class CATHeClassifier(pl.LightningModule):
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Update loss metric (on same device as model)
-        self.train_loss(loss)
-        self.log('train/loss', self.train_loss, on_step=True, on_epoch=True, prog_bar=True)
-        
-        # Move predictions and targets to CPU for metrics
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update CPU-based metrics
-        self.train_acc(preds_cpu, targets_cpu)
-        self.log('train/acc', self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
-        
+
+        # Log only loss and accuracy during training
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False)
+        self.log('train/acc', self.train_acc(preds, targets), on_step=False, on_epoch=True, prog_bar=True)
+
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Validation step."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Log loss directly
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        
-        # Move predictions and targets to CPU for metrics
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update CPU-based metrics
-        self.val_metrics(preds_cpu, targets_cpu)
+        self.val_metrics.update(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Log loss directly
         self.log('test/loss', loss, on_step=False, on_epoch=True)
-        
-        # Move predictions and targets to CPU for metrics
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update CPU-based metrics
-        self.test_metrics(preds_cpu, targets_cpu)
+        self.test_metrics.update(preds, targets)
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
@@ -168,7 +121,6 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         """Reset training metrics at epoch end."""
-        self.train_loss.reset()
         self.train_acc.reset()
 
     def configure_optimizers(self):
@@ -193,4 +145,3 @@ class CATHeClassifier(pl.LightningModule):
                 "interval": "epoch"
             }
         }
-        
