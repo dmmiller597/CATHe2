@@ -49,21 +49,35 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
         
-        # Loss function (kept on GPU for efficiency)
+        # Loss function
         self.criterion = nn.CrossEntropyLoss()
         
-        # Simple training metrics can stay on GPU as they're lightweight
-        # and used frequently during training
-        self.train_loss = MeanMetric()
+        # Initialize metrics (will be properly set up in setup method)
+        self.num_classes = num_classes
+        self.train_loss = None
+        self.train_acc = None
+        self.val_metrics = None
+        self.test_metrics = None
+        self.val_acc_best = None
+    
+    def setup(self, stage=None):
+        """
+        Set up metrics on the appropriate device.
+        This is called by Lightning after the model has been moved to the target device.
+        """
+        # Initialize metrics on the same device as the model
+        device = next(self.parameters()).device
         
-        # Complex metrics with high memory requirements moved to CPU
-        # These are primarily used for evaluation, not training decisions
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes).to('cpu')
+        # Simple training metrics
+        self.train_loss = MeanMetric().to(device)
         
-        # Create metrics collection and move to CPU
+        # For CPU-based metrics, we'll keep them on CPU and handle device conversion in the step methods
+        self.train_acc = Accuracy(task="multiclass", num_classes=self.num_classes).to('cpu')
+        
+        # Create metrics collections
         self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+            'acc': Accuracy(task="multiclass", num_classes=self.num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=self.num_classes, average='macro')
         }, prefix='val/').to('cpu')
         
         self.test_metrics = self.val_metrics.clone(prefix='test/').to('cpu')
@@ -97,14 +111,16 @@ class CATHeClassifier(pl.LightningModule):
         """Training step."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update loss metric on GPU (lightweight operation)
+        # Update loss metric (on same device as model)
         self.train_loss(loss)
         self.log('train/loss', self.train_loss, on_step=True, on_epoch=True, prog_bar=True)
         
-        # Move predictions and targets to CPU for complex metrics calculation
+        # Move predictions and targets to CPU for metrics
         preds_cpu = preds.detach().cpu()
         targets_cpu = targets.detach().cpu()
-        self.train_acc.update(preds_cpu, targets_cpu)
+        
+        # Update CPU-based metrics
+        self.train_acc(preds_cpu, targets_cpu)
         self.log('train/acc', self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
@@ -113,25 +129,29 @@ class CATHeClassifier(pl.LightningModule):
         """Validation step."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log loss directly from GPU
+        # Log loss directly
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         
-        # Move predictions and targets to CPU for complex metrics calculation
+        # Move predictions and targets to CPU for metrics
         preds_cpu = preds.detach().cpu()
         targets_cpu = targets.detach().cpu()
-        self.val_metrics.update(preds_cpu, targets_cpu)
+        
+        # Update CPU-based metrics
+        self.val_metrics(preds_cpu, targets_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log loss directly from GPU
+        # Log loss directly
         self.log('test/loss', loss, on_step=False, on_epoch=True)
         
-        # Move predictions and targets to CPU for complex metrics calculation
+        # Move predictions and targets to CPU for metrics
         preds_cpu = preds.detach().cpu()
         targets_cpu = targets.detach().cpu()
-        self.test_metrics.update(preds_cpu, targets_cpu)
+        
+        # Update CPU-based metrics
+        self.test_metrics(preds_cpu, targets_cpu)
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end."""
