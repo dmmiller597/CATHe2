@@ -58,13 +58,16 @@ class CATHeClassifier(pl.LightningModule):
         
         # Complex metrics with high memory requirements moved to CPU
         # These are primarily used for evaluation, not training decisions
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, device='cpu')
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes).to('cpu')
+        
+        # Create metrics collection and move to CPU
         self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=num_classes, device='cpu'),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro', device='cpu')
-        }, prefix='val/')
-        self.test_metrics = self.val_metrics.clone(prefix='test/')
-        self.val_acc_best = MaxMetric(device='cpu')
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        }, prefix='val/').to('cpu')
+        
+        self.test_metrics = self.val_metrics.clone(prefix='test/').to('cpu')
+        self.val_acc_best = MaxMetric().to('cpu')
     
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization with GELU."""
