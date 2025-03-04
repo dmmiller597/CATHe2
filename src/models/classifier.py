@@ -53,7 +53,8 @@ class CATHeClassifier(pl.LightningModule):
         metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro')
+            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
         # Use consistent MetricCollection pattern for all stages
@@ -67,7 +68,6 @@ class CATHeClassifier(pl.LightningModule):
         # Loss tracking for efficiency
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -103,20 +103,23 @@ class CATHeClassifier(pl.LightningModule):
         
         return loss, preds, y
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Track loss with MeanMetric instead of logging every step
+        # Always accumulate loss
         self.train_loss(loss.detach())
         
-        # Only update metrics periodically to speed up training
-        if batch_idx % 50 == 0:
-            # Gather predictions for metrics
-            self.train_metrics.update(preds, targets)
-
+        # Always update metrics but log with reduced frequency
+        self.train_metrics.update(preds, targets)
         
-        return loss
+        # Log loss every 50 batches for visibility during training
+        # Use `on_step=True, on_epoch=True` pattern for efficient logging
+        if batch_idx % 50 == 0:
+            self.log("train/loss", self.train_loss.compute(), on_step=True, on_epoch=False, prog_bar=True)
+        
+        # Return loss for backward pass but don't log it
+        return {"loss": loss}
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Validation step - compute loss and update metrics."""
@@ -132,10 +135,8 @@ class CATHeClassifier(pl.LightningModule):
         """Test step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Track loss with MeanMetric
-        self.test_loss(loss.detach())
-        
-        # Update metrics
+        # No need to track loss for test set
+        # Just update the metrics for evaluation
         self.test_metrics.update(preds, targets)
 
     def on_train_epoch_end(self) -> None:
@@ -168,11 +169,7 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        # Log the mean loss for the epoch
-        self.log('test/loss', self.test_loss.compute())
-        self.test_loss.reset()
-        
-        # Compute and log metrics
+        # Compute and log metrics only
         metrics = self.test_metrics.compute()
         self.log_dict(metrics)
         self.test_metrics.reset()
