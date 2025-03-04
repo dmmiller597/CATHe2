@@ -68,8 +68,8 @@ class CATHeClassifier(pl.LightningModule):
         # For test, configure metrics with sync_on_compute
         self.test_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
         self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
-        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
-        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes, sync_on_compute=True)
+        #self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
+        #self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes, sync_on_compute=True)
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -139,8 +139,8 @@ class CATHeClassifier(pl.LightningModule):
         # Update metrics directly
         self.test_acc(preds, targets)
         self.test_balanced_acc(preds, targets)
-        self.test_f1(preds, targets)
-        self.test_mcc(preds, targets)
+        #self.test_f1(preds, targets)
+        #self.test_mcc(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
@@ -179,19 +179,19 @@ class CATHeClassifier(pl.LightningModule):
         # Compute and log metrics individually
         test_acc = self.test_acc.compute()
         test_balanced_acc = self.test_balanced_acc.compute()
-        test_f1 = self.test_f1.compute()
-        test_mcc = self.test_mcc.compute()
+        #test_f1 = self.test_f1.compute()
+        #test_mcc = self.test_mcc.compute()
         
         self.log('test/acc', test_acc)
         self.log('test/balanced_acc', test_balanced_acc)
-        self.log('test/f1', test_f1)
-        self.log('test/mcc', test_mcc)
+        #self.log('test/f1', test_f1)
+        #self.log('test/mcc', test_mcc)
         
         # Reset metrics
         self.test_acc.reset()
         self.test_balanced_acc.reset()
-        self.test_f1.reset()
-        self.test_mcc.reset()
+        #self.test_f1.reset()
+        #self.test_mcc.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
