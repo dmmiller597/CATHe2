@@ -51,10 +51,10 @@ class CATHeClassifier(pl.LightningModule):
 
         # Initialize comprehensive metrics for validation and testing only
         val_test_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
-            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+            'acc': Accuracy(task="multiclass", num_classes=num_classes, device="cpu"),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro', device="cpu"),
+            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro', device="cpu"),
+            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes, device="cpu")
         }
         
         # Use full metrics collection for validation and testing
@@ -62,14 +62,14 @@ class CATHeClassifier(pl.LightningModule):
         self.test_metrics = MetricCollection(val_test_metrics, prefix='test/')
         
         # For training, only track basic accuracy (much faster)
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, device="cpu")
         
         # Track best performance
-        self.val_balanced_acc_best = MaxMetric()
+        self.val_balanced_acc_best = MaxMetric(device="cpu")
         
         # Loss tracking for efficiency
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
+        self.train_loss = MeanMetric(device="cpu")
+        self.val_loss = MeanMetric(device="cpu")
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -168,9 +168,9 @@ class CATHeClassifier(pl.LightningModule):
         metrics = self.val_metrics.compute()
         self.log_dict(metrics, prog_bar=True)
         
-        # Update and log best accuracy
-        self.val_acc_best.update(metrics['val/acc'])
-        self.log("val/acc_best", self.val_acc_best.compute(), prog_bar=True)
+        # Update and log best accuracy using balanced_acc
+        self.val_balanced_acc_best.update(metrics['val/balanced_acc'])
+        self.log("val/balanced_acc_best", self.val_balanced_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
         self.val_metrics.reset()
