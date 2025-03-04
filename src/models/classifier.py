@@ -51,26 +51,25 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
 
         # Memory-efficient metrics setup
-        # For training, only track basic accuracy with lower memory usage
+        # For training, track basic accuracy
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
-        # For validation, use a more memory-efficient approach
-        # Instead of a full MetricCollection, use individual metrics and explicitly move to CPU
-        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes).to("cpu")
-        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
+        # For validation, use sync_on_compute=True to handle device issues automatically
+        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
         
         # Track best performance
-        self.val_balanced_acc_best = MaxMetric().to("cpu")
+        self.val_balanced_acc_best = MaxMetric()
         
         # Loss tracking for efficiency
         self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric().to("cpu")
+        self.val_loss = MeanMetric()
         
-        # For test, keep full metrics but compute them separately and move to CPU
-        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes).to("cpu")
-        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
-        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
-        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes).to("cpu")
+        # For test, configure metrics with sync_on_compute
+        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
+        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
+        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
+        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes, sync_on_compute=True)
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -129,28 +128,19 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss with MeanMetric
         self.val_loss(loss.detach())
         
-        # Update metrics individually to avoid OOM
-        # Move predictions and targets to CPU to save GPU memory
-        preds_cpu = preds.cpu()
-        targets_cpu = targets.cpu()
-        
-        # Update metrics one at a time
-        self.val_acc(preds_cpu, targets_cpu)
-        self.val_balanced_acc(preds_cpu, targets_cpu)
+        # Update metrics directly
+        self.val_acc(preds, targets)
+        self.val_balanced_acc(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute metrics individually to avoid memory issues."""
         loss, preds, targets = self.model_step(batch)
         
-        # Move to CPU to save GPU memory
-        preds_cpu = preds.cpu()
-        targets_cpu = targets.cpu()
-        
-        # Update metrics individually
-        self.test_acc(preds_cpu, targets_cpu)
-        self.test_balanced_acc(preds_cpu, targets_cpu)
-        self.test_f1(preds_cpu, targets_cpu)
-        self.test_mcc(preds_cpu, targets_cpu)
+        # Update metrics directly
+        self.test_acc(preds, targets)
+        self.test_balanced_acc(preds, targets)
+        self.test_f1(preds, targets)
+        self.test_mcc(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
