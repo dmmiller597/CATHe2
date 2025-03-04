@@ -57,19 +57,19 @@ class CATHeClassifier(pl.LightningModule):
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
-        # Use full metrics collection for validation and testing
-        self.val_metrics = MetricCollection(val_test_metrics, prefix='val/').to("cpu")
-        self.test_metrics = MetricCollection(val_test_metrics, prefix='test/').to("cpu")
+        # Don't specify device here, they'll be moved to the correct device later
+        self.val_metrics = MetricCollection(val_test_metrics, prefix='val/')
+        self.test_metrics = MetricCollection(val_test_metrics, prefix='test/')
         
-        # For training, only track basic accuracy (much faster)
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes).to("cpu")
+        # For training, only track basic accuracy
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Track best performance
-        self.val_balanced_acc_best = MaxMetric().to("cpu")
+        self.val_balanced_acc_best = MaxMetric()
         
         # Loss tracking for efficiency
-        self.train_loss = MeanMetric().to("cpu")
-        self.val_loss = MeanMetric().to("cpu")
+        self.train_loss = MeanMetric()
+        self.val_loss = MeanMetric()
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -112,12 +112,8 @@ class CATHeClassifier(pl.LightningModule):
         # Always accumulate loss
         self.train_loss(loss.detach())
         
-        # Move tensors to CPU for metric calculation to save GPU memory
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update only basic accuracy (on CPU)
-        self.train_acc(preds_cpu, targets_cpu)
+        # Update accuracy
+        self.train_acc(preds, targets)
         
         # Return loss for backward pass
         return {"loss": loss}
@@ -129,23 +125,15 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss with MeanMetric
         self.val_loss(loss.detach())
         
-        # Move tensors to CPU for metric calculation to save GPU memory
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update metrics on CPU
-        self.val_metrics.update(preds_cpu, targets_cpu)
+        # Update metrics
+        self.val_metrics.update(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Move tensors to CPU for metric calculation to save GPU memory
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = targets.detach().cpu()
-        
-        # Update metrics on CPU
-        self.test_metrics.update(preds_cpu, targets_cpu)
+        # Update metrics
+        self.test_metrics.update(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
