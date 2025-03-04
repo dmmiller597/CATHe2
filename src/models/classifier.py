@@ -49,14 +49,23 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Initialize only memory-efficient metrics
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes, compute_on_cpu=True)
-        self.val_metrics = MetricCollection({
-            'acc': Accuracy(task="multiclass", num_classes=num_classes, compute_on_cpu=True),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro', compute_on_cpu=True)
-        }, prefix='val/')
-        self.test_metrics = self.val_metrics.clone(prefix='test/')
+        # Initialize metrics using MetricCollection consistently
+        # Set compute_on_step=False for all metrics to optimize performance
+        metrics = {
+            'acc': Accuracy(task="multiclass", num_classes=num_classes),
+            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro')
+        }
+        
+        # Use consistent MetricCollection pattern for all stages
+        self.train_metrics = MetricCollection(metrics, prefix='train/')
+        self.val_metrics = MetricCollection(metrics, prefix='val/')
+        self.test_metrics = MetricCollection(metrics, prefix='test/')
+        
+        # Track best performance
         self.val_acc_best = MaxMetric()
+        
+        # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
 
     def _init_weights(self) -> None:
@@ -78,52 +87,76 @@ class CATHeClassifier(pl.LightningModule):
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step on a batch of data."""
         x, y = batch
+        
+        # Forward pass
         logits = self(x)
+        
+        # Compute loss
         loss = self.criterion(logits, y)
-        preds = logits.argmax(dim=1)
+        
+        # Get predictions (argmax) - keep on same device for metrics
+        preds = torch.argmax(logits, dim=1)
+        
         return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Training step."""
+        """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
-
-        # Log only loss and accuracy during training
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False)
-        # Move predictions and targets to CPU before updating metrics
-        self.log('train/acc', self.train_acc(preds.cpu(), targets.cpu()), on_step=False, on_epoch=True, prog_bar=True)
-
+        
+        # Log loss
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        
+        # Update metrics consistently
+        self.train_metrics(preds, targets)
+        
+        # Log metrics on epoch level only for cleaner output
+        self.log_dict(self.train_metrics, on_step=False, on_epoch=True)
+        
         return loss
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Validation step."""
+        """Validation step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
+        
+        # Log loss
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        # Move predictions and targets to CPU before updating metrics
-        self.val_metrics.update(preds.cpu(), targets.cpu())
+        
+        # Update metrics consistently
+        self.val_metrics(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step."""
+        """Test step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
+        
+        # Log loss
         self.log('test/loss', loss, on_step=False, on_epoch=True)
-        # Move predictions and targets to CPU before updating metrics
-        self.test_metrics.update(preds.cpu(), targets.cpu())
+        
+        # Update metrics consistently
+        self.test_metrics(preds, targets)
+
+    def on_train_epoch_end(self) -> None:
+        """Handle training epoch end - log metrics and reset."""
+        metrics = self.train_metrics.compute()
+        self.log_dict(metrics, on_epoch=True)
+        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
-        """Handle validation epoch end."""
+        """Handle validation epoch end - log metrics and reset."""
         metrics = self.val_metrics.compute()
         self.log_dict(metrics, on_epoch=True, prog_bar=True)
+        
+        # Update and log best accuracy
         self.val_acc_best.update(metrics['val/balanced_acc'])
         self.log("val/balanced_acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True)
+        
+        # Reset metrics
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        """Handle test epoch end."""
-        self.log_dict(self.test_metrics.compute(), on_epoch=True)
+        """Handle test epoch end - log metrics and reset."""
+        metrics = self.test_metrics.compute()
+        self.log_dict(metrics, on_epoch=True)
         self.test_metrics.reset()
-
-    def on_train_epoch_end(self) -> None:
-        """Reset training metrics at epoch end."""
-        self.train_acc.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
