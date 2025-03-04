@@ -65,7 +65,7 @@ class CATHeClassifier(pl.LightningModule):
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Track best performance
-        self.val_acc_best = MaxMetric()
+        self.val_balanced_acc_best = MaxMetric()
         
         # Loss tracking for efficiency
         self.train_loss = MeanMetric()
@@ -112,8 +112,12 @@ class CATHeClassifier(pl.LightningModule):
         # Always accumulate loss
         self.train_loss(loss.detach())
         
-        # Update only basic accuracy (much cheaper operation)
-        self.train_acc(preds, targets)
+        # Move tensors to CPU for metric calculation to save GPU memory
+        preds_cpu = preds.detach().cpu()
+        targets_cpu = targets.detach().cpu()
+        
+        # Update only basic accuracy (on CPU)
+        self.train_acc(preds_cpu, targets_cpu)
         
         # Return loss for backward pass
         return {"loss": loss}
@@ -125,16 +129,23 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss with MeanMetric
         self.val_loss(loss.detach())
         
-        # Update metrics
-        self.val_metrics.update(preds, targets)
+        # Move tensors to CPU for metric calculation to save GPU memory
+        preds_cpu = preds.detach().cpu()
+        targets_cpu = targets.detach().cpu()
+        
+        # Update metrics on CPU
+        self.val_metrics.update(preds_cpu, targets_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # No need to track loss for test set
-        # Just update the metrics for evaluation
-        self.test_metrics.update(preds, targets)
+        # Move tensors to CPU for metric calculation to save GPU memory
+        preds_cpu = preds.detach().cpu()
+        targets_cpu = targets.detach().cpu()
+        
+        # Update metrics on CPU
+        self.test_metrics.update(preds_cpu, targets_cpu)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
