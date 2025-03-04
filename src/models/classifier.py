@@ -116,7 +116,7 @@ class CATHeClassifier(pl.LightningModule):
         # Log loss every 50 batches for visibility during training
         # Use `on_step=True, on_epoch=True` pattern for efficient logging
         if batch_idx % 50 == 0:
-            self.log("train/loss", self.train_loss.compute(), on_step=True, on_epoch=False, prog_bar=True)
+            self.log("train/loss", self.train_loss.compute(), on_step=False, on_epoch=True, prog_bar=False)
         
         # Return loss for backward pass but don't log it
         return {"loss": loss}
