@@ -22,6 +22,7 @@ class CATHeDataset(Dataset):
         """
         try:
             data = np.load(embeddings_path)
+            labels_df = pd.read_csv(labels_path)
             # Check which key exists in the data and use the appropriate one
             if 'arr_0' in data:
                 self.embeddings = data['arr_0']
@@ -31,9 +32,6 @@ class CATHeDataset(Dataset):
                 labels_df = labels_df[mask]
             else:
                 self.embeddings = data['embeddings']
-            labels_df = pd.read_csv(labels_path)
-            
-            
             
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
