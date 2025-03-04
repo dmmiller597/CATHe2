@@ -55,22 +55,22 @@ class CATHeClassifier(pl.LightningModule):
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # For validation, use a more memory-efficient approach
-        # Instead of a full MetricCollection, use individual metrics
-        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
-        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        # Instead of a full MetricCollection, use individual metrics and explicitly move to CPU
+        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes).to("cpu")
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
         
         # Track best performance
-        self.val_balanced_acc_best = MaxMetric()
+        self.val_balanced_acc_best = MaxMetric().to("cpu")
         
         # Loss tracking for efficiency
         self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
+        self.val_loss = MeanMetric().to("cpu")
         
-        # For test, keep full metrics but compute them separately
-        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes)
-        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
-        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro')
-        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
+        # For test, keep full metrics but compute them separately and move to CPU
+        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes).to("cpu")
+        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
+        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro').to("cpu")
+        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes).to("cpu")
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
