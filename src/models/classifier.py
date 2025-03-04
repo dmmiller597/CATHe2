@@ -31,6 +31,7 @@ class CATHeClassifier(pl.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
+        self.num_classes = num_classes
 
         # Build layers
         layers = []
@@ -49,20 +50,14 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Initialize comprehensive metrics for validation and testing only
-        val_test_metrics = {
-            'acc': Accuracy(task="multiclass", num_classes=num_classes),
-            'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
-            'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
-        }
-        
-        # Don't specify device here, they'll be moved to the correct device later
-        self.val_metrics = MetricCollection(val_test_metrics, prefix='val/')
-        self.test_metrics = MetricCollection(val_test_metrics, prefix='test/')
-        
-        # For training, only track basic accuracy
+        # Memory-efficient metrics setup
+        # For training, only track basic accuracy with lower memory usage
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        
+        # For validation, use a more memory-efficient approach
+        # Instead of a full MetricCollection, use individual metrics
+        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
         
         # Track best performance
         self.val_balanced_acc_best = MaxMetric()
@@ -70,6 +65,12 @@ class CATHeClassifier(pl.LightningModule):
         # Loss tracking for efficiency
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
+        
+        # For test, keep full metrics but compute them separately
+        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro')
+        self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -122,21 +123,34 @@ class CATHeClassifier(pl.LightningModule):
         return {"loss": loss}
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Validation step - compute loss and update metrics."""
+        """Validation step - compute loss and update metrics one by one to save memory."""
         loss, preds, targets = self.model_step(batch)
         
         # Track loss with MeanMetric
         self.val_loss(loss.detach())
         
-        # Update metrics
-        self.val_metrics.update(preds, targets)
+        # Update metrics individually to avoid OOM
+        # Move predictions and targets to CPU to save GPU memory
+        preds_cpu = preds.cpu()
+        targets_cpu = targets.cpu()
+        
+        # Update metrics one at a time
+        self.val_acc(preds_cpu, targets_cpu)
+        self.val_balanced_acc(preds_cpu, targets_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step - compute loss and update metrics."""
+        """Test step - compute metrics individually to avoid memory issues."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics
-        self.test_metrics.update(preds, targets)
+        # Move to CPU to save GPU memory
+        preds_cpu = preds.cpu()
+        targets_cpu = targets.cpu()
+        
+        # Update metrics individually
+        self.test_acc(preds_cpu, targets_cpu)
+        self.test_balanced_acc(preds_cpu, targets_cpu)
+        self.test_f1(preds_cpu, targets_cpu)
+        self.test_mcc(preds_cpu, targets_cpu)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
@@ -155,23 +169,39 @@ class CATHeClassifier(pl.LightningModule):
         self.log('val/loss', self.val_loss.compute(), prog_bar=True)
         self.val_loss.reset()
         
-        # Compute and log metrics
-        metrics = self.val_metrics.compute()
-        self.log_dict(metrics, prog_bar=True)
+        # Compute and log metrics individually
+        val_acc = self.val_acc.compute()
+        val_balanced_acc = self.val_balanced_acc.compute()
+        
+        self.log('val/acc', val_acc, prog_bar=True)
+        self.log('val/balanced_acc', val_balanced_acc, prog_bar=True)
         
         # Update and log best accuracy using balanced_acc
-        self.val_balanced_acc_best.update(metrics['val/balanced_acc'])
+        self.val_balanced_acc_best.update(val_balanced_acc)
         self.log("val/balanced_acc_best", self.val_balanced_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
-        self.val_metrics.reset()
+        self.val_acc.reset()
+        self.val_balanced_acc.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        # Compute and log metrics only
-        metrics = self.test_metrics.compute()
-        self.log_dict(metrics)
-        self.test_metrics.reset()
+        # Compute and log metrics individually
+        test_acc = self.test_acc.compute()
+        test_balanced_acc = self.test_balanced_acc.compute()
+        test_f1 = self.test_f1.compute()
+        test_mcc = self.test_mcc.compute()
+        
+        self.log('test/acc', test_acc)
+        self.log('test/balanced_acc', test_balanced_acc)
+        self.log('test/f1', test_f1)
+        self.log('test/mcc', test_mcc)
+        
+        # Reset metrics
+        self.test_acc.reset()
+        self.test_balanced_acc.reset()
+        self.test_f1.reset()
+        self.test_mcc.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
