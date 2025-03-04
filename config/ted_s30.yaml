@@ -27,18 +27,18 @@ model:
 
 training:
   # Training parameters
-  batch_size: 256
+  batch_size: 128
   max_epochs: 100
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 8
 
   # Monitoring
-  monitor_metric: "val/balanced_acc"  # Used by both checkpoint and early stopping
-  monitor_mode: "max"                 # Used by both checkpoint and early stopping
+  monitor_metric: "val/balanced_acc"
+  monitor_mode: "max"
   early_stopping_patience: 5
   log_every_n_steps: 50
   
   # Hardware configuration
-  num_workers: 4
+  num_workers: 2
   accelerator:
     float32_matmul_precision: "high"
     devices: 1
@@ -47,6 +47,10 @@ training:
   seed: 42
   gradient_clip_val: 1.0
   precision: "16-mixed"
+  
+  # Memory optimization
+  val_check_interval: 0.5
+  limit_val_batches: 0.5
 
   # Output paths
   output_dir: "outputs"
