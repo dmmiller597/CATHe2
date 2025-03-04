@@ -112,6 +112,9 @@ class CATHeClassifier(pl.LightningModule):
         # Always accumulate loss
         self.train_loss(loss.detach())
         
+        # Log step-level loss
+        self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
+        
         # Update accuracy
         self.train_acc(preds, targets)
         
