@@ -49,18 +49,20 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Initialize metrics using MetricCollection consistently
-        metrics = {
+        # Initialize comprehensive metrics for validation and testing only
+        val_test_metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
             'f1': F1Score(task="multiclass", num_classes=num_classes, average='macro'),
             'mcc': MatthewsCorrCoef(task="multiclass", num_classes=num_classes)
         }
         
-        # Use consistent MetricCollection pattern for all stages
-        self.train_metrics = MetricCollection(metrics, prefix='train/')
-        self.val_metrics = MetricCollection(metrics, prefix='val/')
-        self.test_metrics = MetricCollection(metrics, prefix='test/')
+        # Use full metrics collection for validation and testing
+        self.val_metrics = MetricCollection(val_test_metrics, prefix='val/')
+        self.test_metrics = MetricCollection(val_test_metrics, prefix='test/')
+        
+        # For training, only track basic accuracy (much faster)
+        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         
         # Track best performance
         self.val_acc_best = MaxMetric()
@@ -110,15 +112,10 @@ class CATHeClassifier(pl.LightningModule):
         # Always accumulate loss
         self.train_loss(loss.detach())
         
-        # Always update metrics but log with reduced frequency
-        self.train_metrics.update(preds, targets)
+        # Update only basic accuracy (much cheaper operation)
+        self.train_acc(preds, targets)
         
-        # Log loss every 50 batches for visibility during training
-        # Use `on_step=True, on_epoch=True` pattern for efficient logging
-        if batch_idx % 50 == 0:
-            self.log("train/loss", self.train_loss.compute(), on_step=False, on_epoch=True, prog_bar=False)
-        
-        # Return loss for backward pass but don't log it
+        # Return loss for backward pass
         return {"loss": loss}
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
@@ -145,10 +142,10 @@ class CATHeClassifier(pl.LightningModule):
         self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
         self.train_loss.reset()
         
-        # Compute and log metrics
-        metrics = self.train_metrics.compute()
-        self.log_dict(metrics)
-        self.train_metrics.reset()
+        # Compute and log only basic accuracy
+        train_acc = self.train_acc.compute()
+        self.log('train/acc', train_acc, prog_bar=True)
+        self.train_acc.reset()
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end - log metrics and reset."""
@@ -161,8 +158,8 @@ class CATHeClassifier(pl.LightningModule):
         self.log_dict(metrics, prog_bar=True)
         
         # Update and log best accuracy
-        self.val_acc_best.update(metrics['val/balanced_acc'])
-        self.log("val/balanced_acc_best", self.val_acc_best.compute(), prog_bar=True)
+        self.val_acc_best.update(metrics['val/acc'])
+        self.log("val/acc_best", self.val_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
         self.val_metrics.reset()
