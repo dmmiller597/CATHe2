@@ -50,7 +50,7 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
 
         # Initialize metrics using MetricCollection consistently
-        # Set compute_on_step=False for all metrics to optimize performance
+        # Move metrics to CPU and compute only at epoch end for better performance
         metrics = {
             'acc': Accuracy(task="multiclass", num_classes=num_classes),
             'balanced_acc': Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
@@ -62,8 +62,18 @@ class CATHeClassifier(pl.LightningModule):
         self.val_metrics = MetricCollection(metrics, prefix='val/')
         self.test_metrics = MetricCollection(metrics, prefix='test/')
         
+        # Move metrics to CPU to save GPU memory
+        self.train_metrics.to('cpu')
+        self.val_metrics.to('cpu')
+        self.test_metrics.to('cpu')
+        
         # Track best performance
         self.val_acc_best = MaxMetric()
+        
+        # Loss tracking for efficiency
+        self.train_loss = MeanMetric()
+        self.val_loss = MeanMetric()
+        self.test_loss = MeanMetric()
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -103,14 +113,16 @@ class CATHeClassifier(pl.LightningModule):
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log loss
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        # Track loss with MeanMetric instead of logging every step
+        self.train_loss(loss)
         
-        # Update metrics consistently
-        self.train_metrics(preds, targets)
+        # Only log loss on step for progress bar, not for history
+        self.log('train/loss', loss, on_step=True, on_epoch=False, prog_bar=True)
         
-        # Log metrics on epoch level only for cleaner output
-        self.log_dict(self.train_metrics, on_step=False, on_epoch=True)
+        # Detach and move to CPU before updating metrics to save GPU memory
+        # Only update metrics every 50 batches to improve speed
+        if batch_idx % 50 == 0:
+            self.train_metrics(preds.detach().cpu(), targets.detach().cpu())
         
         return loss
 
@@ -118,44 +130,59 @@ class CATHeClassifier(pl.LightningModule):
         """Validation step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log loss
-        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        # Track loss with MeanMetric
+        self.val_loss(loss)
         
-        # Update metrics consistently
-        self.val_metrics(preds, targets)
+        # Detach and move to CPU before updating metrics
+        self.val_metrics(preds.detach().cpu(), targets.detach().cpu())
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Log loss
-        self.log('test/loss', loss, on_step=False, on_epoch=True)
+        # Track loss with MeanMetric
+        self.test_loss(loss)
         
-        # Update metrics consistently
-        self.test_metrics(preds, targets)
+        # Detach and move to CPU before updating metrics
+        self.test_metrics(preds.detach().cpu(), targets.detach().cpu())
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
+        # Log the mean loss for the epoch
+        self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
+        self.train_loss.reset()
+        
+        # Compute and log metrics
         metrics = self.train_metrics.compute()
-        self.log_dict(metrics, on_epoch=True)
+        self.log_dict(metrics)
         self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end - log metrics and reset."""
+        # Log the mean loss for the epoch
+        self.log('val/loss', self.val_loss.compute(), prog_bar=True)
+        self.val_loss.reset()
+        
+        # Compute and log metrics
         metrics = self.val_metrics.compute()
-        self.log_dict(metrics, on_epoch=True, prog_bar=True)
+        self.log_dict(metrics, prog_bar=True)
         
         # Update and log best accuracy
         self.val_acc_best.update(metrics['val/balanced_acc'])
-        self.log("val/balanced_acc_best", self.val_acc_best.compute(), on_epoch=True, prog_bar=True)
+        self.log("val/balanced_acc_best", self.val_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
         self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
+        # Log the mean loss for the epoch
+        self.log('test/loss', self.test_loss.compute())
+        self.test_loss.reset()
+        
+        # Compute and log metrics
         metrics = self.test_metrics.compute()
-        self.log_dict(metrics, on_epoch=True)
+        self.log_dict(metrics)
         self.test_metrics.reset()
 
     def configure_optimizers(self):
