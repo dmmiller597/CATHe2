@@ -103,6 +103,10 @@ class CATHeClassifier(pl.LightningModule):
         # Get predictions (argmax) - keep on same device for metrics
         preds = torch.argmax(logits, dim=1)
         
+        # Free up some memory
+        del x
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
         return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
@@ -152,6 +156,9 @@ class CATHeClassifier(pl.LightningModule):
         train_acc = self.train_acc.compute()
         self.log('train/acc', train_acc, prog_bar=True)
         self.train_acc.reset()
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end - log metrics and reset."""
@@ -173,6 +180,9 @@ class CATHeClassifier(pl.LightningModule):
         # Reset metrics
         self.val_acc.reset()
         self.val_balanced_acc.reset()
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
@@ -192,6 +202,9 @@ class CATHeClassifier(pl.LightningModule):
         self.test_balanced_acc.reset()
         #self.test_f1.reset()
         #self.test_mcc.reset()
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
