@@ -111,7 +111,7 @@ class CATHeClassifier(pl.LightningModule):
         self.train_loss(loss.detach())
         
         # Only log loss on step for progress bar, not for history
-        self.log('train/loss', loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log('train/loss', loss, on_step=True, on_epoch=False, prog_bar=False)
         
         # Only update metrics periodically to speed up training
         if batch_idx % 50 == 0:
