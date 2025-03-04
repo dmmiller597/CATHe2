@@ -22,13 +22,18 @@ class CATHeDataset(Dataset):
         """
         try:
             data = np.load(embeddings_path)
-            self.embeddings = data['arr_0']
+            # Check which key exists in the data and use the appropriate one
+            if 'arr_0' in data:
+                self.embeddings = data['arr_0']
+                # Filter out problematic indices if they exist in this dataset
+                mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
+                self.embeddings = self.embeddings[mask]
+                labels_df = labels_df[mask]
+            else:
+                self.embeddings = data['embeddings']
             labels_df = pd.read_csv(labels_path)
             
-            # Filter out problematic indices if they exist in this dataset
-            mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
-            self.embeddings = self.embeddings[mask]
-            labels_df = labels_df[mask]
+            
             
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
