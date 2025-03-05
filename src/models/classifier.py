@@ -100,10 +100,11 @@ class CATHeClassifier(pl.LightningModule):
         # Compute loss (stays on GPU)
         loss = self.criterion(logits, y)
         
-        # Get predictions
-        preds = torch.argmax(logits, dim=1)
+        # Get predictions and move to CPU
+        preds = torch.argmax(logits, dim=1).detach().cpu()
+        targets = y.detach().cpu()
         
-        return loss, preds, y
+        return loss, preds, targets
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
@@ -127,7 +128,7 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss
         self.val_loss(loss.detach())
         
-        # Update metrics
+        # Update metrics (preds and targets already on CPU)
         self.val_acc(preds, targets)
         self.val_balanced_acc(preds, targets)
 
@@ -135,7 +136,7 @@ class CATHeClassifier(pl.LightningModule):
         """Test step - compute metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics
+        # Update metrics (preds and targets already on CPU)
         self.test_acc(preds, targets)
         self.test_balanced_acc(preds, targets)
 
