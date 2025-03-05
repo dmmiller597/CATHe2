@@ -100,24 +100,22 @@ class CATHeClassifier(pl.LightningModule):
         # Compute loss (stays on GPU)
         loss = self.criterion(logits, y)
         
-        # Get predictions and move to CPU
-        preds = torch.argmax(logits, dim=1).detach().cpu()
-        targets = y.detach().cpu()
+        # Get predictions but keep on GPU
+        preds = torch.argmax(logits, dim=1)
         
-        return loss, preds, targets
+        return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Accumulate loss (loss stays on GPU for backward pass)
+        # Accumulate loss
         self.train_loss(loss.detach())
-        
-        # Log step-level training loss
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
         
-        # Update accuracy (preds and targets already on CPU)
-        self.train_acc(preds, targets)
+        # Only update accuracy every few steps to reduce CPU transfers
+        if batch_idx % 4 == 0:  # Adjust this number based on your needs
+            self.train_acc(preds.detach().cpu(), targets.cpu())
         
         return {"loss": loss}
 
@@ -128,17 +126,23 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss
         self.val_loss(loss.detach())
         
-        # Update metrics (preds and targets already on CPU)
-        self.val_acc(preds, targets)
-        self.val_balanced_acc(preds, targets)
+        # Batch CPU transfers by doing them together
+        with torch.no_grad():
+            preds_cpu = preds.cpu()
+            targets_cpu = targets.cpu()
+            self.val_acc(preds_cpu, targets_cpu)
+            self.val_balanced_acc(preds_cpu, targets_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics (preds and targets already on CPU)
-        self.test_acc(preds, targets)
-        self.test_balanced_acc(preds, targets)
+        # Batch CPU transfers
+        with torch.no_grad():
+            preds_cpu = preds.cpu()
+            targets_cpu = targets.cpu()
+            self.test_acc(preds_cpu, targets_cpu)
+            self.test_balanced_acc(preds_cpu, targets_cpu)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
