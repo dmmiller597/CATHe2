@@ -50,26 +50,35 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Memory-efficient metrics setup
-        # For training, track basic accuracy
-        self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
+        # Define metric configurations
+        metric_configs = {
+            "acc": Accuracy(task="multiclass", num_classes=num_classes),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            "f1": F1Score(task="multiclass", num_classes=num_classes, average='macro'),
+        }
+
+        # Create metric collections for different stages
+        self.train_metrics = MetricCollection({
+            "acc": metric_configs["acc"].clone(),
+        })
         
-        # For validation, use sync_on_compute=True to handle device issues automatically
-        self.val_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
-        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
+        self.val_metrics = MetricCollection({
+            "acc": metric_configs["acc"].clone(),
+            "balanced_acc": metric_configs["balanced_acc"].clone(),
+        })
         
-        # Track best performance
-        self.val_balanced_acc_best = MaxMetric()
-        
-        # Loss tracking for efficiency
+        self.test_metrics = MetricCollection({
+            "acc": metric_configs["acc"].clone(),
+            "balanced_acc": metric_configs["balanced_acc"].clone(),
+            "f1": metric_configs["f1"].clone(),
+        })
+
+        # Loss tracking
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         
-        # For test, configure metrics with sync_on_compute
-        self.test_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
-        self.test_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
-        #self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
-        #self.test_mcc = MatthewsCorrCoef(task="multiclass", num_classes=num_classes, sync_on_compute=True)
+        # Track best performance
+        self.val_balanced_acc_best = MaxMetric()
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -93,35 +102,22 @@ class CATHeClassifier(pl.LightningModule):
     def model_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step on a batch of data."""
         x, y = batch
-        
-        # Forward pass
         logits = self(x)
-        
-        # Compute loss
         loss = self.criterion(logits, y)
-        
-        # Get predictions (argmax) and move to CPU
         preds = torch.argmax(logits, dim=1)
-        
-        # Move predictions and targets to CPU for metric calculations
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = y.detach().cpu()
-        
-        return loss, preds_cpu, targets_cpu
+        return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Accumulate loss (loss is still on GPU for backward pass)
-        self.train_loss(loss.detach())
+        # Update metrics
+        self.train_loss(loss)
+        self.train_metrics(preds, targets)
         
-        # Log step-level training loss
+        # Log metrics
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
-        
-        # Update accuracy with CPU tensors
-        self.train_acc.to('cpu')
-        self.train_acc(preds, targets)
+        self.log_dict(self.train_metrics, on_step=False, on_epoch=True, prefix='train/')
         
         return {"loss": loss}
 
@@ -129,82 +125,49 @@ class CATHeClassifier(pl.LightningModule):
         """Validation step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Track loss
-        self.val_loss(loss.detach())
+        # Update metrics
+        self.val_loss(loss)
+        self.val_metrics(preds, targets)
         
-        # Move metrics to CPU and update
-        self.val_acc.to('cpu')
-        self.val_balanced_acc.to('cpu')
-        
-        # Update metrics with CPU tensors
-        self.val_acc(preds, targets)
-        self.val_balanced_acc(preds, targets)
+        # Log loss
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step - compute metrics on CPU."""
+        """Test step - compute metrics."""
         loss, preds, targets = self.model_step(batch)
-        
-        # Move metrics to CPU and update
-        self.test_acc.to('cpu')
-        self.test_balanced_acc.to('cpu')
-        
-        # Update metrics with CPU tensors
-        self.test_acc(preds, targets)
-        self.test_balanced_acc(preds, targets)
+        self.test_metrics(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
-        # Log the mean loss for the epoch
+        # Log epoch metrics
         self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
+        
+        # Reset metrics
         self.train_loss.reset()
-        
-        # Compute and log only basic accuracy
-        train_acc = self.train_acc.compute()
-        self.log('train/acc', train_acc, prog_bar=True)
-        self.train_acc.reset()
-        
+        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end - log metrics and reset."""
-        # Log the mean loss for the epoch
+        # Log metrics
         self.log('val/loss', self.val_loss.compute(), prog_bar=True)
-        self.val_loss.reset()
+        self.log_dict(self.val_metrics.compute(), prefix='val/')
         
-        # Compute and log metrics individually
-        val_acc = self.val_acc.compute()
-        val_balanced_acc = self.val_balanced_acc.compute()
-        
-        self.log('val/acc', val_acc, prog_bar=True)
-        self.log('val/balanced_acc', val_balanced_acc, prog_bar=True)
-        
-        # Update and log best accuracy using balanced_acc
-        self.val_balanced_acc_best.update(val_balanced_acc)
+        # Update best metric
+        val_metrics = self.val_metrics.compute()
+        self.val_balanced_acc_best.update(val_metrics['balanced_acc'])
         self.log("val/balanced_acc_best", self.val_balanced_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
-        self.val_acc.reset()
-        self.val_balanced_acc.reset()
-        
+        self.val_loss.reset()
+        self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        # Compute and log metrics individually
-        test_acc = self.test_acc.compute()
-        test_balanced_acc = self.test_balanced_acc.compute()
-        #test_f1 = self.test_f1.compute()
-        #test_mcc = self.test_mcc.compute()
-        
-        self.log('test/acc', test_acc)
-        self.log('test/balanced_acc', test_balanced_acc)
-        #self.log('test/f1', test_f1)
-        #self.log('test/mcc', test_mcc)
+        # Log all test metrics
+        self.log_dict(self.test_metrics.compute(), prefix='test/')
         
         # Reset metrics
-        self.test_acc.reset()
-        self.test_balanced_acc.reset()
-        #self.test_f1.reset()
-        #self.test_mcc.reset()
-        
+        self.test_metrics.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
