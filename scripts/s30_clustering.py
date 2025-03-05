@@ -101,8 +101,8 @@ def main():
     """Main entry point with error handling."""
     try:
         clusterer = SequenceClusterer(
-            input_parquet="data/splits/train.parquet",
-            output_dir="data/splits"
+            input_parquet="data/TED/all_cathe2_s90_reps.parquet",
+            output_dir="data/TED/s30/"
         )
         clusterer.cluster_sequences()
         logger.info("Sequence clustering completed successfully")
