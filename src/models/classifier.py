@@ -56,7 +56,7 @@ class CATHeClassifier(pl.LightningModule):
         
         # For validation, use sync_on_compute=True to handle device issues automatically
         self.val_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
-        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
         
         # Track best performance
         self.val_balanced_acc_best = MaxMetric()
@@ -100,51 +100,57 @@ class CATHeClassifier(pl.LightningModule):
         # Compute loss
         loss = self.criterion(logits, y)
         
-        # Get predictions (argmax) - keep on same device for metrics
+        # Get predictions (argmax) and move to CPU
         preds = torch.argmax(logits, dim=1)
         
-        # Free up some memory
-        del x
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        # Move predictions and targets to CPU for metric calculations
+        preds_cpu = preds.detach().cpu()
+        targets_cpu = y.detach().cpu()
         
-        return loss, preds, y
+        return loss, preds_cpu, targets_cpu
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Always accumulate loss
+        # Accumulate loss (loss is still on GPU for backward pass)
         self.train_loss(loss.detach())
         
-        # Log step-level loss
+        # Log step-level training loss
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
         
-        # Update accuracy
+        # Update accuracy with CPU tensors
+        self.train_acc.to('cpu')
         self.train_acc(preds, targets)
         
-        # Return loss for backward pass
         return {"loss": loss}
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Validation step - compute loss and update metrics one by one to save memory."""
+        """Validation step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Track loss with MeanMetric
+        # Track loss
         self.val_loss(loss.detach())
         
-        # Update metrics directly
+        # Move metrics to CPU and update
+        self.val_acc.to('cpu')
+        self.val_balanced_acc.to('cpu')
+        
+        # Update metrics with CPU tensors
         self.val_acc(preds, targets)
         self.val_balanced_acc(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step - compute metrics individually to avoid memory issues."""
+        """Test step - compute metrics on CPU."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics directly
+        # Move metrics to CPU and update
+        self.test_acc.to('cpu')
+        self.test_balanced_acc.to('cpu')
+        
+        # Update metrics with CPU tensors
         self.test_acc(preds, targets)
         self.test_balanced_acc(preds, targets)
-        #self.test_f1(preds, targets)
-        #self.test_mcc(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log metrics and reset."""
@@ -157,8 +163,6 @@ class CATHeClassifier(pl.LightningModule):
         self.log('train/acc', train_acc, prog_bar=True)
         self.train_acc.reset()
         
-        # Clear CUDA cache
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def on_validation_epoch_end(self) -> None:
         """Handle validation epoch end - log metrics and reset."""
@@ -181,8 +185,6 @@ class CATHeClassifier(pl.LightningModule):
         self.val_acc.reset()
         self.val_balanced_acc.reset()
         
-        # Clear CUDA cache
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
@@ -203,8 +205,6 @@ class CATHeClassifier(pl.LightningModule):
         #self.test_f1.reset()
         #self.test_mcc.reset()
         
-        # Clear CUDA cache
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
