@@ -56,7 +56,7 @@ class CATHeClassifier(pl.LightningModule):
         
         # For validation, use sync_on_compute=True to handle device issues automatically
         self.val_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
-        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, average='macro', sync_on_compute=True)
+        self.val_balanced_acc = Accuracy(task="multiclass", num_classes=num_classes, sync_on_compute=True)
         
         # Track best performance
         self.val_balanced_acc_best = MaxMetric()
