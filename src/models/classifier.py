@@ -97,30 +97,26 @@ class CATHeClassifier(pl.LightningModule):
         # Forward pass
         logits = self(x)
         
-        # Compute loss
+        # Compute loss (stays on GPU)
         loss = self.criterion(logits, y)
         
-        # Get predictions (argmax) and move to CPU
-        preds = torch.argmax(logits, dim=1)
+        # Get predictions and immediately move to CPU
+        preds = torch.argmax(logits, dim=1).cpu()
+        targets = y.cpu()
         
-        # Move predictions and targets to CPU for metric calculations
-        preds_cpu = preds.detach().cpu()
-        targets_cpu = y.detach().cpu()
-        
-        return loss, preds_cpu, targets_cpu
+        return loss, preds, targets
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Training step - compute loss and update metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Accumulate loss (loss is still on GPU for backward pass)
+        # Accumulate loss (loss stays on GPU for backward pass)
         self.train_loss(loss.detach())
         
         # Log step-level training loss
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
         
-        # Update accuracy with CPU tensors
-        self.train_acc.to('cpu')
+        # Update accuracy (preds and targets already on CPU)
         self.train_acc(preds, targets)
         
         return {"loss": loss}
@@ -132,23 +128,15 @@ class CATHeClassifier(pl.LightningModule):
         # Track loss
         self.val_loss(loss.detach())
         
-        # Move metrics to CPU and update
-        self.val_acc.to('cpu')
-        self.val_balanced_acc.to('cpu')
-        
-        # Update metrics with CPU tensors
+        # Update metrics (preds and targets already on CPU)
         self.val_acc(preds, targets)
         self.val_balanced_acc(preds, targets)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step - compute metrics on CPU."""
+        """Test step - compute metrics."""
         loss, preds, targets = self.model_step(batch)
         
-        # Move metrics to CPU and update
-        self.test_acc.to('cpu')
-        self.test_balanced_acc.to('cpu')
-        
-        # Update metrics with CPU tensors
+        # Update metrics (preds and targets already on CPU)
         self.test_acc(preds, targets)
         self.test_balanced_acc(preds, targets)
 
