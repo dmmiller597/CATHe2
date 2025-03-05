@@ -13,10 +13,10 @@ class CATHeClassifier(pl.LightningModule):
         embedding_dim: int,
         hidden_sizes: List[int],
         num_classes: int,
-        dropout: float = 0.5,
-        learning_rate: float = 1e-5,
-        weight_decay: float = 1e-4,
-        lr_scheduler: Dict[str, Any] = None
+        dropout: float,
+        learning_rate: float,
+        weight_decay: float,
+        lr_scheduler: Dict[str, Any]
     ):
         """
         Initialize the CATH classifier.
@@ -50,35 +50,15 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Define metric configurations
-        metric_configs = {
+        # Define metrics for testing only
+        self.test_metrics = MetricCollection({
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
             "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-            "f1": F1Score(task="multiclass", num_classes=num_classes, average='macro'),
-        }
-
-        # Create metric collections for different stages
-        self.train_metrics = MetricCollection({
-            "acc": metric_configs["acc"].clone(),
-        })
-        
-        self.val_metrics = MetricCollection({
-            "acc": metric_configs["acc"].clone(),
-            "balanced_acc": metric_configs["balanced_acc"].clone(),
-        })
-        
-        self.test_metrics = MetricCollection({
-            "acc": metric_configs["acc"].clone(),
-            "balanced_acc": metric_configs["balanced_acc"].clone(),
-            "f1": metric_configs["f1"].clone(),
         })
 
         # Loss tracking
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        
-        # Track best performance
-        self.val_balanced_acc_best = MaxMetric()
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -108,26 +88,23 @@ class CATHeClassifier(pl.LightningModule):
         return loss, preds, y
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Training step - compute loss and update metrics."""
+        """Training step - compute loss."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics
+        # Update loss
         self.train_loss(loss)
-        self.train_metrics(preds, targets)
         
-        # Log metrics
+        # Log loss
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
-        self.log_dict(self.train_metrics, on_step=False, on_epoch=True, prefix='train/')
         
         return {"loss": loss}
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Validation step - compute loss and update metrics."""
+        """Validation step - compute loss."""
         loss, preds, targets = self.model_step(batch)
         
-        # Update metrics
+        # Update loss
         self.val_loss(loss)
-        self.val_metrics(preds, targets)
         
         # Log loss
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -138,43 +115,19 @@ class CATHeClassifier(pl.LightningModule):
         self.test_metrics(preds, targets)
 
     def on_train_epoch_end(self) -> None:
-        """Handle training epoch end - log metrics and reset."""
-        # Log epoch metrics
+        """Handle training epoch end - log loss and reset."""
         self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
-        
-        # Log metrics with prefix in the dictionary keys 
-        train_metrics = {f"train/{k}": v for k, v in self.train_metrics.compute().items()}
-        self.log_dict(train_metrics, on_step=False, on_epoch=True)
-        
-        # Reset metrics
         self.train_loss.reset()
-        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
-        """Handle validation epoch end - log metrics and reset."""
-        # Log metrics
+        """Handle validation epoch end - log loss and reset."""
         self.log('val/loss', self.val_loss.compute(), prog_bar=True)
-        
-        # Log metrics with prefix in the dictionary keys
-        val_metrics = {f"val/{k}": v for k, v in self.val_metrics.compute().items()}
-        self.log_dict(val_metrics, on_step=False, on_epoch=True)
-        
-        # Update best metric
-        val_metrics_raw = self.val_metrics.compute()
-        self.val_balanced_acc_best.update(val_metrics_raw['balanced_acc'])
-        self.log("val/balanced_acc_best", self.val_balanced_acc_best.compute(), prog_bar=True)
-        
-        # Reset metrics
         self.val_loss.reset()
-        self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        # Log metrics with prefix in the dictionary keys
         test_metrics = {f"test/{k}": v for k, v in self.test_metrics.compute().items()}
         self.log_dict(test_metrics, on_step=False, on_epoch=True)
-        
-        # Reset metrics
         self.test_metrics.reset()
 
     def configure_optimizers(self):
