@@ -142,7 +142,7 @@ class CATHeClassifier(pl.LightningModule):
         # Log epoch metrics
         self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
         
-        # Log metrics with prefix in the dictionary keys
+        # Log metrics with prefix in the dictionary keys 
         train_metrics = {f"train/{k}": v for k, v in self.train_metrics.compute().items()}
         self.log_dict(train_metrics, on_step=False, on_epoch=True)
         
