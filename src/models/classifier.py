@@ -142,6 +142,10 @@ class CATHeClassifier(pl.LightningModule):
         # Log epoch metrics
         self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
         
+        # Log metrics with prefix in the dictionary keys
+        train_metrics = {f"train/{k}": v for k, v in self.train_metrics.compute().items()}
+        self.log_dict(train_metrics, on_step=False, on_epoch=True)
+        
         # Reset metrics
         self.train_loss.reset()
         self.train_metrics.reset()
@@ -150,11 +154,14 @@ class CATHeClassifier(pl.LightningModule):
         """Handle validation epoch end - log metrics and reset."""
         # Log metrics
         self.log('val/loss', self.val_loss.compute(), prog_bar=True)
-        self.log_dict(self.val_metrics.compute(), prefix='val/')
+        
+        # Log metrics with prefix in the dictionary keys
+        val_metrics = {f"val/{k}": v for k, v in self.val_metrics.compute().items()}
+        self.log_dict(val_metrics, on_step=False, on_epoch=True)
         
         # Update best metric
-        val_metrics = self.val_metrics.compute()
-        self.val_balanced_acc_best.update(val_metrics['balanced_acc'])
+        val_metrics_raw = self.val_metrics.compute()
+        self.val_balanced_acc_best.update(val_metrics_raw['balanced_acc'])
         self.log("val/balanced_acc_best", self.val_balanced_acc_best.compute(), prog_bar=True)
         
         # Reset metrics
@@ -163,8 +170,9 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        # Log all test metrics
-        self.log_dict(self.test_metrics.compute(), prefix='test/')
+        # Log metrics with prefix in the dictionary keys
+        test_metrics = {f"test/{k}": v for k, v in self.test_metrics.compute().items()}
+        self.log_dict(test_metrics, on_step=False, on_epoch=True)
         
         # Reset metrics
         self.test_metrics.reset()
