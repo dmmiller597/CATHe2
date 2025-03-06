@@ -36,7 +36,7 @@ class HierarchicalClusterer:
         self.input_path = Path(input_parquet)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
-        self.tmp_dir = Path("/state/partition2/NO_BACKUP/functional-families/tmp/clustering")
+        self.tmp_dir = Path("/state/partition1/scratch0/tmp/clustering")
         
         # Define identity thresholds (from high to low)
         self.thresholds = thresholds or [0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
