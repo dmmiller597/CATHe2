@@ -11,11 +11,11 @@ model:
   # Architecture
   embedding_dim: 1024
   hidden_sizes: [1024, 1024, 1024]
-  dropout: 0.3
+  dropout: 0.2
   
   # Optimization
   learning_rate: 1e-3
-  weight_decay: 1e-4
+  weight_decay: 5e-5
 
   # Learning rate scheduler
   lr_scheduler:
