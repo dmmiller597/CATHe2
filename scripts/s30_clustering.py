@@ -53,8 +53,7 @@ class SequenceClusterer:
             "--min-seq-id", "0.3",
             "-c", "0.8",  # coverage threshold
             "--cov-mode", "1",  # coverage mode (1 = shorter sequence)
-            "--threads", "8",
-            "--use-gpu", "1"
+            "--threads", "8"
         ]
         
         try:
