@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import matplotlib
+import argparse
 matplotlib.use('Agg')  # Prevent display issues on HPC
 
 def setup_subplot_style(ax: plt.Axes, title: str, xlabel: str, ylabel: str = '') -> None:
@@ -118,10 +119,23 @@ def plot_dataset_distributions(
         print(f"Average sequences per SF: {n_seqs/n_sfs:.1f}")
 
 if __name__ == "__main__":
-    # Example usage
-    train_df = pd.read_parquet("data/splits/train.parquet")
-    val_df = pd.read_parquet("data/splits/val.parquet")
-    test_df = pd.read_parquet("data/splits/test.parquet")
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Visualize sequence and SF distributions across dataset splits.')
+    parser.add_argument('--train', type=str, default="data/TED/s30/s30_train.parquet",
+                        help='Path to training data parquet file')
+    parser.add_argument('--val', type=str, default="data/TED/s30/s30_val.parquet",
+                        help='Path to validation data parquet file')
+    parser.add_argument('--test', type=str, default="data/TED/s30/s30_test.parquet",
+                        help='Path to test data parquet file')
+    parser.add_argument('--output', type=str, default="figures/dataset_distributions.png",
+                        help='Path to save the output figure')
+    
+    args = parser.parse_args()
+    
+    # Load data from parquet files
+    train_df = pd.read_parquet(args.train)
+    val_df = pd.read_parquet(args.val)
+    test_df = pd.read_parquet(args.test)
     
     # Add sequence length column to each DataFrame
     for df in [train_df, val_df, test_df]:
@@ -132,5 +146,5 @@ if __name__ == "__main__":
         train_df,
         val_df,
         test_df,
-        output_path=Path("figures/dataset_distributions.png")
+        output_path=Path(args.output)
     )
