@@ -36,7 +36,7 @@ class HierarchicalClusterer:
         self.input_path = Path(input_parquet)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
-        self.tmp_dir = Path("/state/partition1/scratch0/tmp/clustering")
+        self.tmp_dir = Path("/state/partition2/NO_BACKUP/functional-families/tmp/clustering")
         
         # Define identity thresholds (from high to low)
         self.thresholds = thresholds or [0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
@@ -92,7 +92,7 @@ class HierarchicalClusterer:
         
         try:
             logger.info(f"Running clustering at {identity:.2f} sequence identity")
-            subprocess.run(cmd, check=True, text=True, capture_output=True)
+            subprocess.run(cmd, check=True, text=True)
             
             result_path = Path(f"{cluster_prefix}_cluster.tsv")
             if not result_path.exists():
