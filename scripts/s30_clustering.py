@@ -25,7 +25,7 @@ class SequenceClusterer:
         self.input_path = Path(input_parquet)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
-        self.tmp_dir = Path("tmp/clustering")
+        self.tmp_dir = Path("/state/partition2/NO_BACKUP/functional-families/tmp/clustering")
         self.tmp_dir.mkdir(exist_ok=True, parents=True)
         
         logger.info(f"Loading sequences from {input_parquet}")
@@ -53,6 +53,8 @@ class SequenceClusterer:
             "--min-seq-id", "0.3",
             "-c", "0.8",  # coverage threshold
             "--cov-mode", "1",  # coverage mode (1 = shorter sequence)
+            "--threads", "8",
+            "--use-gpu", "1"
         ]
         
         try:
