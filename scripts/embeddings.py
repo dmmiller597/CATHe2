@@ -5,6 +5,24 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import re
+import argparse
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Generate protein embeddings using ProtT5.')
+    parser.add_argument('--input-dir', type=str,
+                        default='data/TED/s30/processed',
+                        help='Directory containing the input parquet files')
+    parser.add_argument('--output-dir', type=str,
+                        default='data/TED/embeddings',
+                        help='Directory to save embeddings and labels')
+    parser.add_argument('--batch-size', type=int,
+                        default=16,
+                        help='Batch size for embedding generation')
+    parser.add_argument('--file-prefix', type=str,
+                        default='s30',
+                        help='Prefix of parquet files (e.g., "s30" for s30_train.parquet)')
+    return parser.parse_args()
 
 def load_prot_t5():
     """Load ProtT5 model and tokenizer"""
@@ -62,27 +80,31 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split(split_name, model, tokenizer, device):
+def process_split(split_name, model, tokenizer, device, args):
     """Process a single data split"""
     print(f"\nProcessing {split_name} split...")
     
-    # Load data
-    df = pd.read_parquet(f"data/splits/{split_name}.parquet")
+    # Load data using the new file path structure
+    input_file = Path(args.input_dir) / f'{args.file_prefix}_{split_name}.parquet'
+    print(f"Loading data from {input_file}")
     
-    # Filter for s30_rep = True only for train split
-    if split_name == 'train':
-        df = df[df['s30_rep'] == True].reset_index(drop=True)
+    try:
+        df = pd.read_parquet(input_file)
+        print(f"Loaded {len(df)} sequences")
+    except Exception as e:
+        print(f"Error loading file {input_file}: {e}")
+        return
     
     # Get embeddings
-    print(f"Generating embeddings for {len(df)} sequences...")
+    print(f"Generating embeddings...")
     sequences = df['sequence'].tolist()
-    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device)
+    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, args.batch_size)
     
-    # Get labels in the same order as the embeddings
+    # Get labels (SF) in the same order as the embeddings
     labels = df['SF'].values[sorted_indices]
     
     # Save embeddings
-    output_dir = Path('data/TED')
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f'prot_t5_embeddings_{split_name}.npz'
     np.savez_compressed(output_file, embeddings=embeddings)
@@ -90,20 +112,33 @@ def process_split(split_name, model, tokenizer, device):
     # Save labels as CSV
     labels_df = pd.DataFrame({'SF': labels})
     labels_file = output_dir / f'Y_{split_name.capitalize()}_SF.csv'
-    labels_df.to_csv(labels_file)
+    labels_df.to_csv(labels_file, index=False)
     
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
     print(f"Saved labels to {labels_file}")
     print(f"Number of unique superfamilies: {len(np.unique(labels))}")
+    
+    # Also save sequence IDs for reference
+    sequence_ids = df['sequence_id'].values[sorted_indices]
+    seq_id_df = pd.DataFrame({'sequence_id': sequence_ids, 'SF': labels})
+    seq_id_file = output_dir / f'sequence_ids_{split_name}.csv'
+    seq_id_df.to_csv(seq_id_file, index=False)
+    print(f"Saved sequence IDs to {seq_id_file}")
 
 def main():
+    # Parse arguments
+    args = parse_args()
+    
     # Load model and tokenizer
     print("Loading ProtT5 model...")
     model, tokenizer, device = load_prot_t5()
+    print(f"Using device: {device}")
     
     # Process all splits
     for split in ['train', 'val', 'test']:
-        process_split(split, model, tokenizer, device)
+        process_split(split, model, tokenizer, device, args)
+    
+    print("\nEmbedding generation complete!")
 
 if __name__ == "__main__":
     main()
