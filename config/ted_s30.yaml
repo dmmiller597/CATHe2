@@ -17,10 +17,6 @@ model:
   learning_rate: 1e-3
   weight_decay: 1e-5
 
-  # Focal loss
-  focal_alpha: 1.0
-  focal_gamma: 2.0
-
   # Learning rate scheduler
   lr_scheduler:
     monitor: "val/loss"
