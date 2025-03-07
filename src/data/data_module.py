@@ -88,15 +88,43 @@ class CATHeDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.datasets: Dict[str, CATHeDataset] = {}
 
-    def _create_weighted_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
-        """Create a weighted sampler to handle class imbalance."""
+    def _create_weighted_sampler(self, labels: torch.Tensor, log_scale: bool = True, alpha: float = 0.5) -> WeightedRandomSampler:
+        """Create a weighted sampler to handle extreme class imbalance.
+        
+        Args:
+            labels: Tensor containing class labels
+            log_scale: Whether to use log-scaled sampling weights (recommended for extreme imbalance)
+            alpha: Smoothing factor for log scaling (higher = more aggressive balancing)
+        """
         try:
-            # Calculate class weights
+            # Calculate class counts
             class_counts = torch.bincount(labels).float()
-            # Add small epsilon to prevent division by zero
-            class_weights = 1.0 / (class_counts + 1e-8)
+            
+            # Choose weighting strategy based on class distribution
+            if log_scale:
+                # Log-scaled weights: less extreme than inverse frequency
+                # Formula: (log(N/count))^alpha where N is total samples
+                N = float(len(labels))
+                log_weights = torch.log(N / (class_counts + 1))  # Add 1 to prevent log(0)
+                class_weights = log_weights ** alpha
+            else:
+                # Traditional inverse frequency weights
+                class_weights = 1.0 / (class_counts + 1e-8)
+            
             # Normalize weights to sum to 1
             class_weights = class_weights / class_weights.sum()
+            
+            # Create statistics for logging
+            min_weight = class_weights.min().item()
+            max_weight = class_weights.max().item()
+            weight_ratio = max_weight / (min_weight + 1e-10)
+            
+            log.info(f"Sampling weight statistics:")
+            log.info(f"  - Min weight: {min_weight:.8f}")
+            log.info(f"  - Max weight: {max_weight:.8f}")
+            log.info(f"  - Max/Min ratio: {weight_ratio:.2f}")
+            log.info(f"  - Unique classes: {len(class_counts)}")
+            
             # Map weights to samples
             sample_weights = class_weights[labels]
             
@@ -123,8 +151,21 @@ class CATHeDataModule(pl.LightningDataModule):
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
-            # Create weighted sampler for training
-            self.train_sampler = self._create_weighted_sampler(self.datasets["train"].labels)
+            # Create log-scaled weighted sampler for training
+            self.train_sampler = self._create_weighted_sampler(
+                self.datasets["train"].labels,
+                log_scale=True,  # Use log scaling for extreme imbalance
+                alpha=0.5  # Adjustable parameter to control balancing aggressiveness
+            )
+            
+            # Log class distribution statistics
+            class_counts = torch.bincount(self.datasets["train"].labels)
+            log.info(f"Training set class statistics:")
+            log.info(f"  - Total classes: {len(class_counts)}")
+            log.info(f"  - Min class size: {class_counts.min().item()}")
+            log.info(f"  - Median class size: {torch.median(class_counts.float()).item():.1f}")
+            log.info(f"  - Mean class size: {class_counts.float().mean().item():.1f}")
+            log.info(f"  - Max class size: {class_counts.max().item()}")
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
