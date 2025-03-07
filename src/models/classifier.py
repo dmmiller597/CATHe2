@@ -107,6 +107,9 @@ class CATHeClassifier(pl.LightningModule):
         # Update loss
         self.val_loss(loss)
         
+        # Update metrics
+        self.eval_metrics(preds, targets)
+        
         # Log loss
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val/acc', self.eval_metrics["acc"], on_step=False, on_epoch=True)
@@ -128,9 +131,9 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Handle test epoch end - log metrics and reset."""
-        test_metrics = {f"test/{k}": v for k, v in self.test_metrics.compute().items()}
+        test_metrics = {f"test/{k}": v for k, v in self.eval_metrics.compute().items()}
         self.log_dict(test_metrics, on_step=False, on_epoch=True)
-        self.test_metrics.reset()
+        self.eval_metrics.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
