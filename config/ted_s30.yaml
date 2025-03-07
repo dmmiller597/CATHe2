@@ -6,17 +6,17 @@ data:
   train_labels: "TED/s30/embeddings/Y_Train_SF.csv"
   val_labels: "TED/s30/embeddings/Y_Val_SF.csv"
   test_labels: "TED/s30/embeddings/Y_Test_SF.csv"
-  sampling_beta: 0.9999  # Controls class balancing (0=no reweighting, 1=inverse frequency)
+  sampling_beta: 0.9  # Controls class balancing (0=no reweighting, 1=inverse frequency)
 
 model:
   # Architecture
   embedding_dim: 1024
   hidden_sizes: [1024, 1024, 1024]
-  dropout: 0.3
+  dropout: 0.5
   
   # Optimization
   learning_rate: 1e-4
-  weight_decay: 1e-5
+  weight_decay: 5e-5
 
   # Learning rate scheduler
   lr_scheduler:
