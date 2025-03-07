@@ -10,7 +10,7 @@ data:
 model:
   # Architecture
   embedding_dim: 1024
-  hidden_sizes: [1024, 1024, 1024]
+  hidden_sizes: [2048, 1024, 512]  # Widen then narrow
   dropout: 0.3
   
   # Optimization
@@ -27,7 +27,7 @@ model:
 
 training:
   # Training parameters
-  batch_size: 128
+  batch_size: 256
   max_epochs: 100
   accumulate_grad_batches: 4
 
