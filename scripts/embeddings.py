@@ -7,23 +7,6 @@ from pathlib import Path
 import re
 import argparse
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Generate protein embeddings using ProtT5.')
-    parser.add_argument('--input-dir', type=str,
-                        default='data/TED/s30/processed',
-                        help='Directory containing the input parquet files')
-    parser.add_argument('--output-dir', type=str,
-                        default='data/TED/embeddings',
-                        help='Directory to save embeddings and labels')
-    parser.add_argument('--batch-size', type=int,
-                        default=16,
-                        help='Batch size for embedding generation')
-    parser.add_argument('--file-prefix', type=str,
-                        default='s30',
-                        help='Prefix of parquet files (e.g., "s30" for s30_train.parquet)')
-    return parser.parse_args()
-
 def load_prot_t5():
     """Load ProtT5 model and tokenizer"""
     model = T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')
@@ -59,16 +42,16 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
                                         padding=True,
                                         return_tensors='pt')
         
-        input_ids = ids['input_ids'].to(device)  # Keep as Long
-        attention_mask = ids['attention_mask'].to(device)  # Keep as Long
+        input_ids = ids['input_ids'].to(device)
+        attention_mask = ids['attention_mask'].to(device)
         
         with torch.no_grad():
             embedding = model(input_ids=input_ids,
                            attention_mask=attention_mask)
             
             # Get last hidden states
-            last_hidden_states = embedding.last_hidden_state.half()  # Convert to half here
-            attention_mask = attention_mask.half()  # Convert to half here
+            last_hidden_states = embedding.last_hidden_state.half()
+            attention_mask = attention_mask.half()
             
             # Vectorized mean pooling
             mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
@@ -80,65 +63,72 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split(split_name, model, tokenizer, device, args):
-    """Process a single data split"""
-    print(f"\nProcessing {split_name} split...")
-    
-    # Load data using the new file path structure
-    input_file = Path(args.input_dir) / f'{args.file_prefix}_{split_name}.parquet'
-    print(f"Loading data from {input_file}")
-    
-    try:
-        df = pd.read_parquet(input_file)
-        print(f"Loaded {len(df)} sequences")
-    except Exception as e:
-        print(f"Error loading file {input_file}: {e}")
-        return
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
+    """Process data for a specific split"""
+    print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
     # Get embeddings
-    print(f"Generating embeddings...")
-    sequences = df['sequence'].tolist()
-    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, args.batch_size)
+    sequences = df_split['sequence'].tolist()
+    sequence_ids = df_split['sequence_id'].tolist()
     
-    # Get labels (SF) in the same order as the embeddings
-    labels = df['SF'].values[sorted_indices]
+    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, batch_size)
+    
+    # Reorder metadata based on sorted indices
+    sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
+    sorted_sf = df_split['SF'].values[sorted_indices]
     
     # Save embeddings
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f'prot_t5_embeddings_{split_name}.npz'
     np.savez_compressed(output_file, embeddings=embeddings)
     
-    # Save labels as CSV
-    labels_df = pd.DataFrame({'SF': labels})
-    labels_file = output_dir / f'Y_{split_name.capitalize()}_SF.csv'
-    labels_df.to_csv(labels_file, index=False)
+    # Save metadata (sequence IDs and labels)
+    metadata_df = pd.DataFrame({
+        'sequence_id': sorted_sequence_ids,
+        'SF': sorted_sf
+    })
+    metadata_file = output_dir / f'Y_{split_name.capitalize()}_SF.csv'
+    metadata_df.to_csv(metadata_file, index=False)
     
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
-    print(f"Saved labels to {labels_file}")
-    print(f"Number of unique superfamilies: {len(np.unique(labels))}")
-    
-    # Also save sequence IDs for reference
-    sequence_ids = df['sequence_id'].values[sorted_indices]
-    seq_id_df = pd.DataFrame({'sequence_id': sequence_ids, 'SF': labels})
-    seq_id_file = output_dir / f'sequence_ids_{split_name}.csv'
-    seq_id_df.to_csv(seq_id_file, index=False)
-    print(f"Saved sequence IDs to {seq_id_file}")
+    print(f"Saved embeddings to {output_file}")
+    print(f"Saved metadata to {metadata_file}")
+    print(f"Number of unique superfamilies: {len(np.unique(sorted_sf))}")
 
 def main():
-    # Parse arguments
-    args = parse_args()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Generate ProtT5 embeddings for protein sequences')
+    parser.add_argument('--input', '-i', type=str, default='data/TED/s30/s30_full.parquet',
+                        help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
+    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
+                        help='Output directory for embeddings (default: data/TED/s30/embeddings)')
+    parser.add_argument('--batch-size', '-b', type=int, default=16,
+                        help='Batch size for embedding generation (default: 16)')
+    parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
+                        help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
+    
+    args = parser.parse_args()
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load model and tokenizer
     print("Loading ProtT5 model...")
     model, tokenizer, device = load_prot_t5()
-    print(f"Using device: {device}")
     
-    # Process all splits
-    for split in ['train', 'val', 'test']:
-        process_split(split, model, tokenizer, device, args)
+    # Load the full dataset
+    print(f"Loading data from {args.input}...")
+    df = pd.read_parquet(args.input)
     
-    print("\nEmbedding generation complete!")
+    # Process specific splits if requested, otherwise process all splits
+    splits_to_process = args.splits if args.splits else df['split'].unique()
+    
+    for split in splits_to_process:
+        df_split = df[df['split'] == split].reset_index(drop=True)
+        if len(df_split) > 0:
+            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.batch_size)
+        else:
+            print(f"Warning: No data found for split '{split}'. Skipping.")
 
 if __name__ == "__main__":
     main()
