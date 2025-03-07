@@ -54,7 +54,7 @@ class CATHeClassifier(pl.LightningModule):
         # Define metrics for testing only
         self.eval_metrics = MetricCollection({
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            #"balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         })
 
         # Loss tracking
