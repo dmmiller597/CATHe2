@@ -61,6 +61,7 @@ class CATHeDataModule(pl.LightningDataModule):
         test_labels: str = None,
         batch_size: int = 32,
         num_workers: int = 4,
+        sampling_beta: float = 0.9999,
     ):
         """Initialize data module.
         
@@ -74,6 +75,7 @@ class CATHeDataModule(pl.LightningDataModule):
             test_labels: Path to test labels file (optional)
             batch_size: Number of samples per batch
             num_workers: Number of subprocesses for data loading
+            sampling_beta: Smoothing parameter in [0,1]; 0 = no reweighting, 1 = inverse frequency
         """
         super().__init__()
         # Convert data_dir to absolute path if it's relative
@@ -86,15 +88,18 @@ class CATHeDataModule(pl.LightningDataModule):
         self.test_labels = test_labels
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.sampling_beta = sampling_beta
         self.datasets: Dict[str, CATHeDataset] = {}
 
-    def balanced_class_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
-        """Create a weighted sampler that balances class representation.
+    def balanced_class_sampler(self, labels: torch.Tensor, beta: float = 0.9999) -> WeightedRandomSampler:
+        """Create a weighted sampler that balances class representation using effective numbers.
         
-        This implements inverse frequency weighting
+        This implements a more flexible weighting strategy based on "Effective Number of Samples"
+        (Cui et al., 2019) with a controllable beta parameter.
         
         Args:
             labels: Tensor containing class labels
+            beta: Smoothing parameter in [0,1]; 0 = no reweighting, 1 = inverse frequency
         
         Returns:
             WeightedRandomSampler for balanced training
@@ -102,11 +107,15 @@ class CATHeDataModule(pl.LightningDataModule):
         # Calculate class counts
         class_counts = torch.bincount(labels).float()
         n_classes = len(class_counts)
+        n_samples = len(labels)
         
-        # Calculate inverse frequency weights (1/frequency)
-        class_weights = 1.0 / (class_counts + 1e-8)  # Add small epsilon to avoid division by zero
+        # Calculate effective number weights: (1-beta)/(1-beta^n)
+        # When beta=1, this becomes exactly inverse weighting
+        # When beta=0, all classes get the same weight
+        effective_numbers = (1.0 - torch.pow(beta, class_counts)) / (1.0 - beta + 1e-8)
+        class_weights = 1.0 / (effective_numbers + 1e-8)
         
-        # Normalize weights
+        # Normalize weights so they sum to n_classes (like before)
         class_weights = class_weights / class_weights.sum() * n_classes
         
         # Log statistics
@@ -114,7 +123,7 @@ class CATHeDataModule(pl.LightningDataModule):
         max_weight = class_weights.max().item()
         weight_ratio = max_weight / (min_weight + 1e-10)
         
-        log.info(f"Sampling weight statistics:")
+        log.info(f"Effective number sampling (beta={beta:.4f}):")
         log.info(f"  - Min weight: {min_weight:.8f}")
         log.info(f"  - Max weight: {max_weight:.8f}")
         log.info(f"  - Max/Min ratio: {weight_ratio:.2f}")
@@ -125,7 +134,7 @@ class CATHeDataModule(pl.LightningDataModule):
         
         return WeightedRandomSampler(
             weights=sample_weights,
-            num_samples=len(labels),
+            num_samples=n_samples,
             replacement=True
         )
 
@@ -145,7 +154,8 @@ class CATHeDataModule(pl.LightningDataModule):
             
             # Create balanced class sampler for training
             self.train_sampler = self.balanced_class_sampler(
-                self.datasets["train"].labels
+                self.datasets["train"].labels,
+                beta=self.sampling_beta
             )
             
             # Log class distribution statistics
