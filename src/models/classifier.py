@@ -1,9 +1,61 @@
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss as described in https://arxiv.org/abs/1708.02002
+    
+    Note: When gamma=0 and alpha=1.0, this is equivalent to standard cross entropy loss.
+    """
+    
+    def __init__(self, alpha: float = 1.0, gamma: float = 2.0, reduction: str = 'mean'):
+        """
+        Initialize Focal Loss.
+        
+        Args:
+            alpha: Weighting factor (default: 1.0)
+            gamma: Focusing parameter (default: 2.0)
+                  When gamma=0, this becomes equivalent to weighted cross entropy
+            reduction: Specifies the reduction to apply ('none'|'mean'|'sum')
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate focal loss.
+        
+        Args:
+            inputs: Model predictions (logits), shape [B, C]
+            targets: Ground truth labels, shape [B]
+            
+        Returns:
+            Calculated loss
+        """
+        # Get regular cross entropy loss
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        
+        # Get predicted probability for the correct class
+        pt = torch.exp(-ce_loss)
+        
+        # Calculate focal loss
+        # Note: When gamma=0, this becomes weighted cross entropy
+        # When gamma=0 and alpha=1.0, this is exactly standard cross entropy
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:  # 'none'
+            return focal_loss
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -16,7 +68,9 @@ class CATHeClassifier(pl.LightningModule):
         dropout: float,
         learning_rate: float,
         weight_decay: float,
-        lr_scheduler: Dict[str, Any]
+        lr_scheduler: Dict[str, Any],
+        focal_alpha: float = 1.0,
+        focal_gamma: float = 2.0
     ):
         """
         Initialize the CATH classifier.
@@ -28,6 +82,9 @@ class CATHeClassifier(pl.LightningModule):
             dropout: Dropout probability
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
+            lr_scheduler: Learning rate scheduler configuration
+            focal_alpha: Alpha parameter for focal loss (if used)
+            focal_gamma: Gamma parameter for focal loss (if used)
         """
         super().__init__()
         self.save_hyperparameters()
@@ -59,9 +116,8 @@ class CATHeClassifier(pl.LightningModule):
         # Loss tracking
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        
-        # Loss criterion
-        self.criterion = nn.CrossEntropyLoss()
+
+        self.criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
 
     def _init_weights(self) -> None:
         """Initialize network weights using Kaiming initialization with GELU."""
