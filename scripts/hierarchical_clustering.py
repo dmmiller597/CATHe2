@@ -94,7 +94,7 @@ class HierarchicalClusterer:
             str(cluster_dir),
             "--min-seq-id", str(identity),
             "-c", "0.8",  # coverage threshold
-            "--cov-mode", "1",  # coverage mode (1 = shorter sequence)
+            "--cov-mode", "2",  # coverage mode (2 = query sequence)
             "--threads", str(self.threads),
             "--cluster-mode", "0"  # 0 = centroid as representative (most connected sequence)
         ]
