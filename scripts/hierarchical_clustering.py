@@ -10,6 +10,7 @@ import pandas as pd
 import subprocess
 import shutil
 import os
+import multiprocessing
 
 # Configure logging
 logging.basicConfig(
@@ -25,21 +26,29 @@ class HierarchicalClusterer:
     Starting with high identity threshold, only representatives are used for the next threshold.
     """
     
-    def __init__(self, input_parquet: str, output_dir: str, thresholds=None):
+    def __init__(self, input_parquet: str, output_dir: str, thresholds=None, threads=None):
         """Initialize the HierarchicalClusterer.
         
         Args:
             input_parquet: Path to input parquet file containing sequences
             output_dir: Directory to save results
             thresholds: List of sequence identity thresholds (default: [0.8, 0.7, 0.6, 0.5, 0.4, 0.3])
+            threads: Number of threads to use (default: automatically determined based on CPU count)
         """
         self.input_path = Path(input_parquet)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
-        self.tmp_dir = Path("/state/partition2/NO_BACKUP/functional-families/tmp/clustering")
+        self.tmp_dir = Path("/state/partition1/scratch0/tmp/")
         
         # Define identity thresholds (from high to low)
         self.thresholds = thresholds or [0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
+        
+        # Determine number of threads
+        available_cores = multiprocessing.cpu_count()
+        # Use all cores minus 1 by default, to leave one core for the system
+        # But ensure at least 1 thread is used
+        self.threads = threads or max(1, available_cores - 1)
+        logger.info(f"Using {self.threads} threads (of {available_cores} available cores)")
         
         logger.info(f"Loading sequences from {input_parquet}")
         self.df = pd.read_parquet(input_parquet)
@@ -86,12 +95,12 @@ class HierarchicalClusterer:
             "--min-seq-id", str(identity),
             "-c", "0.8",  # coverage threshold
             "--cov-mode", "1",  # coverage mode (1 = shorter sequence)
-            "--threads", "8",
+            "--threads", str(self.threads),
             "--cluster-mode", "0"  # 0 = centroid as representative (most connected sequence)
         ]
         
         try:
-            logger.info(f"Running clustering at {identity:.2f} sequence identity")
+            logger.info(f"Running clustering at {identity:.2f} sequence identity with {self.threads} threads")
             subprocess.run(cmd, check=True, text=True)
             
             result_path = Path(f"{cluster_prefix}_cluster.tsv")
@@ -152,6 +161,7 @@ def main():
             input_parquet="data/TED/all_reps.parquet",
             output_dir="data/TED/hierarchical_clusters",
             thresholds=[0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
+            # threads parameter automatically determined if not specified
         )
         clusterer.cluster_sequences()
         logger.info("Hierarchical sequence clustering completed successfully")
