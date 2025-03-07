@@ -52,7 +52,7 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
 
         # Define metrics for testing only
-        self.test_metrics = MetricCollection({
+        self.eval_metrics = MetricCollection({
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
             "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         })
@@ -109,11 +109,12 @@ class CATHeClassifier(pl.LightningModule):
         
         # Log loss
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/acc', self.eval_metrics["acc"], on_step=False, on_epoch=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Test step - compute metrics."""
         loss, preds, targets = self.model_step(batch)
-        self.test_metrics(preds, targets)
+        self.eval_metrics(preds, targets)
 
     def on_train_epoch_end(self) -> None:
         """Handle training epoch end - log loss and reset."""
