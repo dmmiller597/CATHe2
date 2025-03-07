@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import pytorch_lightning as pl
-from typing import Optional, Dict, Any, Tuple, List, Set
+from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
 from utils import get_logger
@@ -13,46 +13,28 @@ log = get_logger()
 class CATHeDataset(Dataset):
     """Dataset class for CATH superfamily classification."""
     
-    def __init__(self, embeddings_path: Path, labels_path: Path, valid_classes: Set[str] = None):
+    def __init__(self, embeddings_path: Path, labels_path: Path):
         """Initialize dataset with protein embeddings and their corresponding labels.
         
         Args:
             embeddings_path: Path to NPZ file containing ProtT5 embeddings
             labels_path: Path to CSV file containing SF labels
-            valid_classes: Set of class names to include (if None, include all)
         """
         try:
             data = np.load(embeddings_path)
             labels_df = pd.read_csv(labels_path)
-            
-            # Filter by valid classes if specified
-            if valid_classes is not None:
-                mask = labels_df['SF'].isin(valid_classes)
+            # Check which key exists in the data and use the appropriate one
+            if 'arr_0' in data:
+                self.embeddings = data['arr_0']
+                # Filter out problematic indices if they exist in this dataset
+                mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
+                self.embeddings = self.embeddings[mask]
                 labels_df = labels_df[mask]
-                
-                # Check which key exists in the data and use the appropriate one
-                if 'arr_0' in data:
-                    self.embeddings = data['arr_0'][mask]
-                else:
-                    # We need to filter embeddings to match filtered labels
-                    indices = np.where(mask)[0]
-                    self.embeddings = data['embeddings'][indices]
             else:
-                # No filtering, use all data
-                if 'arr_0' in data:
-                    self.embeddings = data['arr_0']
-                    # Filter out problematic indices if they exist in this dataset
-                    mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
-                    self.embeddings = self.embeddings[mask]
-                    labels_df = labels_df[mask]
-                else:
-                    self.embeddings = data['embeddings']
+                self.embeddings = data['embeddings']
             
-            # Convert class names to integer codes
-            self.class_names = labels_df['SF'].values
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
-            
         except Exception as e:
             log.error(f"Error loading data: {e}")
             raise ValueError(f"Error loading embeddings from {embeddings_path}: {str(e)}")
@@ -79,7 +61,6 @@ class CATHeDataModule(pl.LightningDataModule):
         test_labels: str = None,
         batch_size: int = 32,
         num_workers: int = 4,
-        min_samples_per_class: int = 10,  # New parameter for filtering
     ):
         """Initialize data module.
         
@@ -93,7 +74,6 @@ class CATHeDataModule(pl.LightningDataModule):
             test_labels: Path to test labels file (optional)
             batch_size: Number of samples per batch
             num_workers: Number of subprocesses for data loading
-            min_samples_per_class: Minimum number of samples required per class
         """
         super().__init__()
         # Convert data_dir to absolute path if it's relative
@@ -106,9 +86,7 @@ class CATHeDataModule(pl.LightningDataModule):
         self.test_labels = test_labels
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.min_samples_per_class = min_samples_per_class
         self.datasets: Dict[str, CATHeDataset] = {}
-        self.valid_classes = None
 
     def balanced_class_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
         """Create a weighted sampler that balances class representation.
@@ -151,55 +129,28 @@ class CATHeDataModule(pl.LightningDataModule):
             replacement=True
         )
 
-    def get_valid_classes(self) -> Set[str]:
-        """Identify classes with sufficient samples in the training set."""
-        # Read training labels
-        train_labels_df = pd.read_csv(self.data_dir / self.train_labels)
-        
-        # Count occurrences of each class
-        class_counts = train_labels_df['SF'].value_counts()
-        
-        # Filter classes with more than min_samples_per_class samples
-        valid_classes = set(class_counts[class_counts > self.min_samples_per_class].index)
-        
-        log.info(f"Filtering classes with <= {self.min_samples_per_class} samples:")
-        log.info(f"  - Original number of classes: {len(class_counts)}")
-        log.info(f"  - Filtered number of classes: {len(valid_classes)}")
-        log.info(f"  - Removed {len(class_counts) - len(valid_classes)} classes")
-        
-        return valid_classes
-
     def setup(self, stage: Optional[str] = None):
         """Set up datasets for each stage of training."""
-        # Identify valid classes from training set (only needs to be done once)
-        if self.valid_classes is None:
-            self.valid_classes = self.get_valid_classes()
-        
         if stage in (None, "fit"):
-            # Create filtered datasets
             self.datasets["train"] = CATHeDataset(
                 self.data_dir / self.train_embeddings,
-                self.data_dir / self.train_labels,
-                valid_classes=self.valid_classes
+                self.data_dir / self.train_labels
             )
-            
             self.datasets["val"] = CATHeDataset(
                 self.data_dir / self.val_embeddings,
-                self.data_dir / self.val_labels,
-                valid_classes=self.valid_classes
+                self.data_dir / self.val_labels
             )
-            
-            # Store number of classes for model configuration (after filtering)
-            self.num_classes = len(pd.Categorical(self.datasets["train"].class_names).categories)
+            # Store number of classes for model configuration
+            self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
             # Create balanced class sampler for training
             self.train_sampler = self.balanced_class_sampler(
                 self.datasets["train"].labels
             )
             
-            # Log class distribution statistics after filtering
+            # Log class distribution statistics
             class_counts = torch.bincount(self.datasets["train"].labels)
-            log.info(f"Training set class statistics (after filtering):")
+            log.info(f"Training set class statistics:")
             log.info(f"  - Total classes: {len(class_counts)}")
             log.info(f"  - Min class size: {class_counts.min().item()}")
             log.info(f"  - Median class size: {torch.median(class_counts.float()).item():.1f}")
@@ -209,8 +160,7 @@ class CATHeDataModule(pl.LightningDataModule):
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
                 self.data_dir / self.test_embeddings,
-                self.data_dir / self.test_labels,
-                valid_classes=self.valid_classes
+                self.data_dir / self.test_labels
             )
 
     def train_dataloader(self) -> DataLoader:
