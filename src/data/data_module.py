@@ -88,12 +88,13 @@ class CATHeDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.datasets: Dict[str, CATHeDataset] = {}
 
-    def effective_samples_sampler(self, labels: torch.Tensor, beta: float = 0.9999) -> WeightedRandomSampler:
-        """Create a weighted sampler based on effective number of samples.
+    def balanced_class_sampler(self, labels: torch.Tensor) -> WeightedRandomSampler:
+        """Create a weighted sampler that balances class representation.
+        
+        This implements inverse frequency weighting
         
         Args:
             labels: Tensor containing class labels
-            beta: Parameter for effective number calculation (0.9-0.999 typically)
         
         Returns:
             WeightedRandomSampler for balanced training
@@ -102,11 +103,8 @@ class CATHeDataModule(pl.LightningDataModule):
         class_counts = torch.bincount(labels).float()
         n_classes = len(class_counts)
         
-        # Calculate effective number of samples: (1 - beta^n)/(1 - beta)
-        effective_num = (1.0 - torch.pow(beta, class_counts)) / (1.0 - beta)
-        
-        # Calculate weights: 1 / effective_num
-        class_weights = 1.0 / (effective_num + 1e-8)
+        # Calculate inverse frequency weights (1/frequency)
+        class_weights = 1.0 / (class_counts + 1e-8)  # Add small epsilon to avoid division by zero
         
         # Normalize weights
         class_weights = class_weights / class_weights.sum() * n_classes
@@ -145,10 +143,9 @@ class CATHeDataModule(pl.LightningDataModule):
             # Store number of classes for model configuration
             self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
             
-            # Create effective number of samples weighted sampler for training
-            self.train_sampler = self.effective_samples_sampler(
-                self.datasets["train"].labels,
-                beta=0.9999  # High beta for extreme imbalance
+            # Create balanced class sampler for training
+            self.train_sampler = self.balanced_class_sampler(
+                self.datasets["train"].labels
             )
             
             # Log class distribution statistics
