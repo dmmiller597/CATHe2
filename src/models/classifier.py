@@ -90,8 +90,23 @@ class CATHeClassifier(pl.LightningModule):
         """Perform a single model step on a batch of data."""
         x, y = batch
         logits = self(x)
+        
+        # Log diagnostics for the first batch
+        if self.global_step == 0:
+            print(f"Input shape: {x.shape}, Labels shape: {y.shape}")
+            print(f"Label range: [{y.min()}, {y.max()}] out of {self.num_classes} classes")
+            print(f"Output logits sample: {logits[0, :5]}")
+            print(f"Predictions distribution: {torch.argmax(logits, dim=1).unique(return_counts=True)}")
+        
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
+        
+        # Check if any predictions match labels
+        match_count = (preds == y).sum().item()
+        if self.global_step % 10 == 0:
+            print(f"Step {self.global_step}, Matches: {match_count}/{len(y)}, "
+                  f"Batch accuracy: {match_count/len(y):.4f}")
+        
         return logits, loss, preds
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
