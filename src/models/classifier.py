@@ -51,12 +51,18 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Define metrics for testing only
-        self.eval_metrics = MetricCollection({
+        # Define metrics - for both training and evaluation
+        metrics = {
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            #"balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-        })
-
+            # Uncomment if needed
+            # "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+        }
+        
+        # Create separate metric collections for different stages
+        self.train_metrics = MetricCollection(metrics, prefix='train_')
+        self.val_metrics = MetricCollection(metrics, prefix='val_')
+        self.test_metrics = MetricCollection(metrics, prefix='test_')
+        
         # Loss tracking
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
@@ -88,52 +94,73 @@ class CATHeClassifier(pl.LightningModule):
         preds = torch.argmax(logits, dim=1)
         return loss, preds, y
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Training step - compute loss."""
-        loss, preds, targets = self.model_step(batch)
-        
-        # Update loss
-        self.train_loss(loss)
-        
-        # Log loss
-        self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=False)
-        
-        return {"loss": loss}
-
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Validation step - compute loss."""
-        loss, preds, targets = self.model_step(batch)
-        
-        # Update loss
-        self.val_loss(loss)
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        x, y = batch
+        logits, loss, preds = self.model_step(batch)
         
         # Update metrics
-        self.eval_metrics(preds, targets)
+        self.train_loss(loss)
+        self.train_metrics.update(preds, y)
         
-        # Log loss
-        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val/acc', self.eval_metrics["acc"], on_step=False, on_epoch=True)
+        # Log loss per step (helpful for debugging)
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        
+        return loss
+
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+        x, y = batch
+        logits, loss, preds = self.model_step(batch)
+        
+        # Update metrics
+        self.val_loss(loss)
+        self.val_metrics.update(preds, y)
+        
+        # Log loss per step
+        self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Test step - compute metrics."""
-        loss, preds, targets = self.model_step(batch)
-        self.eval_metrics(preds, targets)
+        x, y = batch
+        logits, loss, preds = self.model_step(batch)
+        
+        # Update metrics
+        self.test_metrics.update(preds, y)
 
     def on_train_epoch_end(self) -> None:
-        """Handle training epoch end - log loss and reset."""
-        self.log('train/loss_epoch', self.train_loss.compute(), prog_bar=True)
+        # Compute epoch metrics
+        train_loss = self.train_loss.compute()
+        metrics = self.train_metrics.compute()
+        
+        # Log all metrics
+        self.log("train/loss_epoch", train_loss)
+        for name, value in metrics.items():
+            self.log(f"train/{name}", value)
+        
+        # Reset metrics
         self.train_loss.reset()
+        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
-        """Handle validation epoch end - log loss and reset."""
-        self.log('val/loss', self.val_loss.compute(), prog_bar=True)
+        # Compute epoch metrics
+        val_loss = self.val_loss.compute()
+        metrics = self.val_metrics.compute()
+        
+        # Log all metrics
+        self.log("val/loss_epoch", val_loss)
+        for name, value in metrics.items():
+            self.log(f"val/{name}", value)
+        
+        # Reset metrics
         self.val_loss.reset()
+        self.val_metrics.reset()
 
     def on_test_epoch_end(self) -> None:
-        """Handle test epoch end - log metrics and reset."""
-        test_metrics = {f"test/{k}": v for k, v in self.eval_metrics.compute().items()}
-        self.log_dict(test_metrics, on_step=False, on_epoch=True)
-        self.eval_metrics.reset()
+        # Log all test metrics
+        metrics = self.test_metrics.compute()
+        for name, value in metrics.items():
+            self.log(f"test/{name}", value)
+        
+        # Reset metrics
+        self.test_metrics.reset()
 
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler."""
