@@ -92,7 +92,7 @@ class CATHeClassifier(pl.LightningModule):
         logits = self(x)
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
-        return loss, preds, y
+        return logits, loss, preds
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         x, y = batch
