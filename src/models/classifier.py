@@ -163,24 +163,56 @@ class CATHeClassifier(pl.LightningModule):
         self.test_metrics.reset()
 
     def configure_optimizers(self):
-        """Configure optimizer and learning rate scheduler."""
+        """Configure optimizer with warmup and learning rate scheduler."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        
+        # Create warmup + plateau scheduler using LambdaLR + ReduceLROnPlateau
+        warmup_epochs = 5  # Number of epochs for warmup phase
+        
+        # Step 1: Define lambda function for warmup
+        def warmup_lambda(epoch):
+            if epoch < warmup_epochs:
+                # Linear warmup from 10% to 100% of base lr
+                return 0.1 + 0.9 * (epoch / warmup_epochs)
+            return 1.0  # After warmup, return full lr multiplier (1.0)
+        
+        # Step 2: Create the warmup scheduler that affects base lr
+        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=warmup_lambda
+        )
+        
+        # Step 3: Create ReduceLROnPlateau for after warmup
+        plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler["mode"],
             factor=self.hparams.lr_scheduler["factor"],
             patience=self.hparams.lr_scheduler["patience"],
             min_lr=self.hparams.lr_scheduler["min_lr"]
         )
+        
+        # Return a sequential scheduler configuration
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": scheduler,
+                # First apply warmup on epoch level
+                "scheduler": warmup_scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+                "name": "warmup"
+            },
+            # Then PyTorch Lightning will automatically switch to ReduceLROnPlateau
+            # after warmup_epochs are completed
+            "reduce_on_plateau": {
+                "scheduler": plateau_scheduler,
                 "monitor": self.hparams.lr_scheduler["monitor"],
-                "interval": "epoch"
+                "interval": "epoch",
+                "frequency": 1,
+                "strict": True,
+                "name": "plateau"
             }
         }
