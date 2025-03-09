@@ -30,9 +30,10 @@ class CATHeDataset(Dataset):
                 mask = ~np.isin(np.arange(len(self.embeddings)), [194048, 200243])
                 self.embeddings = self.embeddings[mask]
                 labels_df = labels_df[mask]
+                print("using arr_0 key for the original CATHe dataset)")
             else:
                 self.embeddings = data['embeddings']
-            
+                print("using embeddings key")
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
         except Exception as e:
