@@ -103,7 +103,7 @@ class CATHeClassifier(pl.LightningModule):
         self.train_metrics.update(preds, y)
         
         # Log loss per step (helpful for debugging)
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
         
         return loss
 
@@ -131,9 +131,9 @@ class CATHeClassifier(pl.LightningModule):
         metrics = self.train_metrics.compute()
         
         # Log all metrics
-        self.log("train/loss_epoch", train_loss)
+        self.log("train/loss_epoch", train_loss, prog_bar=True)
         for name, value in metrics.items():
-            self.log(f"train/{name}", value)
+            self.log(f"train/{name}_epoch", value, prog_bar=True)
         
         # Reset metrics
         self.train_loss.reset()
@@ -145,9 +145,9 @@ class CATHeClassifier(pl.LightningModule):
         metrics = self.val_metrics.compute()
         
         # Log all metrics
-        self.log("val/loss_epoch", val_loss)
+        self.log("val/loss", val_loss, prog_bar=True, sync_dist=True)
         for name, value in metrics.items():
-            self.log(f"val/{name}", value)
+            self.log(f"val/{name}", value, prog_bar=True, sync_dist=True)
         
         # Reset metrics
         self.val_loss.reset()
@@ -157,7 +157,7 @@ class CATHeClassifier(pl.LightningModule):
         # Log all test metrics
         metrics = self.test_metrics.compute()
         for name, value in metrics.items():
-            self.log(f"test/{name}", value)
+            self.log(f"test/{name}", value, sync_dist=True)
         
         # Reset metrics
         self.test_metrics.reset()
