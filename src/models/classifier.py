@@ -103,7 +103,7 @@ class CATHeClassifier(pl.LightningModule):
         self.train_metrics.update(preds, y)
         
         # Log loss per step (helpful for debugging)
-        self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=False, sync_dist=True)
         
         return loss
 
@@ -116,7 +116,7 @@ class CATHeClassifier(pl.LightningModule):
         self.val_metrics.update(preds, y)
         
         # Log loss per step
-        self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
