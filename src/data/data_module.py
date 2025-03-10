@@ -36,12 +36,6 @@ class CATHeDataset(Dataset):
                 print("using embeddings key")
             codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
-            # After loading embeddings
-            print(f"Embeddings stats: min={self.embeddings.min()}, max={self.embeddings.max()}, mean={self.embeddings.mean()}")
-            print(f"Embeddings shape: {self.embeddings.shape}")
-            # Add histogram of embedding magnitudes
-            magnitudes = np.linalg.norm(self.embeddings, axis=1)
-            print(f"Embedding magnitudes: min={magnitudes.min()}, max={magnitudes.max()}, mean={magnitudes.mean()}")
         except Exception as e:
             log.error(f"Error loading data: {e}")
             raise ValueError(f"Error loading embeddings from {embeddings_path}: {str(e)}")
@@ -135,17 +129,6 @@ class CATHeDataModule(pl.LightningDataModule):
             log.info(f"  - Median class size: {torch.median(class_counts.float()).item():.1f}")
             log.info(f"  - Mean class size: {class_counts.float().mean().item():.1f}")
             log.info(f"  - Max class size: {class_counts.max().item()}")
-            
-            # Add after dataset initialization
-            if self.datasets["train"]:
-                print(f"Train dataset: {len(self.datasets['train'])} samples")
-                print(f"Train embeddings shape: {self.datasets['train'].embeddings.shape}")
-                print(f"Train labels distribution: {torch.bincount(self.datasets['train'].labels)}")
-            
-            if self.datasets["val"]:
-                print(f"Val dataset: {len(self.datasets['val'])} samples")
-                print(f"Val embeddings shape: {self.datasets['val'].embeddings.shape}")
-                print(f"Val labels distribution: {torch.bincount(self.datasets['val'].labels)}")
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
