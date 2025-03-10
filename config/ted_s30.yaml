@@ -6,7 +6,7 @@ data:
   train_labels: "TED/s30/embeddings/Y_Train_SF.csv"
   val_labels: "TED/s30/embeddings/Y_Val_SF.csv"
   test_labels: "TED/s30/embeddings/Y_Test_SF.csv"
-  sampling_beta: 0.9  # Controls class balancing (0=no reweighting, 1=inverse frequency)
+  sampling_beta: 1  # Controls class balancing (0=no reweighting, 1=inverse frequency)
 
 model:
   # Architecture
