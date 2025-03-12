@@ -31,11 +31,11 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
     
     # Pre-process all sequences at once to avoid redundant processing in the loop
     # Replace rare/ambiguous amino acids by X and introduce white-space between all amino acids
-    processed_sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
+    sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
     
     with torch.inference_mode():  # More efficient than no_grad for inference
         for i in tqdm(range(0, len(sequences), batch_size)):
-            batch_sequences = processed_sequences[i:i + batch_size]
+            batch_sequences = sequences[i:i + batch_size]
             
             # Tokenize sequences and pad up to the longest sequence in the batch
             ids = tokenizer.batch_encode_plus(batch_sequences, add_special_tokens=True, padding="longest")
