@@ -7,59 +7,49 @@ from pathlib import Path
 import re
 import argparse
 
-def load_prot_t5():
-    """Load ProtT5 model and tokenizer"""
-    model = T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')
-    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False)
-    
+# Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50)
+def get_T5_model():
+    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    # Convert to half precision
-    model = model.half()  
-    model = model.eval()
-    
+
+    model = model.to(device) # move model to GPU
+    model = model.eval() # set model to evaluation model
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False)
+
     return model, tokenizer, device
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
+
+def get_embeddings(model, tokenizer, sequences, device, batch_size):
     """Get ProtT5 embeddings for a list of sequences"""
     all_embeddings = []
     
     # Sort sequences by length for more efficient batching
     seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
-    seq_lengths.sort(key=lambda x: x[1])
+    seq_lengths.sort(key=lambda x: x[1], reverse=True)  # Sort by longest first
     sorted_indices = [x[0] for x in seq_lengths]
     sequences = [sequences[i] for i in sorted_indices]
     
-    for i in tqdm(range(0, len(sequences), batch_size)):
-        batch_sequences = sequences[i:i + batch_size]
-        
-        # Replace U, Z, O, B with X
-        batch_sequences = [re.sub(r"[UZOB]", "X", sequence) for sequence in batch_sequences]
-        
-        # Tokenize sequences
-        ids = tokenizer.batch_encode_plus(batch_sequences, 
-                                        add_special_tokens=True, 
-                                        padding=True,
-                                        return_tensors='pt')
-        
-        input_ids = ids['input_ids'].to(device)
-        attention_mask = ids['attention_mask'].to(device)
-        
-        with torch.no_grad():
-            embedding = model(input_ids=input_ids,
-                           attention_mask=attention_mask)
+    # Pre-process all sequences at once to avoid redundant processing in the loop
+    # Replace rare/ambiguous amino acids by X and introduce white-space between all amino acids
+    processed_sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
+    
+    with torch.inference_mode():  # More efficient than no_grad for inference
+        for i in tqdm(range(0, len(sequences), batch_size)):
+            batch_sequences = processed_sequences[i:i + batch_size]
             
-            # Get last hidden states
-            last_hidden_states = embedding.last_hidden_state.half()
-            attention_mask = attention_mask.half()
+            # Tokenize sequences and pad up to the longest sequence in the batch
+            ids = tokenizer.batch_encode_plus(batch_sequences, add_special_tokens=True, padding="longest")
+            input_ids = torch.tensor(ids['input_ids'], device=device)
+            attention_mask = torch.tensor(ids['attention_mask'], device=device)
             
-            # Vectorized mean pooling
-            mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_states.size()).float()
-            sum_embeddings = torch.sum(last_hidden_states * mask_expanded, 1)
-            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
-            embeddings = (sum_embeddings / sum_mask).cpu().numpy()
-            
-            all_embeddings.extend(embeddings)
+            # Generate embeddings
+            embedding_repr = model(input_ids=input_ids, attention_mask=attention_mask)
+                
+            # Extract per-protein embeddings - vectorize operations where possible
+            for j, seq_len in enumerate(attention_mask.sum(dim=1)):
+                seq_emb = embedding_repr.last_hidden_state[j, 1:seq_len-1]
+                per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
+                all_embeddings.append(per_protein_emb)
     
     return np.array(all_embeddings), sorted_indices
 
@@ -114,7 +104,7 @@ def main():
     
     # Load model and tokenizer
     print("Loading ProtT5 model...")
-    model, tokenizer, device = load_prot_t5()
+    model, tokenizer, device = get_T5_model()
     
     # Load the full dataset
     print(f"Loading data from {args.input}...")
