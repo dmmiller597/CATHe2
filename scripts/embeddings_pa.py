@@ -40,6 +40,13 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
         # Replace U, Z, O, B with X
         batch_sequences = [re.sub(r"[UZOB]", "X", sequence) for sequence in batch_sequences]
         
+        # Add spaces between amino acids for proper tokenization with ProtT5
+        batch_sequences = [" ".join(list(seq)) for seq in batch_sequences]
+        
+        # DEBUG: Show how tokenization input looks
+        if i == 0:
+            print(f"DEBUG - First sequence after spacing: '{batch_sequences[0]}'")
+        
         # Tokenize sequences
         ids = tokenizer.batch_encode_plus(batch_sequences, 
                                         add_special_tokens=True, 
@@ -48,6 +55,10 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
         
         input_ids = ids['input_ids'].to(device)
         attention_mask = ids['attention_mask'].to(device)
+        
+        # DEBUG: Check token counts
+        if i == 0:
+            print(f"DEBUG - Token counts: {attention_mask.sum(dim=1).cpu().numpy()}")
         
         with torch.no_grad():
             embedding = model(input_ids=input_ids,
