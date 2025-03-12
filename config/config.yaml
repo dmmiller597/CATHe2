@@ -6,6 +6,7 @@ data:
   train_labels: "filtered/SF_Train_ProtT5_filtered.csv"
   val_labels: "annotations/Y_Val_SF.csv"
   test_labels: "annotations/Y_Test_SF.csv"
+  sampling_beta: 0.999  # Controls class balancing (0=no reweighting, 1=inverse frequency)
 
 model:
   # Architecture

@@ -54,8 +54,7 @@ class CATHeClassifier(pl.LightningModule):
         # Define metrics - for both training and evaluation
         metrics = {
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            # Uncomment if needed
-            # "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         }
         
         # Create separate metric collections for different stages
