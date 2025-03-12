@@ -21,13 +21,13 @@ def get_T5_model():
     return model, tokenizer, device
 
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
+def get_embeddings(model, tokenizer, sequences, device, batch_size=256):
     """Get ProtT5 embeddings for a list of sequences"""
     all_embeddings = []
     
     # Sort sequences by length for more efficient batching
     seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
-    seq_lengths.sort(key=lambda x: x[1])
+    seq_lengths.sort(key=lambda x: x[1], reverse=True)  # Sort by longest first
     sorted_indices = [x[0] for x in seq_lengths]
     sequences = [sequences[i] for i in sorted_indices]
     
@@ -112,8 +112,8 @@ def main():
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
                         help='Output directory for embeddings (default: data/TED/s30/embeddings)')
-    parser.add_argument('--batch-size', '-b', type=int, default=64,
-                        help='Batch size for embedding generation (default: 64)')
+    parser.add_argument('--batch-size', '-b', type=int, default=256,
+                        help='Batch size for embedding generation (default: 256)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
