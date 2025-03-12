@@ -9,7 +9,7 @@ import argparse
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-# Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50)
+# Load ProtT5 in half-precision
 def get_T5_model():
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,7 +47,7 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
             # Generate embeddings
             embedding_repr = model(input_ids=input_ids, attention_mask=attention_mask)
                 
-            # Extract per-protein embeddings - vectorize operations where possible
+            # Extract per-protein embeddings
             for j, seq_len in enumerate(attention_mask.sum(dim=1)):
                 seq_emb = embedding_repr.last_hidden_state[j, 1:seq_len-1]
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
@@ -55,7 +55,7 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
