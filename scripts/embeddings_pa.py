@@ -21,7 +21,7 @@ def get_T5_model():
     return model, tokenizer, device
 
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
+def get_embeddings(model, tokenizer, sequences, device, batch_size=64):
     """Get ProtT5 embeddings for a list of sequences"""
     all_embeddings = []
     
@@ -47,20 +47,46 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size=16):
         with torch.no_grad():
             embedding_repr = model(input_ids=input_ids, attention_mask=attention_mask)
             
-            # Extract per-protein embeddings
-            for j, seq_len in enumerate(attention_mask.sum(dim=1).cpu().numpy()):
-                # Get actual sequence length (excluding special tokens)
-                # The model adds special tokens: typically <sos> at position 0, and <eos> at the end
-                # So we need to get tokens from position 1 to seq_len-1
-                seq_emb = embedding_repr.last_hidden_state[j, 1:seq_len-1]
-                
-                # Compute per-protein embedding by averaging across all amino acids
-                per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
-                all_embeddings.append(per_protein_emb)
+            # OPTIMIZATION: Vectorized embedding extraction
+            # Get last hidden states
+            last_hidden_states = embedding_repr.last_hidden_state
+            
+            # Get sequence lengths
+            seq_lengths = attention_mask.sum(dim=1)
+            batch_size, max_len = attention_mask.shape
+            
+            # Create a mask that excludes special tokens (position 0 and the last token of each sequence)
+            special_tokens_mask = torch.ones_like(attention_mask, device=device)
+            # Mask first token (position 0)
+            special_tokens_mask[:, 0] = 0
+            # Mask last token for each sequence (based on sequence length)
+            for j in range(batch_size):
+                if seq_lengths[j] > 0:  # Ensure there's at least one token
+                    special_tokens_mask[j, seq_lengths[j] - 1] = 0
+            
+            # Combine with attention mask to exclude padding and special tokens
+            effective_mask = attention_mask * special_tokens_mask
+            
+            # Expand mask for broadcasting with embeddings
+            mask_expanded = effective_mask.unsqueeze(-1).expand_as(last_hidden_states)
+            
+            # Masked sum and mean calculation
+            masked_sum = torch.sum(last_hidden_states * mask_expanded, dim=1)
+            token_counts = effective_mask.sum(dim=1, keepdim=True)
+            # Avoid division by zero
+            token_counts = torch.clamp(token_counts, min=1).to(last_hidden_states.dtype)
+            
+            # Mean pooling
+            seq_embeddings = (masked_sum / token_counts).cpu().numpy()
+            all_embeddings.extend(seq_embeddings)
+            
+            # Free up GPU memory
+            del last_hidden_states, attention_mask, effective_mask, mask_expanded
+            torch.cuda.empty_cache()
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
