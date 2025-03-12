@@ -8,9 +8,9 @@ from esm.models.esmc import ESMC
 from esm.sdk.api import ESMProtein, LogitsConfig
 
 # Load ESM-C model
-def get_ESM_model(use_half_precision=True):
+def get_ESM_model(use_half_precision=True, use_flash_attn=False):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    client = ESMC.from_pretrained("esmc_300m").to(device)
+    client = ESMC.from_pretrained("esmc_300m", use_flash_attn=use_flash_attn).to(device)
     
     if use_half_precision:
         client = client.half()  # use half-precision
