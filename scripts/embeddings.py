@@ -12,46 +12,82 @@ def get_T5_model():
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = model.to(device) # move model to GPU
-    model = model.eval() # set model to evaluation model
+    model = model.to(device)
+    model = model.eval()
+    
+    # Enable gradient checkpointing to reduce memory usage
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
+        
+    # Optimize model for inference speed
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True
+        
     tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False)
 
     return model, tokenizer, device
 
 
 def get_embeddings(model, tokenizer, sequences, device, batch_size):
-    """Get ProtT5 embeddings for a list of sequences"""
+    """Get ProtT5 embeddings for a list of sequences with optimized processing"""
     all_embeddings = []
     
     # Sort sequences by length for more efficient batching
     seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
-    seq_lengths.sort(key=lambda x: x[1], reverse=True)  # Sort by longest first
+    seq_lengths.sort(key=lambda x: x[1], reverse=True)
     sorted_indices = [x[0] for x in seq_lengths]
     sequences = [sequences[i] for i in sorted_indices]
     
-    # Pre-process all sequences at once to avoid redundant processing in the loop
-    # Replace rare/ambiguous amino acids by X and introduce white-space between all amino acids
+    # Pre-process all sequences (already efficient enough)
     sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
     
-    with torch.inference_mode():  # More efficient than no_grad for inference
-        for i in tqdm(range(0, len(sequences), batch_size)):
-            batch_sequences = sequences[i:i + batch_size]
+    # Create dynamic batches based on sequence length
+    dynamic_batches = []
+    i = 0
+    max_tokens = 24000  # Adjust based on available GPU memory
+    
+    while i < len(sequences):
+        current_batch = []
+        current_tokens = 0
+        
+        while i < len(sequences) and current_tokens < max_tokens:
+            seq_tokens = len(sequences[i]) + 2  # +2 for special tokens
+            if current_tokens + seq_tokens <= max_tokens or len(current_batch) == 0:
+                current_batch.append(sequences[i])
+                current_tokens += seq_tokens
+                i += 1
+            else:
+                break
+                
+        dynamic_batches.append(current_batch)
+    
+    with torch.inference_mode():
+        for batch in tqdm(dynamic_batches):
+            # Tokenize with padding
+            ids = tokenizer.batch_encode_plus(batch, add_special_tokens=True, padding="longest")
             
-            # Tokenize sequences and pad up to the longest sequence in the batch
-            ids = tokenizer.batch_encode_plus(batch_sequences, add_special_tokens=True, padding="longest")
             input_ids = torch.tensor(ids['input_ids'], device=device)
             attention_mask = torch.tensor(ids['attention_mask'], device=device)
             
             # Generate embeddings
             embedding_repr = model(input_ids=input_ids, attention_mask=attention_mask)
                 
-            # Extract per-protein embeddings - vectorize operations where possible
+            # Extract per-protein embeddings efficiently
+            batch_embeddings = []
             for j, seq_len in enumerate(attention_mask.sum(dim=1)):
                 seq_emb = embedding_repr.last_hidden_state[j, 1:seq_len-1]
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
-                all_embeddings.append(per_protein_emb)
+                batch_embeddings.append(per_protein_emb)
+                
+            all_embeddings.extend(batch_embeddings)
+            
+            # Manual cleanup to help with GPU memory
+            del input_ids, attention_mask, embedding_repr
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
     
     return np.array(all_embeddings), sorted_indices
+
 
 def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
     """Process data for a specific split"""
@@ -84,6 +120,7 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     print(f"Saved metadata to {metadata_file}")
     print(f"Number of unique superfamilies: {len(np.unique(sorted_sf))}")
 
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Generate ProtT5 embeddings for protein sequences')
@@ -92,9 +129,11 @@ def main():
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
                         help='Output directory for embeddings (default: data/TED/s30/embeddings)')
     parser.add_argument('--batch-size', '-b', type=int, default=16,
-                        help='Batch size for embedding generation (default: 16)')
+                        help='Batch size guideline (dynamic batching will be used)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
+    parser.add_argument('--chunk-size', type=int, default=0,
+                        help='Process data in chunks of this size to reduce memory usage. 0 means no chunking.')
     
     args = parser.parse_args()
     
@@ -106,19 +145,45 @@ def main():
     print("Loading ProtT5 model...")
     model, tokenizer, device = get_T5_model()
     
-    # Load the full dataset
+    # Load data efficiently
     print(f"Loading data from {args.input}...")
-    df = pd.read_parquet(args.input)
+    if args.splits:
+        # Only load necessary splits
+        df_list = []
+        for split in args.splits:
+            try:
+                # Try to use predicate pushdown if available
+                split_df = pd.read_parquet(args.input, filters=[('split', '=', split)])
+                df_list.append(split_df)
+            except:
+                # Fallback to standard loading and filtering
+                full_df = pd.read_parquet(args.input)
+                df_list.append(full_df[full_df['split'] == split])
+        df = pd.concat(df_list)
+    else:
+        df = pd.read_parquet(args.input)
     
-    # Process specific splits if requested, otherwise process all splits
+    # Process specific splits
     splits_to_process = args.splits if args.splits else df['split'].unique()
     
     for split in splits_to_process:
         df_split = df[df['split'] == split].reset_index(drop=True)
-        if len(df_split) > 0:
-            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.batch_size)
-        else:
+        if len(df_split) == 0:
             print(f"Warning: No data found for split '{split}'. Skipping.")
+            continue
+            
+        if args.chunk_size > 0 and len(df_split) > args.chunk_size:
+            # Process in chunks to reduce memory usage
+            for i in range(0, len(df_split), args.chunk_size):
+                chunk = df_split.iloc[i:i+args.chunk_size]
+                chunk_name = f"{split}_chunk{i//args.chunk_size}"
+                process_split_data(chunk, chunk_name, output_dir, model, tokenizer, device, args.batch_size)
+                # Try to clear memory between chunks
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+        else:
+            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.batch_size)
+
 
 if __name__ == "__main__":
     main()
