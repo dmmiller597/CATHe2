@@ -57,12 +57,11 @@ class CATHeClassifier(pl.LightningModule):
             "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         }
         
-        # Create separate metric collections for different stages
-        self.train_metrics = MetricCollection(metrics, prefix='train_')
-        self.val_metrics = MetricCollection(metrics, prefix='val_')
-        self.test_metrics = MetricCollection(metrics, prefix='test_')
+        # Streamlined metrics approach
+        self.val_metrics = MetricCollection(metrics)
+        self.test_metrics = MetricCollection(metrics)
         
-        # Loss tracking
+        # For training, only track loss to maximize speed
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         
@@ -97,12 +96,12 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Update metrics
+        # Only track loss during training for speed
         self.train_loss(loss)
-        self.train_metrics.update(preds, y)
         
-        # Log loss per step (helpful for debugging)
-        self.log("train/loss", loss, on_step=True, on_epoch=False, sync_dist=True)
+        # Log with less frequency
+        if batch_idx % 50 == 0:  # Adjust logging frequency as needed
+            self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
         
         return loss
 
@@ -113,9 +112,6 @@ class CATHeClassifier(pl.LightningModule):
         # Update metrics
         self.val_loss(loss)
         self.val_metrics.update(preds, y)
-        
-        # Log loss per step
-        self.log("val/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
@@ -125,28 +121,25 @@ class CATHeClassifier(pl.LightningModule):
         self.test_metrics.update(preds, y)
 
     def on_train_epoch_end(self) -> None:
-        # Compute epoch metrics
+        # Only log training loss for efficiency
         train_loss = self.train_loss.compute()
-        metrics = self.train_metrics.compute()
-        
-        # Log all metrics
         self.log("train/loss_epoch", train_loss, prog_bar=True)
-        for name, value in metrics.items():
-            self.log(f"train/{name}_epoch", value, prog_bar=True)
-        
-        # Reset metrics
         self.train_loss.reset()
-        self.train_metrics.reset()
 
     def on_validation_epoch_end(self) -> None:
-        # Compute epoch metrics
         val_loss = self.val_loss.compute()
         metrics = self.val_metrics.compute()
         
-        # Log all metrics
-        self.log("val/loss", val_loss, prog_bar=True, sync_dist=True)
-        for name, value in metrics.items():
-            self.log(f"val/{name}", value, prog_bar=True, sync_dist=True)
+        # Log with single call to reduce overhead
+        self.log_dict(
+            {
+                "val/loss": val_loss,
+                "val/acc": metrics["acc"],
+                "val/balanced_acc": metrics["balanced_acc"]
+            },
+            prog_bar=True,
+            sync_dist=True
+        )
         
         # Reset metrics
         self.val_loss.reset()
