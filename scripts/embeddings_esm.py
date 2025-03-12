@@ -7,13 +7,15 @@ from pathlib import Path
 import argparse
 
 # Load ESM-2 model (650M parameters)
-def get_ESM_model():
+def get_ESM_model(use_half_precision=True):
     model_name = "facebook/esm2_t33_650M_UR50D"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = model.to(device)  # move model to GPU
+    if use_half_precision:
+        model = model.half()  # use half-precision
     model = model.eval()  # set model to evaluation mode
 
     return model, tokenizer, device
@@ -53,7 +55,7 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
@@ -91,8 +93,8 @@ def main():
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
                         help='Output directory for embeddings (default: data/TED/s30/embeddings)')
-    parser.add_argument('--batch-size', '-b', type=int, default=8,
-                        help='Batch size for embedding generation (default: 8)')
+    parser.add_argument('--batch-size', '-b', type=int, default=64,
+                        help='Batch size for embedding generation (default: 64)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
