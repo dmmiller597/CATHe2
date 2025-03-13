@@ -51,18 +51,17 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Define metrics - for both training and evaluation
-        self.val_metrics = MetricCollection({
-            "acc": Accuracy(task="multiclass", num_classes=num_classes).to('cpu'),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro').to('cpu')
-        })
+        # Define metrics - explicitly move entire collections to CPU
+        metrics = {
+            "acc": Accuracy(task="multiclass", num_classes=num_classes),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro')
+        }
         
-        self.test_metrics = MetricCollection({
-            "acc": Accuracy(task="multiclass", num_classes=num_classes).to('cpu'),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro').to('cpu')
-        })
+        # Create metric collections and explicitly move entire collections to CPU
+        self.val_metrics = MetricCollection(metrics).to('cpu')
+        self.test_metrics = MetricCollection(metrics.copy()).to('cpu')
         
-        # For training, keep loss on GPU for speed, but validation loss on CPU
+        # Use CPU for validation loss
         self.train_loss = MeanMetric()  # Will stay on GPU with the model
         self.val_loss = MeanMetric().to('cpu')
         
@@ -115,7 +114,7 @@ class CATHeClassifier(pl.LightningModule):
         y_cpu = y.detach().cpu()
         loss_cpu = loss.detach().cpu()
         
-        # Update metrics on CPU
+        # Update metrics on CPU - ensure they're on CPU
         self.val_loss(loss_cpu)
         self.val_metrics.update(preds_cpu, y_cpu)
 
