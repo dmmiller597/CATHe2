@@ -60,9 +60,17 @@ def get_embeddings(model, sequences, device, batch_size):
             # Print example of the first batch's first embedding to verify immediate results
             if i == 0:
                 print("\nFirst batch embedding example:")
-                print(f"Shape: {batch_embeddings[0].shape}")
-                print(f"First few values: {batch_embeddings[0][:5]}")
-                print(f"Stats - Min: {batch_embeddings[0].min():.4f}, Max: {batch_embeddings[0].max():.4f}, Mean: {batch_embeddings[0].mean():.4f}")
+                first_emb = batch_embeddings[0]
+                print(f"Shape: {first_emb.shape}")
+                
+                # Safely print the embedding values
+                if hasattr(first_emb, 'shape') and first_emb.shape != ():  # If not a scalar
+                    print(f"First few values: {first_emb[:5]}")
+                else:
+                    print(f"Value (scalar): {first_emb}")
+                
+                # Use numpy functions that work with both scalars and arrays
+                print(f"Stats - Min: {np.min(first_emb):.4f}, Max: {np.max(first_emb):.4f}, Mean: {np.mean(first_emb):.4f}")
     
     return np.array(all_embeddings), sorted_indices
 
