@@ -1,12 +1,10 @@
 data:
   data_dir: "data"
-  train_embeddings: "TED/s30/embeddings/prot_t5_embeddings_train.npz"
-  val_embeddings: "TED/s30/embeddings/prot_t5_embeddings_val.npz"
-  test_embeddings: "TED/s30/embeddings/prot_t5_embeddings_test.npz"
-  train_labels: "TED/s30/embeddings/Y_Train_SF.csv"
-  val_labels: "TED/s30/embeddings/Y_Val_SF.csv"
-  test_labels: "TED/s30/embeddings/Y_Test_SF.csv"
-  sampling_beta: 0.8  # Controls class balancing (0=no reweighting, 1=inverse frequency)
+  train_embeddings: "TED/s30/embeddings/prot_t5_data_train.parquet"
+  val_embeddings: "TED/s30/embeddings/prot_t5_data_val.parquet"
+  test_embeddings: "TED/s30/embeddings/prot_t5_data_test.parquet"
+  use_parquet: true
+  sampling_beta: 0.999  # Controls class balancing (0=no reweighting, 1=inverse frequency)
 
 model:
   # Architecture
