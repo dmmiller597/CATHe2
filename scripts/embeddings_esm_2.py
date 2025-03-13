@@ -7,21 +7,19 @@ from pathlib import Path
 import argparse
 
 # Load ESM-2 model (650M parameters)
-def get_ESM_model(use_half_precision=True, use_flash_attention=True):
+def get_ESM_model(use_half_precision=True, use_flash_attention=False):
     model_name = "facebook/esm2_t33_650M_UR50D"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     if use_flash_attention:
         # Use Flash Attention-enabled ESM model
         from faesm.esm import FAEsmForMaskedLM
-        print("Using Flash Attention-enabled ESM model")
         model = FAEsmForMaskedLM.from_pretrained(model_name)
         tokenizer = model.tokenizer  # FAESM includes tokenizer in model
     else:
         # Use standard ESM model
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModel.from_pretrained(model_name)
-        print("Using standard ESM model")
     model = model.to(device)  # move model to GPU
     
     if use_half_precision:
@@ -31,7 +29,7 @@ def get_ESM_model(use_half_precision=True, use_flash_attention=True):
     return model, tokenizer, device
 
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention=True):
+def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention=False):
     """Get ESM-2 embeddings for a list of sequences"""
     all_embeddings = []
     
