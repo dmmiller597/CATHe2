@@ -52,17 +52,18 @@ class CATHeClassifier(pl.LightningModule):
         self._init_weights()
 
         # Define metrics - for both training and evaluation
-        metrics = {
-            "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
-        }
+        self.val_metrics = MetricCollection({
+            "acc": Accuracy(task="multiclass", num_classes=num_classes).to('cpu'),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro').to('cpu')
+        })
         
-        # Create metrics on CPU and ensure they stay there
-        self.val_metrics = MetricCollection({k: v.clone().to('cpu') for k, v in metrics.items()})
-        self.test_metrics = MetricCollection({k: v.clone().to('cpu') for k, v in metrics.items()})
+        self.test_metrics = MetricCollection({
+            "acc": Accuracy(task="multiclass", num_classes=num_classes).to('cpu'),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro').to('cpu')
+        })
         
-        # For training, only track loss to maximize speed
-        self.train_loss = MeanMetric().to('cpu')
+        # For training, keep loss on GPU for speed, but validation loss on CPU
+        self.train_loss = MeanMetric()  # Will stay on GPU with the model
         self.val_loss = MeanMetric().to('cpu')
         
         # Loss criterion
