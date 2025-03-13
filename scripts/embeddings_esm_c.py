@@ -69,6 +69,12 @@ def process_split_data(df_split, split_name, output_dir, model, device, batch_si
     
     embeddings, sorted_indices = get_embeddings(model, sequences, device, batch_size)
     
+    # Print example of the first embedding to verify it's working
+    print(f"\nExample of first embedding (first 10 values):")
+    print(f"Shape: {embeddings[0].shape}")
+    print(f"Values: {embeddings[0][:10]}")
+    print(f"Min: {embeddings[0].min():.4f}, Max: {embeddings[0].max():.4f}, Mean: {embeddings[0].mean():.4f}")
+    
     # Reorder metadata based on sorted indices
     sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
     sorted_sf = df_split['SF'].values[sorted_indices]
