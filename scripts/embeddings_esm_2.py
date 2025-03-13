@@ -14,13 +14,14 @@ def get_ESM_model(use_half_precision=True, use_flash_attention=True):
     if use_flash_attention:
         # Use Flash Attention-enabled ESM model
         from faesm.esm import FAEsmForMaskedLM
+        print("Using Flash Attention-enabled ESM model")
         model = FAEsmForMaskedLM.from_pretrained(model_name)
         tokenizer = model.tokenizer  # FAESM includes tokenizer in model
     else:
         # Use standard ESM model
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModel.from_pretrained(model_name)
-
+        print("Using standard ESM model")
     model = model.to(device)  # move model to GPU
     
     if use_half_precision:
