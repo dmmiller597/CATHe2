@@ -57,13 +57,13 @@ class CATHeClassifier(pl.LightningModule):
             "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         }
         
-        # Streamlined metrics approach - MOVE METRICS TO CPU for memory efficiency
-        self.val_metrics = MetricCollection(metrics).to('cpu')
-        self.test_metrics = MetricCollection(metrics).to('cpu')
+        # Create metrics on CPU and ensure they stay there
+        self.val_metrics = MetricCollection({k: v.clone().to('cpu') for k, v in metrics.items()})
+        self.test_metrics = MetricCollection({k: v.clone().to('cpu') for k, v in metrics.items()})
         
         # For training, only track loss to maximize speed
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
+        self.train_loss = MeanMetric().to('cpu')
+        self.val_loss = MeanMetric().to('cpu')
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -96,8 +96,8 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Only track loss during training for speed
-        self.train_loss(loss)
+        # Track loss during training - move to CPU first
+        self.train_loss(loss.detach().cpu())
         
         # Log with less frequency
         if batch_idx % 50 == 0:  # Adjust logging frequency as needed
@@ -109,16 +109,25 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Update metrics - move predictions and targets to CPU before metric calculation
-        self.val_loss(loss)
-        self.val_metrics.update(preds.cpu(), y.cpu())
+        # Move tensors to CPU before passing to metrics
+        preds_cpu = preds.detach().cpu()
+        y_cpu = y.detach().cpu()
+        loss_cpu = loss.detach().cpu()
+        
+        # Update metrics on CPU
+        self.val_loss(loss_cpu)
+        self.val_metrics.update(preds_cpu, y_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Update metrics - move predictions and targets to CPU before metric calculation
-        self.test_metrics.update(preds.cpu(), y.cpu())
+        # Move tensors to CPU before passing to metrics
+        preds_cpu = preds.detach().cpu()
+        y_cpu = y.detach().cpu()
+        
+        # Update metrics on CPU
+        self.test_metrics.update(preds_cpu, y_cpu)
 
     def on_train_epoch_end(self) -> None:
         # Only log training loss for efficiency
