@@ -4,6 +4,8 @@ import pytorch_lightning as pl
 from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
+import numpy as np
+from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -51,19 +53,19 @@ class CATHeClassifier(pl.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Define metrics - explicitly move entire collections to CPU
-        metrics = {
-            "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro')
-        }
+        # Define metrics - avoid using full num_classes for torchmetrics initialization
+        # This prevents large confusion matrices from being created in GPU memory
+        self.num_classes = num_classes
         
-        # Create metric collections and explicitly move entire collections to CPU
-        self.val_metrics = MetricCollection(metrics).to('cpu')
-        self.test_metrics = MetricCollection(metrics.copy()).to('cpu')
-        
-        # Use CPU for validation loss
-        self.train_loss = MeanMetric()  # Will stay on GPU with the model
+        # Use MeanMetric for tracking loss values
+        self.train_loss = MeanMetric()
         self.val_loss = MeanMetric().to('cpu')
+        
+        # Create prediction and target buffers for custom metric calculation
+        self.val_preds = []
+        self.val_targets = []
+        self.test_preds = []
+        self.test_targets = []
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -109,25 +111,29 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Move tensors to CPU before passing to metrics
-        preds_cpu = preds.detach().cpu()
-        y_cpu = y.detach().cpu()
+        # Move tensors to CPU and store as numpy arrays to save memory
+        preds_cpu = preds.detach().cpu().numpy()
+        y_cpu = y.detach().cpu().numpy()
         loss_cpu = loss.detach().cpu()
         
-        # Update metrics on CPU - ensure they're on CPU
+        # Update loss metric
         self.val_loss(loss_cpu)
-        self.val_metrics.update(preds_cpu, y_cpu)
+        
+        # Store predictions and targets for end-of-epoch metric calculation
+        self.val_preds.append(preds_cpu)
+        self.val_targets.append(y_cpu)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Move tensors to CPU before passing to metrics
-        preds_cpu = preds.detach().cpu()
-        y_cpu = y.detach().cpu()
+        # Move tensors to CPU and store as numpy arrays
+        preds_cpu = preds.detach().cpu().numpy()
+        y_cpu = y.detach().cpu().numpy()
         
-        # Update metrics on CPU
-        self.test_metrics.update(preds_cpu, y_cpu)
+        # Store for end-of-epoch calculation
+        self.test_preds.append(preds_cpu)
+        self.test_targets.append(y_cpu)
 
     def on_train_epoch_end(self) -> None:
         # Only log training loss for efficiency
@@ -137,31 +143,67 @@ class CATHeClassifier(pl.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         val_loss = self.val_loss.compute()
-        metrics = self.val_metrics.compute()
         
-        # Log with single call to reduce overhead
+        # Concatenate all predictions and targets
+        all_preds = np.concatenate(self.val_preds)
+        all_targets = np.concatenate(self.val_targets)
+        
+        # Calculate accuracy manually (memory efficient)
+        accuracy = np.mean(all_preds == all_targets)
+        
+        # Calculate balanced accuracy manually
+        balanced_acc = balanced_accuracy_score(all_targets, all_preds)
+        
+        # Log metrics
         self.log_dict(
             {
                 "val/loss": val_loss,
-                "val/acc": metrics["acc"],
-                "val/balanced_acc": metrics["balanced_acc"]
+                "val/acc": accuracy,
+                "val/balanced_acc": balanced_acc
             },
             prog_bar=True,
             sync_dist=True
         )
         
-        # Reset metrics
+        # Reset storage
         self.val_loss.reset()
-        self.val_metrics.reset()
+        self.val_preds = []
+        self.val_targets = []
 
     def on_test_epoch_end(self) -> None:
-        # Log all test metrics
-        metrics = self.test_metrics.compute()
+        # Concatenate all predictions and targets
+        all_preds = np.concatenate(self.test_preds)
+        all_targets = np.concatenate(self.test_targets)
+        
+        # Calculate metrics manually (memory efficient)
+        metrics = {
+            "acc": np.mean(all_preds == all_targets),
+            "balanced_acc": balanced_accuracy_score(all_targets, all_preds)
+        }
+        
+        # Only calculate F1 if requested (expensive for 3000+ classes)
+        try:
+            # Use macro averaging to handle class imbalance
+            metrics["f1_macro"] = f1_score(all_targets, all_preds, average='macro')
+            
+            # For very large number of classes, micro F1 is more memory efficient
+            metrics["f1_micro"] = f1_score(all_targets, all_preds, average='micro')
+        except:
+            self.log("test/f1_calculation", "failed due to memory constraints", sync_dist=True)
+        
+        # Try to calculate MCC (can be memory intensive)
+        try:
+            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds)
+        except:
+            self.log("test/mcc_calculation", "failed due to memory constraints", sync_dist=True)
+        
+        # Log all metrics
         for name, value in metrics.items():
             self.log(f"test/{name}", value, sync_dist=True)
         
-        # Reset metrics
-        self.test_metrics.reset()
+        # Reset storage
+        self.test_preds = []
+        self.test_targets = []
 
     def configure_optimizers(self):
         """Configure optimizer with warmup and learning rate scheduler."""
