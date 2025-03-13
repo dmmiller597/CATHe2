@@ -4,22 +4,21 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import argparse
-from esm.models.esmc import ESMC
-from esm.sdk.api import ESMProtein, LogitsConfig
+from faesm.esmc import ESMC
 
 # Load ESM-C model
 def get_ESM_model(use_half_precision=True, force_cpu=False):
     device = torch.device('cpu' if force_cpu else ('cuda' if torch.cuda.is_available() else 'cpu'))
-    client = ESMC.from_pretrained("esmc_300m").to(device)
+    model = ESMC.from_pretrained("esmc_300m", use_flash_attn=True).to(device)
     
     if use_half_precision and not force_cpu:  # half precision only on GPU
-        client = client.half()
+        model = model.half()
     
-    client = client.eval()
+    model = model.eval()
     
-    return client, device
+    return model, device
 
-def get_embeddings(client, sequences, device, batch_size):
+def get_embeddings(model, sequences, device, batch_size):
     """Get ESM-C embeddings for a list of sequences"""
     all_embeddings = []
     
@@ -35,27 +34,22 @@ def get_embeddings(client, sequences, device, batch_size):
             batch_embeddings = []
             
             for seq in batch_sequences:
-                # Create ESMProtein object
-                protein = ESMProtein(sequence=seq)
+                # Process each sequence individually to avoid padding issues
+                input_ids = model.tokenizer([seq], return_tensors="pt").to(device)["input_ids"]
                 
-                # Encode protein
-                protein_tensor = client.encode(protein)
-                
-                # Get embeddings
-                logits_output = client.logits(
-                    protein_tensor, 
-                    LogitsConfig(sequence=True, return_embeddings=True)
-                )
+                # Get model outputs
+                outputs = model(input_ids)
                 
                 # Extract per-protein embedding (mean of token embeddings)
-                per_protein_emb = logits_output.embeddings.mean(dim=0).cpu().numpy()
+                # This ensures we only average over actual sequence tokens (not padding)
+                per_protein_emb = outputs.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
                 batch_embeddings.append(per_protein_emb)
             
             all_embeddings.extend(batch_embeddings)
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, client, device, batch_size=64):
+def process_split_data(df_split, split_name, output_dir, model, device, batch_size=64):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
@@ -63,7 +57,7 @@ def process_split_data(df_split, split_name, output_dir, client, device, batch_s
     sequences = df_split['sequence'].tolist()
     sequence_ids = df_split['sequence_id'].tolist()
     
-    embeddings, sorted_indices = get_embeddings(client, sequences, device, batch_size)
+    embeddings, sorted_indices = get_embeddings(model, sequences, device, batch_size)
     
     # Reorder metadata based on sorted indices
     sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
@@ -106,7 +100,7 @@ def main():
     
     # Load model
     print("Loading ESM-C model...")
-    client, device = get_ESM_model(force_cpu=False)
+    model, device = get_ESM_model(force_cpu=False)
     
     # Load the full dataset
     print(f"Loading data from {args.input}...")
@@ -118,7 +112,7 @@ def main():
     for split in splits_to_process:
         df_split = df[df['split'] == split].reset_index(drop=True)
         if len(df_split) > 0:
-            process_split_data(df_split, split, output_dir, client, device, args.batch_size)
+            process_split_data(df_split, split, output_dir, model, device, args.batch_size)
         else:
             print(f"Warning: No data found for split '{split}'. Skipping.")
 
