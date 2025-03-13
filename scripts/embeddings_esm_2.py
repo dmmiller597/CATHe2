@@ -55,8 +55,8 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_at
                 seq_len = attn_mask.sum().item()
                 
                 if use_flash_attention:
-                    # For FAESM, get from last_hidden_state
-                    seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                    # For FAESM, outputs is a dict, so use dictionary access
+                    seq_emb = outputs['last_hidden_state'][j, 1:seq_len-1]
                 else:
                     # For standard ESM-2
                     seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
