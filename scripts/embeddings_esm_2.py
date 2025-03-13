@@ -87,7 +87,7 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     np.savez_compressed(output_file, embeddings=embeddings)
     
     # Save metadata (sequence IDs and labels)
-    metadata_file = output_dir / f'labels_{split_name.capitalize()}_{model_type}.csv'
+    metadata_file = output_dir / f'{model_type}_labels_{split_name}.csv'
     metadata_df = pd.DataFrame({
         'sequence_id': sorted_sequence_ids,
         'SF': sorted_sf
@@ -104,8 +104,8 @@ def main():
     parser = argparse.ArgumentParser(description='Generate ESM-2 embeddings for protein sequences')
     parser.add_argument('--input', '-i', type=str, default='data/TED/s30/s30_full.parquet',
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
-    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
-                        help='Output directory for embeddings (default: data/TED/s30/embeddings)')
+    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/esm2',
+                        help='Output directory for embeddings (default: data/TED/s30/esm2)')
     parser.add_argument('--batch-size', '-b', type=int, default=64,
                         help='Batch size for embedding generation (default: 64)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 

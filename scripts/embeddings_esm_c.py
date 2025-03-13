@@ -33,10 +33,9 @@ def get_embeddings(model, sequences, device, batch_size):
             batch_sequences = sequences[i:i + batch_size]
             
             # Process entire batch at once
-            # ESM-C expects input_ids directly, not keyword arguments
+            # Match the README example more closely
             tokenized_batch = model.tokenizer(batch_sequences, return_tensors="pt", padding=True, truncation=True, max_length=1024)
             input_ids = tokenized_batch["input_ids"].to(device)
-            attention_mask = tokenized_batch["attention_mask"].to(device)
             
             # Get model outputs for the entire batch
             outputs = model(input_ids)  # ESM-C expects just input_ids
@@ -45,8 +44,9 @@ def get_embeddings(model, sequences, device, batch_size):
             
             # Calculate mean embeddings for each sequence in the batch
             for j in range(len(batch_sequences)):
-                # Get sequence length (excluding padding)
-                seq_len = attention_mask[j].sum().item()
+                # Get attention mask for determining sequence length (excluding padding)
+                attention_mask = tokenized_batch["attention_mask"][j].to(device)
+                seq_len = attention_mask.sum().item()
                 
                 # Extract embeddings for sequence tokens (excluding first and last special tokens)
                 seq_emb = outputs.embeddings[j, 1:seq_len-1]
@@ -82,7 +82,7 @@ def process_split_data(df_split, split_name, output_dir, model, device, batch_si
         'sequence_id': sorted_sequence_ids,
         'SF': sorted_sf
     })
-    metadata_file = output_dir / f'labels_{split_name.capitalize()}_esmc.csv'
+    metadata_file = output_dir / f'esmc_labels_{split_name}.csv'
     metadata_df.to_csv(metadata_file, index=False)
     
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
@@ -95,8 +95,8 @@ def main():
     parser = argparse.ArgumentParser(description='Generate ESM-C embeddings for protein sequences')
     parser.add_argument('--input', '-i', type=str, default='data/TED/s30/s30_full.parquet',
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
-    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
-                        help='Output directory for embeddings (default: data/TED/s30/embeddings)')
+    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/esmc',
+                        help='Output directory for embeddings (default: data/TED/s30/esmc)')
     parser.add_argument('--batch-size', '-b', type=int, default=64,
                         help='Batch size for embedding generation (default: 64)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
