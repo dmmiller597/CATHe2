@@ -54,12 +54,12 @@ class CATHeClassifier(pl.LightningModule):
         # Define metrics - for both training and evaluation
         metrics = {
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            #"balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         }
         
-        # Streamlined metrics approach
-        self.val_metrics = MetricCollection(metrics)
-        self.test_metrics = MetricCollection(metrics)
+        # Streamlined metrics approach - MOVE METRICS TO CPU for memory efficiency
+        self.val_metrics = MetricCollection(metrics).to('cpu')
+        self.test_metrics = MetricCollection(metrics).to('cpu')
         
         # For training, only track loss to maximize speed
         self.train_loss = MeanMetric()
@@ -109,16 +109,16 @@ class CATHeClassifier(pl.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Update metrics
+        # Update metrics - move predictions and targets to CPU before metric calculation
         self.val_loss(loss)
-        self.val_metrics.update(preds, y)
+        self.val_metrics.update(preds.cpu(), y.cpu())
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Update metrics
-        self.test_metrics.update(preds, y)
+        # Update metrics - move predictions and targets to CPU before metric calculation
+        self.test_metrics.update(preds.cpu(), y.cpu())
 
     def on_train_epoch_end(self) -> None:
         # Only log training loss for efficiency
@@ -135,7 +135,7 @@ class CATHeClassifier(pl.LightningModule):
             {
                 "val/loss": val_loss,
                 "val/acc": metrics["acc"],
-                #"val/balanced_acc": metrics["balanced_acc"]
+                "val/balanced_acc": metrics["balanced_acc"]
             },
             prog_bar=True,
             sync_dist=True
