@@ -56,6 +56,13 @@ def get_embeddings(model, sequences, device, batch_size):
                 batch_embeddings.append(per_protein_emb)
             
             all_embeddings.extend(batch_embeddings)
+            
+            # Print example of the first batch's first embedding to verify immediate results
+            if i == 0:
+                print("\nFirst batch embedding example:")
+                print(f"Shape: {batch_embeddings[0].shape}")
+                print(f"First few values: {batch_embeddings[0][:5]}")
+                print(f"Stats - Min: {batch_embeddings[0].min():.4f}, Max: {batch_embeddings[0].max():.4f}, Mean: {batch_embeddings[0].mean():.4f}")
     
     return np.array(all_embeddings), sorted_indices
 
@@ -68,12 +75,6 @@ def process_split_data(df_split, split_name, output_dir, model, device, batch_si
     sequence_ids = df_split['sequence_id'].tolist()
     
     embeddings, sorted_indices = get_embeddings(model, sequences, device, batch_size)
-    
-    # Print example of the first embedding to verify it's working
-    print(f"\nExample of first embedding (first 10 values):")
-    print(f"Shape: {embeddings[0].shape}")
-    print(f"Values: {embeddings[0][:10]}")
-    print(f"Min: {embeddings[0].min():.4f}, Max: {embeddings[0].max():.4f}, Mean: {embeddings[0].mean():.4f}")
     
     # Reorder metadata based on sorted indices
     sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
