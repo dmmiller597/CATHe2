@@ -105,7 +105,7 @@ def main():
                         help='Output directory for embeddings (default: data/TED/s30/esmc)')
     parser.add_argument('--batch-size', '-b', type=int, default=64,
                         help='Batch size for embedding generation (default: 64)')
-    parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
+    parser.add_argument('--splits', '-s', nargs='+', choices=['val', 'test', 'train'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
     args = parser.parse_args()
