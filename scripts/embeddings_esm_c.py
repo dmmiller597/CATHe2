@@ -8,14 +8,14 @@ from esm.models.esmc import ESMC
 from esm.sdk.api import ESMProtein, LogitsConfig
 
 # Load ESM-C model
-def get_ESM_model(use_half_precision=True):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    client = ESMC.from_pretrained("esmc_300m", use_flash_attn=False).to(device)
+def get_ESM_model(use_half_precision=True, force_cpu=False):
+    device = torch.device('cpu' if force_cpu else ('cuda' if torch.cuda.is_available() else 'cpu'))
+    client = ESMC.from_pretrained("esmc_300m").to(device)
     
-    if use_half_precision:
-        client = client.half()  # use half-precision
+    if use_half_precision and not force_cpu:  # half precision only on GPU
+        client = client.half()
     
-    client = client.eval()  # set model to evaluation mode
+    client = client.eval()
     
     return client, device
 
@@ -106,7 +106,7 @@ def main():
     
     # Load model
     print("Loading ESM-C model...")
-    client, device = get_ESM_model()
+    client, device = get_ESM_model(force_cpu=True)
     
     # Load the full dataset
     print(f"Loading data from {args.input}...")

@@ -7,13 +7,22 @@ from pathlib import Path
 import argparse
 
 # Load ESM-2 model (650M parameters)
-def get_ESM_model(use_half_precision=True):
+def get_ESM_model(use_half_precision=True, use_flash_attention=False):
     model_name = "facebook/esm2_t33_650M_UR50D"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if use_flash_attention:
+        # Use Flash Attention-enabled ESM model
+        from faesm.esm import FAEsmForMaskedLM
+        model = FAEsmForMaskedLM.from_pretrained(model_name)
+        tokenizer = model.tokenizer  # FAESM includes tokenizer in model
+    else:
+        # Use standard ESM model
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name)
 
     model = model.to(device)  # move model to GPU
+    
     if use_half_precision:
         model = model.half()  # use half-precision
     model = model.eval()  # set model to evaluation mode
@@ -21,7 +30,7 @@ def get_ESM_model(use_half_precision=True):
     return model, tokenizer, device
 
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size):
+def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention=False):
     """Get ESM-2 embeddings for a list of sequences"""
     all_embeddings = []
     
@@ -42,20 +51,24 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
             # Generate embeddings
             outputs = model(**inputs)
             
-            # Extract per-protein embeddings (mean of token embeddings except cls/eos tokens)
+            # Extract per-protein embeddings based on model type
             for j, (seq, attn_mask) in enumerate(zip(batch_sequences, inputs['attention_mask'])):
-                # Get the representation excluding the start/end tokens
                 seq_len = attn_mask.sum().item()
-                # For ESM-2, skip the first token (BOS/CLS) and include up to the last token before padding
-                # We also exclude the EOS token at the end
-                seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                
+                if use_flash_attention:
+                    # For FAESM, get from last_hidden_state
+                    seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                else:
+                    # For standard ESM-2
+                    seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
                 all_embeddings.append(per_protein_emb)
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64):
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64, use_flash_attention=False):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
@@ -63,22 +76,23 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     sequences = df_split['sequence'].tolist()
     sequence_ids = df_split['sequence_id'].tolist()
     
-    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, batch_size)
+    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention)
     
     # Reorder metadata based on sorted indices
     sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
     sorted_sf = df_split['SF'].values[sorted_indices]
     
     # Save embeddings
-    output_file = output_dir / f'esm2_embeddings_{split_name}.npz'
+    model_type = "faesm2" if use_flash_attention else "esm2"
+    output_file = output_dir / f'{model_type}_embeddings_{split_name}.npz'
     np.savez_compressed(output_file, embeddings=embeddings)
     
     # Save metadata (sequence IDs and labels)
+    metadata_file = output_dir / f'labels_{split_name.capitalize()}_{model_type}.csv'
     metadata_df = pd.DataFrame({
         'sequence_id': sorted_sequence_ids,
         'SF': sorted_sf
     })
-    metadata_file = output_dir / f'labels_{split_name.capitalize()}_esm.csv'
     metadata_df.to_csv(metadata_file, index=False)
     
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
@@ -97,6 +111,8 @@ def main():
                         help='Batch size for embedding generation (default: 64)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
+    parser.add_argument('--flash-attention', '-f', action='store_true',
+                        help='Use Flash Attention-enabled ESM implementation (FAESM) for faster processing')
     
     args = parser.parse_args()
     
@@ -105,8 +121,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load model and tokenizer
-    print("Loading ESM-2 model (650M parameters)...")
-    model, tokenizer, device = get_ESM_model()
+    model_type = "Flash Attention ESM-2" if args.flash_attention else "ESM-2"
+    print(f"Loading {model_type} model (650M parameters)...")
+    model, tokenizer, device = get_ESM_model(use_flash_attention=args.flash_attention)
     
     # Load the full dataset
     print(f"Loading data from {args.input}...")
@@ -118,7 +135,8 @@ def main():
     for split in splits_to_process:
         df_split = df[df['split'] == split].reset_index(drop=True)
         if len(df_split) > 0:
-            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.batch_size)
+            process_split_data(df_split, split, output_dir, model, tokenizer, device, 
+                              args.batch_size, args.flash_attention)
         else:
             print(f"Warning: No data found for split '{split}'. Skipping.")
 
