@@ -31,18 +31,31 @@ def get_embeddings(model, sequences, device, batch_size):
     with torch.inference_mode():  # More efficient than no_grad for inference
         for i in tqdm(range(0, len(sequences), batch_size)):
             batch_sequences = sequences[i:i + batch_size]
+            
+            # Process entire batch at once
+            tokenized_batch = model.tokenizer(batch_sequences, return_tensors="pt", padding=True, truncation=True, max_length=1024)
+            tokenized_batch = {k: v.to(device) for k, v in tokenized_batch.items()}
+            
+            # Get model outputs for the entire batch
+            outputs = model(**tokenized_batch)
+            
+            # Extract per-protein embeddings
+            attention_mask = tokenized_batch.get('attention_mask', None)
             batch_embeddings = []
             
-            for seq in batch_sequences:
-                # Process each sequence individually to avoid padding issues
-                input_ids = model.tokenizer([seq], return_tensors="pt").to(device)["input_ids"]
+            # Calculate mean embeddings for each sequence in the batch
+            for j, (seq, attn_mask) in enumerate(zip(batch_sequences, attention_mask)):
+                seq_len = attn_mask.sum().item()
                 
-                # Get model outputs
-                outputs = model(input_ids)
+                if use_flash_attention:
+                    # For FAESM, outputs is a dict, so use dictionary access
+                    seq_emb = outputs['last_hidden_state'][j, 1:seq_len-1]
+                else:
+                    # For standard ESM-2
+                    seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
                 
-                # Extract per-protein embedding (mean of token embeddings)
-                # This ensures we only average over actual sequence tokens (not padding)
-                per_protein_emb = outputs.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
+                # Mean of all token embeddings for the protein
+                per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
                 batch_embeddings.append(per_protein_emb)
             
             all_embeddings.extend(batch_embeddings)
