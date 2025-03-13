@@ -7,7 +7,7 @@ from pathlib import Path
 import argparse
 
 # Load ESM-2 model (650M parameters)
-def get_ESM_model(use_half_precision=True, use_flash_attention=False):
+def get_ESM_model(use_half_precision=True, use_flash_attention=True):
     model_name = "facebook/esm2_t33_650M_UR50D"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -30,7 +30,7 @@ def get_ESM_model(use_half_precision=True, use_flash_attention=False):
     return model, tokenizer, device
 
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention=False):
+def get_embeddings(model, tokenizer, sequences, device, batch_size, use_flash_attention=True):
     """Get ESM-2 embeddings for a list of sequences"""
     all_embeddings = []
     

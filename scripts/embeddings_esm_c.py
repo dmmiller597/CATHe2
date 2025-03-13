@@ -106,7 +106,7 @@ def main():
     
     # Load model
     print("Loading ESM-C model...")
-    client, device = get_ESM_model(force_cpu=True)
+    client, device = get_ESM_model(force_cpu=False)
     
     # Load the full dataset
     print(f"Loading data from {args.input}...")
