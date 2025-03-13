@@ -54,7 +54,7 @@ class CATHeClassifier(pl.LightningModule):
         # Define metrics - for both training and evaluation
         metrics = {
             "acc": Accuracy(task="multiclass", num_classes=num_classes),
-            "balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
+            #"balanced_acc": Accuracy(task="multiclass", num_classes=num_classes, average='macro'),
         }
         
         # Streamlined metrics approach
@@ -101,7 +101,7 @@ class CATHeClassifier(pl.LightningModule):
         
         # Log with less frequency
         if batch_idx % 50 == 0:  # Adjust logging frequency as needed
-            self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+            self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=False)
         
         return loss
 
@@ -135,7 +135,7 @@ class CATHeClassifier(pl.LightningModule):
             {
                 "val/loss": val_loss,
                 "val/acc": metrics["acc"],
-                "val/balanced_acc": metrics["balanced_acc"]
+                #"val/balanced_acc": metrics["balanced_acc"]
             },
             prog_bar=True,
             sync_dist=True
