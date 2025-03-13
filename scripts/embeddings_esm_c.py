@@ -33,26 +33,23 @@ def get_embeddings(model, sequences, device, batch_size):
             batch_sequences = sequences[i:i + batch_size]
             
             # Process entire batch at once
+            # ESM-C expects input_ids directly, not keyword arguments
             tokenized_batch = model.tokenizer(batch_sequences, return_tensors="pt", padding=True, truncation=True, max_length=1024)
-            tokenized_batch = {k: v.to(device) for k, v in tokenized_batch.items()}
+            input_ids = tokenized_batch["input_ids"].to(device)
+            attention_mask = tokenized_batch["attention_mask"].to(device)
             
             # Get model outputs for the entire batch
-            outputs = model(**tokenized_batch)
+            outputs = model(input_ids)  # ESM-C expects just input_ids
             
-            # Extract per-protein embeddings
-            attention_mask = tokenized_batch.get('attention_mask', None)
             batch_embeddings = []
             
             # Calculate mean embeddings for each sequence in the batch
-            for j, (seq, attn_mask) in enumerate(zip(batch_sequences, attention_mask)):
-                seq_len = attn_mask.sum().item()
+            for j in range(len(batch_sequences)):
+                # Get sequence length (excluding padding)
+                seq_len = attention_mask[j].sum().item()
                 
-                if use_flash_attention:
-                    # For FAESM, outputs is a dict, so use dictionary access
-                    seq_emb = outputs['last_hidden_state'][j, 1:seq_len-1]
-                else:
-                    # For standard ESM-2
-                    seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                # Extract embeddings for sequence tokens (excluding first and last special tokens)
+                seq_emb = outputs.embeddings[j, 1:seq_len-1]
                 
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
