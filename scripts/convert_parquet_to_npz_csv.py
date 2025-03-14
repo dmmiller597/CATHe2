@@ -16,7 +16,7 @@ def convert_parquet_to_npz_csv(input_dir, output_dir, splits=None):
         splits = ['train', 'val', 'test']
     
     # Add progress bar for splits
-    for split in tqdm(splits, desc="Processing splits"):
+    for split in tqdm(splits, desc="Processing splits", position=0, leave=True):
         print(f"\nProcessing {split} split...")
         parquet_file = input_dir / f'prot_t5_data_{split}.parquet'
         
@@ -31,8 +31,13 @@ def convert_parquet_to_npz_csv(input_dir, output_dir, splits=None):
         # Extract embeddings as numpy array with progress bar
         print("Extracting embeddings...")
         embeddings_list = []
-        for embedding in tqdm(df['embedding'].values, desc=f"Processing {split} embeddings"):
-            embeddings_list.append(embedding)
+        
+        # Configure tqdm to show progress within this split
+        with tqdm(total=len(df), desc=f"Processing {split} embeddings", position=1, leave=True) as pbar:
+            for i, embedding in enumerate(df['embedding'].values):
+                embeddings_list.append(embedding)
+                pbar.update(1)
+                
         embeddings = np.stack(embeddings_list)
         
         # Extract metadata
