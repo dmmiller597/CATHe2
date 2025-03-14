@@ -39,6 +39,17 @@ def get_embeddings(model, sequences, device, batch_size):
             # Get model outputs for the entire batch
             outputs = model(input_ids)  # ESM-C expects just input_ids
             
+            # Debug print statements to understand the output structure
+            if i == 0:
+                print(f"\nModel output type: {type(outputs)}")
+                print(f"Model output attributes: {dir(outputs)}")
+                if hasattr(outputs, 'hidden_states'):
+                    print("Has hidden_states attribute")
+                if hasattr(outputs, 'embeddings'):
+                    print("Has embeddings attribute")
+                if hasattr(outputs, 'last_hidden_state'):
+                    print("Has last_hidden_state attribute")
+            
             batch_embeddings = []
             
             # Calculate mean embeddings for each sequence in the batch
