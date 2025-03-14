@@ -57,7 +57,6 @@ def get_embeddings(model, sequences, device, batch_size):
                 
                 # Verify embedding dimension
                 if i == 0 and j == 0:
-                    print(f"Protein embedding: {protein_emb}")
                     print(f"\nVerifying protein embedding dimensions: {protein_emb.shape}")
                     print(f"Expected dimension: 960, Actual: {protein_emb.shape[0]}")
                 
