@@ -54,9 +54,14 @@ def get_embeddings(model, sequences, device, batch_size):
                 attention_mask = tokenized_batch["attention_mask"][j].to(device)
                 seq_len = attention_mask.sum().item()
                 
-                # Extract embeddings from sequence_logits instead
-                # The sequence_logits have shape [batch_size, seq_len, hidden_dim]
-                seq_emb = outputs.sequence_logits[j, 1:seq_len-1]  # Skip special tokens
+                # Use embeddings instead of sequence_logits to get 960-dim vectors
+                # ESM-C provides embeddings with shape [batch_size, seq_len, 960]
+                seq_emb = outputs.embeddings[j, 1:seq_len-1]  # Skip special tokens
+                
+                # Verify embedding dimension
+                if i == 0 and j == 0:
+                    print(f"\nVerifying token embedding dimensions: {seq_emb.shape}")
+                    print(f"Expected dimension: 960, Actual: {seq_emb.size(-1)}")
                 
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
@@ -71,6 +76,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 print(f"Shape: {first_emb.shape}")
                 print(f"First few values: {first_emb[:5]}")
                 print(f"Stats - Min: {np.min(first_emb):.4f}, Max: {np.max(first_emb):.4f}, Mean: {np.mean(first_emb):.4f}")
+                print(f"Is embedding 960-dimensional? {'Yes' if first_emb.shape[0] == 960 else 'No'}")
     
     return np.array(all_embeddings), sorted_indices
 
