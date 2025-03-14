@@ -68,7 +68,7 @@ def main(cfg: DictConfig) -> None:
     data_dir = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir
     data_module = CATHeDataModule(
         data_dir=data_dir,
-        **{k: v for k, v in cfg.data.items() if k != "data_dir"},
+        **{k: v for k, v in cfg.data.items() if k not in ["data_dir", "embedding_dim"]},
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers
     )
