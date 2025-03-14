@@ -42,15 +42,23 @@ def get_embeddings(model, sequences, device, batch_size):
                 single_output = model(input_ids)
                 
                 # It appears ESM-C returns sequence-level embeddings directly
-                embedding = single_output.embeddings[0].cpu().numpy()
+                # Instead of just taking first position embedding, let's average across all positions
+                # ESM-C might have special tokens at start/end, typically positions 0 and last are special tokens
+                # Exclude these from the average to get the actual protein representation
+                
+                # Average all token embeddings (excluding possible special tokens)
+                # For safety, we use positions 1:-1 to exclude potential special tokens
+                embedding = single_output.embeddings[1:-1].mean(dim=0).cpu().numpy()
                 
                 # Debugging for first few sequences
                 if i == 0 and j < 3:
                     print(f"\nSequence {j} stats:")
                     print(f"  Original sequence length: {len(batch_sequences[j])}")
-                    print(f"  Embeddings[0] shape: {embedding.shape}")
+                    print(f"  averaged embedding shape: {embedding.shape}")
                     print(f"  Example values: {embedding[:5]}")  # First 5 values
                     print(f"  Embeddings shape: {single_output.embeddings.shape}")
+                    print(f"  Embeddings[0] shape: {single_output.embeddings[0].shape}")
+                    print(f"  Embeddings[1] shape: {single_output.embeddings[1].shape}")
                     print(f"  sequence_logits shape: {single_output.sequence_logits.shape}")
 
 
