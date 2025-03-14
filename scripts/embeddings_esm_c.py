@@ -32,58 +32,28 @@ def get_embeddings(model, sequences, device, batch_size):
         for i in tqdm(range(0, len(sequences), batch_size)):
             batch_sequences = sequences[i:i + batch_size]
             
-            # Process entire batch at once
-            tokenized_batch = model.tokenizer(batch_sequences, return_tensors="pt", padding=True, truncation=True, max_length=1024)
-            input_ids = tokenized_batch["input_ids"].to(device)
-            
-            # Get model outputs for the entire batch
-            outputs = model(input_ids)  # ESM-C expects just input_ids
-
-            if i == 0:
-                print(f"Model output embeddings shape: {outputs.embeddings.shape}")
-                print(f"Model output embeddings: {outputs.embeddings}")
-                print(f"Model output embeddings type: {type(outputs.embeddings)}")
-
+            # Process each sequence individually to ensure clean embeddings
             batch_embeddings = []
-            
-            # Calculate mean embeddings for each sequence in the batch
             for j in range(len(batch_sequences)):
-                # Get attention mask for determining sequence length (excluding padding)
-                attention_mask = tokenized_batch["attention_mask"][j].to(device)
-                seq_len = attention_mask.sum().item()
+                # Process single sequence to get its embedding
+                single_sequence = [batch_sequences[j]]
+                tokenized = model.tokenizer(single_sequence, return_tensors="pt", padding=True, truncation=True, max_length=1024)
+                input_ids = tokenized["input_ids"].to(device)
+                single_output = model(input_ids)
                 
-                # Extract the embedding for this sequence from the batch
-                # Run the model on just this one sequence to get its embeddings
-                single_input_ids = tokenized_batch["input_ids"][j:j+1].to(device)
-                single_output = model(single_input_ids)
+                # It appears ESM-C returns sequence-level embeddings directly
+                embedding = single_output.embeddings[0].cpu().numpy()
                 
-                # Get embeddings for this sequence
-                seq_embeddings = single_output.embeddings[0].cpu()
-                
-                # Verify embedding dimension
-                if i == 0 and j == 0:
-                    print(f"\nVerifying protein embedding dimensions: {seq_embeddings.shape}")
-                    print(f"Expected embedding dimension: 960, Actual: {seq_embeddings.shape[1]}")
-                
-                # Use attention mask to get only the valid token embeddings (non-padding)
-                valid_indices = attention_mask.cpu().bool()
-                valid_embeddings = seq_embeddings[valid_indices]
-                
-                # Average the embeddings across tokens
-                mean_embedding = valid_embeddings.mean(dim=0).numpy()
-                
-                # Debug information for first few sequences
+                # Debugging for first few sequences
                 if i == 0 and j < 3:
                     print(f"\nSequence {j} stats:")
                     print(f"  Original sequence length: {len(batch_sequences[j])}")
-                    print(f"  Tokenized sequence length (with special tokens): {seq_len}")
-                    print(f"  Valid token count used for averaging: {valid_embeddings.shape[0]}")
-                    print(f"  Final embedding shape after averaging: {mean_embedding.shape}")
+                    print(f"  Embedding shape: {embedding.shape}")
+                    print(f"  Example values: {embedding[:5]}")  # First 5 values
                 
-                batch_embeddings.append(mean_embedding)
+                batch_embeddings.append(embedding)
             
             all_embeddings.extend(batch_embeddings)
-            
     
     return np.array(all_embeddings), sorted_indices
 
