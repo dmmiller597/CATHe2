@@ -39,17 +39,6 @@ def get_embeddings(model, sequences, device, batch_size):
             # Get model outputs for the entire batch
             outputs = model(input_ids)  # ESM-C expects just input_ids
             
-            # Debug print statements to understand the output structure
-            if i == 0:
-                print(f"\nModel output type: {type(outputs)}")
-                print(f"Model output attributes: {dir(outputs)}")
-                if hasattr(outputs, 'hidden_states'):
-                    print("Has hidden_states attribute")
-                if hasattr(outputs, 'embeddings'):
-                    print("Has embeddings attribute")
-                if hasattr(outputs, 'last_hidden_state'):
-                    print("Has last_hidden_state attribute")
-            
             batch_embeddings = []
             
             # Calculate mean embeddings for each sequence in the batch
@@ -59,7 +48,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 seq_len = attention_mask.sum().item()
                 
                 # Extract embeddings for sequence tokens (excluding first and last special tokens)
-                seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
+                seq_emb = outputs.embeddings[j, 1:seq_len-1]
                 
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
