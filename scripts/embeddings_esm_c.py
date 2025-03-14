@@ -33,7 +33,6 @@ def get_embeddings(model, sequences, device, batch_size):
             batch_sequences = sequences[i:i + batch_size]
             
             # Process entire batch at once
-            # Match the README example more closely
             tokenized_batch = model.tokenizer(batch_sequences, return_tensors="pt", padding=True, truncation=True, max_length=1024)
             input_ids = tokenized_batch["input_ids"].to(device)
             
@@ -49,7 +48,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 seq_len = attention_mask.sum().item()
                 
                 # Extract embeddings for sequence tokens (excluding first and last special tokens)
-                seq_emb = outputs.embeddings[j, 1:seq_len-1]
+                seq_emb = outputs.last_hidden_state[j, 1:seq_len-1]
                 
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
