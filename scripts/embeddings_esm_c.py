@@ -53,19 +53,23 @@ def get_embeddings(model, sequences, device, batch_size):
                 seq_len = attention_mask.sum().item()
                 
                 # Extract the embedding for this sequence from the batch
-                protein_emb = outputs.embeddings[j].cpu().numpy()
+                # Run the model on just this one sequence to get its embeddings
+                single_input_ids = tokenized_batch["input_ids"][j:j+1].to(device)
+                single_output = model(single_input_ids)
+                
+                # Get embeddings for this sequence
+                seq_embeddings = single_output.embeddings[0].cpu()
                 
                 # Verify embedding dimension
                 if i == 0 and j == 0:
-                    print(f"\nVerifying protein embedding dimensions: {protein_emb.shape}")
-                    print(f"Expected dimension: 960, Actual: {protein_emb.shape[0]}")
+                    print(f"\nVerifying protein embedding dimensions: {seq_embeddings.shape}")
+                    print(f"Expected embedding dimension: 960, Actual: {seq_embeddings.shape[1]}")
                 
-                # Average embeddings over the actual sequence length (excluding padding)
-                # Get valid token positions based on attention mask (1s indicate tokens, 0s are padding)
-                seq_positions = attention_mask.bool()
-                # Extract embeddings for valid tokens only (non-padding)
-                valid_embeddings = outputs.embeddings[j, seq_positions, :].cpu()
-                # Calculate mean over token dimension to get a single protein representation
+                # Use attention mask to get only the valid token embeddings (non-padding)
+                valid_indices = attention_mask.cpu().bool()
+                valid_embeddings = seq_embeddings[valid_indices]
+                
+                # Average the embeddings across tokens
                 mean_embedding = valid_embeddings.mean(dim=0).numpy()
                 
                 # Debug information for first few sequences
