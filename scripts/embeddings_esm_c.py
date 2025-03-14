@@ -60,7 +60,23 @@ def get_embeddings(model, sequences, device, batch_size):
                     print(f"\nVerifying protein embedding dimensions: {protein_emb.shape}")
                     print(f"Expected dimension: 960, Actual: {protein_emb.shape[0]}")
                 
-                batch_embeddings.append(protein_emb)
+                # Average embeddings over the actual sequence length (excluding padding)
+                # Get valid token positions based on attention mask (1s indicate tokens, 0s are padding)
+                seq_positions = attention_mask.bool()
+                # Extract embeddings for valid tokens only (non-padding)
+                valid_embeddings = outputs.embeddings[j, seq_positions, :].cpu()
+                # Calculate mean over token dimension to get a single protein representation
+                mean_embedding = valid_embeddings.mean(dim=0).numpy()
+                
+                # Debug information for first few sequences
+                if i == 0 and j < 3:
+                    print(f"\nSequence {j} stats:")
+                    print(f"  Original sequence length: {len(batch_sequences[j])}")
+                    print(f"  Tokenized sequence length (with special tokens): {seq_len}")
+                    print(f"  Valid token count used for averaging: {valid_embeddings.shape[0]}")
+                    print(f"  Final embedding shape after averaging: {mean_embedding.shape}")
+                
+                batch_embeddings.append(mean_embedding)
             
             all_embeddings.extend(batch_embeddings)
             
