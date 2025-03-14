@@ -39,6 +39,10 @@ def get_embeddings(model, sequences, device, batch_size):
             # Get model outputs for the entire batch
             outputs = model(input_ids)  # ESM-C expects just input_ids
             
+            if i == 0:
+                print(outputs.sequence_logits.shape)
+                print(outputs.embeddings.shape)
+
             batch_embeddings = []
             
             # Calculate mean embeddings for each sequence in the batch
