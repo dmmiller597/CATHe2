@@ -51,7 +51,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 embedding = single_output.embeddings[1:-1].mean(dim=0).cpu().numpy()
                 
                 # Debugging for first few sequences
-                if i == 0 and j < 3:
+                if i == 0 and j == 1:
                     print(f"\nSequence {j} stats:")
                     print(f"  Original sequence length: {len(batch_sequences[j])}")
                     print(f"  averaged embedding shape: {embedding.shape}")
