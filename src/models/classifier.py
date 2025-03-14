@@ -184,13 +184,13 @@ class CATHeClassifier(pl.LightningModule):
         # Only calculate F1 if requested (expensive for 3000+ classes)
         try:
             # Use macro averaging to handle class imbalance
-            metrics["f1"] = f1_score(all_targets, all_preds)
+            metrics["f1"] = f1_score(all_targets, all_preds, average='macro')
         except:
             self.log("test/f1", "failed due to memory constraints", sync_dist=True)
         
         # Try to calculate MCC (can be memory intensive)
         try:
-            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds)
+            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds, average='macro')
         except:
             self.log("test/mcc_calculation", "failed due to memory constraints", sync_dist=True)
         
