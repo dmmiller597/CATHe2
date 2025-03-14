@@ -41,7 +41,10 @@ def get_embeddings(model, sequences, device, batch_size):
             
             if i == 0:
                 print(outputs.sequence_logits.shape)
-                print(outputs.embeddings.shape)
+                if hasattr(outputs, 'embeddings'):
+                    print(f"Output embeddings shape: {outputs.embeddings.shape}")
+                else:
+                    print("Model outputs keys:", [k for k in outputs.__dict__.keys() if not k.startswith('_')])
 
             batch_embeddings = []
             
@@ -51,8 +54,9 @@ def get_embeddings(model, sequences, device, batch_size):
                 attention_mask = tokenized_batch["attention_mask"][j].to(device)
                 seq_len = attention_mask.sum().item()
                 
-                # Extract embeddings for sequence tokens (excluding first and last special tokens)
-                seq_emb = outputs.embeddings[j, 1:seq_len-1]
+                # Extract embeddings from sequence_logits instead
+                # The sequence_logits have shape [batch_size, seq_len, hidden_dim]
+                seq_emb = outputs.sequence_logits[j, 1:seq_len-1]  # Skip special tokens
                 
                 # Mean of all token embeddings for the protein
                 per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
@@ -65,14 +69,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 print("\nFirst batch embedding example:")
                 first_emb = batch_embeddings[0]
                 print(f"Shape: {first_emb.shape}")
-                
-                # Safely print the embedding values
-                if hasattr(first_emb, 'shape') and first_emb.shape != ():  # If not a scalar
-                    print(f"First few values: {first_emb[:5]}")
-                else:
-                    print(f"Value (scalar): {first_emb}")
-                
-                # Use numpy functions that work with both scalars and arrays
+                print(f"First few values: {first_emb[:5]}")
                 print(f"Stats - Min: {np.min(first_emb):.4f}, Max: {np.max(first_emb):.4f}, Mean: {np.mean(first_emb):.4f}")
     
     return np.array(all_embeddings), sorted_indices
