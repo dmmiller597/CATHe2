@@ -48,8 +48,13 @@ def get_embeddings(model, sequences, device, batch_size):
                 if i == 0 and j < 3:
                     print(f"\nSequence {j} stats:")
                     print(f"  Original sequence length: {len(batch_sequences[j])}")
-                    print(f"  Embedding shape: {embedding.shape}")
+                    print(f"  Embeddings[0] shape: {embedding.shape}")
                     print(f"  Example values: {embedding[:5]}")  # First 5 values
+                    print(f"  Embeddings shape: {single_output.embeddings.shape}")
+                    print(f"  sequence_logits shape: {single_output.sequence_logits.shape}")
+
+
+
                 
                 batch_embeddings.append(embedding)
             
