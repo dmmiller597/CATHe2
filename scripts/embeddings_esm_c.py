@@ -54,18 +54,16 @@ def get_embeddings(model, sequences, device, batch_size):
                 attention_mask = tokenized_batch["attention_mask"][j].to(device)
                 seq_len = attention_mask.sum().item()
                 
-                # Use embeddings instead of sequence_logits to get 960-dim vectors
-                # ESM-C provides embeddings with shape [batch_size, seq_len, 960]
-                seq_emb = outputs.embeddings[j, 1:seq_len-1]  # Skip special tokens
+                # The model gives protein embeddings directly - don't try to skip tokens
+                # Extract the embedding for this sequence from the batch
+                protein_emb = outputs.embeddings[j].cpu().numpy()
                 
                 # Verify embedding dimension
                 if i == 0 and j == 0:
-                    print(f"\nVerifying token embedding dimensions: {seq_emb.shape}")
-                    print(f"Expected dimension: 960, Actual: {seq_emb.size(-1)}")
+                    print(f"\nVerifying protein embedding dimensions: {protein_emb.shape}")
+                    print(f"Expected dimension: 960, Actual: {protein_emb.shape[0]}")
                 
-                # Mean of all token embeddings for the protein
-                per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
-                batch_embeddings.append(per_protein_emb)
+                batch_embeddings.append(protein_emb)
             
             all_embeddings.extend(batch_embeddings)
             
@@ -74,7 +72,7 @@ def get_embeddings(model, sequences, device, batch_size):
                 print("\nFirst batch embedding example:")
                 first_emb = batch_embeddings[0]
                 print(f"Shape: {first_emb.shape}")
-                print(f"First few values: {first_emb[:5]}")
+                print(f"First few values: {first_emb[:5] if first_emb.shape[0] >= 5 else first_emb}")
                 print(f"Stats - Min: {np.min(first_emb):.4f}, Max: {np.max(first_emb):.4f}, Mean: {np.mean(first_emb):.4f}")
                 print(f"Is embedding 960-dimensional? {'Yes' if first_emb.shape[0] == 960 else 'No'}")
     
