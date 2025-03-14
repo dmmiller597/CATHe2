@@ -44,17 +44,18 @@ def convert_parquet_to_npz_csv(input_dir, output_dir, splits=None):
         metadata_df = df[['sequence_id', 'SF']]
         
         # Save embeddings as npz
-        print("Saving embeddings to npz...")
+        print(f"Saving embeddings to npz... (this may take several minutes for large datasets)")
         npz_file = output_dir / f'protT5_embeddings_{split}.npz'
         np.savez_compressed(npz_file, embeddings=embeddings)
+        print(f"Finished saving embeddings to {npz_file}")
         
         # Save metadata as csv
+        print(f"Saving metadata to csv...")
         csv_file = output_dir / f'protT5_labels_{split}.csv'
         metadata_df.to_csv(csv_file, index=False)
+        print(f"Finished saving metadata to {csv_file}")
         
         print(f"Saved {split} embeddings shape: {embeddings.shape}")
-        print(f"Saved embeddings to {npz_file}")
-        print(f"Saved metadata to {csv_file}")
 
 def main():
     parser = argparse.ArgumentParser(description='Convert parquet embeddings to npz+csv format')
