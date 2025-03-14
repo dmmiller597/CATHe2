@@ -6,6 +6,7 @@ data:
 
 model:
   # Architecture
+  embedding_dim: ${data.embedding_dim}  # Gets value from selected data config
   hidden_sizes: [1024, 1024, 1024]
   dropout: 0.3
   

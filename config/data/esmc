@@ -6,7 +6,4 @@ data:
   train_labels: "TED/s30/esmc/esmc_labels_train.csv"
   val_labels: "TED/s30/esmc/esmc_labels_val.csv"
   test_labels: "TED/s30/esmc/esmc_labels_test.csv"
-
-model:
-  # Architecture
   embedding_dim: 960
