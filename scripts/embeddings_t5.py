@@ -53,7 +53,7 @@ def get_embeddings(model, tokenizer, sequences, device, batch_size):
     
     return np.array(all_embeddings), sorted_indices
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=16):
+def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
@@ -68,7 +68,7 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     sorted_sf = df_split['SF'].values[sorted_indices]
     
     # Save embeddings
-    output_file = output_dir / f'prot_t5_embeddings_{split_name}.npz'
+    output_file = output_dir / f'protT5_embeddings_{split_name}.npz'
     np.savez_compressed(output_file, embeddings=embeddings)
     
     # Save metadata (sequence IDs and labels)
@@ -76,7 +76,7 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
         'sequence_id': sorted_sequence_ids,
         'SF': sorted_sf
     })
-    metadata_file = output_dir / f'Y_{split_name.capitalize()}_SF.csv'
+    metadata_file = output_dir / f'protT5_labels_{split_name}.csv'
     metadata_df.to_csv(metadata_file, index=False)
     
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
@@ -89,10 +89,10 @@ def main():
     parser = argparse.ArgumentParser(description='Generate ProtT5 embeddings for protein sequences')
     parser.add_argument('--input', '-i', type=str, default='data/TED/s30/s30_full.parquet',
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
-    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/embeddings',
-                        help='Output directory for embeddings (default: data/TED/s30/embeddings)')
-    parser.add_argument('--batch-size', '-b', type=int, default=16,
-                        help='Batch size for embedding generation (default: 16)')
+    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/protT5',
+                        help='Output directory for embeddings (default: data/TED/s30/protT5)')
+    parser.add_argument('--batch-size', '-b', type=int, default=64,
+                        help='Batch size for embedding generation (default: 64)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
