@@ -1,12 +1,8 @@
-data:
-  data_dir: "data"
-  train_embeddings: "TED/s30/protT5/protT5_embeddings_train.npz"
-  val_embeddings: "TED/s30/protT5/protT5_embeddings_val.npz"
-  test_embeddings: "TED/s30/protT5/protT5_embeddings_test.npz"
-  train_labels: "TED/s30/protT5/protT5_labels_train.csv"
-  val_labels: "TED/s30/protT5/protT5_labels_val.csv"
-  test_labels: "TED/s30/protT5/protT5_labels_test.csv"
-
-model:
-  # Architecture
-  embedding_dim: 1024
+data_dir: "data"
+train_embeddings: "TED/s30/protT5/protT5_embeddings_train.npz"
+val_embeddings: "TED/s30/protT5/protT5_embeddings_val.npz"
+test_embeddings: "TED/s30/protT5/protT5_embeddings_test.npz"
+train_labels: "TED/s30/protT5/protT5_labels_train.csv"
+val_labels: "TED/s30/protT5/protT5_labels_val.csv"
+test_labels: "TED/s30/protT5/protT5_labels_test.csv"
+embedding_dim: 1024
