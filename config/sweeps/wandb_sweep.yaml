@@ -18,21 +18,20 @@ wandb:
   project: cathe_optimization
   entity: dmmiller597  # Your wandb username or team name
   sweep:
-    id: null  # This will be filled by the sweep initialization
     method: bayes  # Options: grid, random, bayes
     metric:
-      name: val/balanced_acc  # Replace with your actual metric name
-      goal: maximize  # Use "minimize" for loss, "maximize" for accuracy/f1
+      name: val/balanced_acc
+      goal: maximize
     
     # Parameters to optimize (with their search spaces)
     parameters:
       # Model parameters
       model.learning_rate:
-        distribution: log_uniform
+        distribution: log_uniform_values  # Changed from log_uniform
         min: 0.00001
         max: 0.001
       model.weight_decay:
-        distribution: log_uniform
+        distribution: log_uniform_values  # Changed from log_uniform
         min: 0.000001
         max: 0.0001
       model.dropout:
