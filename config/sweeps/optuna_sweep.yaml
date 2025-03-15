@@ -27,6 +27,13 @@ hydra:
     # Random seed for reproducibility
     sampler:
       seed: 42
+    
+    # Pruner configuration (moved to this level)
+    pruner:
+      _target_: optuna.pruners.MedianPruner
+      n_warmup_steps: 5
+      n_startup_trials: 5
+      interval_steps: 1
       
     # Parameters to optimize (with their search spaces)
     params:
@@ -39,10 +46,3 @@ hydra:
       
       # Training parameters
       training.batch_size: choice(128, 256, 512)
-      
-    # Pruning configuration (stops unpromising trials early)
-    pruner:
-      name: median
-      n_warmup_steps: 5
-      n_startup_trials: 5
-      interval_steps: 1
