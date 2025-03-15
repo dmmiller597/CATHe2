@@ -9,10 +9,9 @@ defaults:
 hydra:
   mode: MULTIRUN
   
-  # Customize output directory for multirun
-  # This puts each run in a separate numbered subdirectory
+  # Customize output directory for multirun - using a fixed path
   sweep:
-    dir: ${training.output_dir}/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
     subdir: ${hydra.job.num}
   
   # Optuna sweeper configuration
