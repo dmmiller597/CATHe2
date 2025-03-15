@@ -30,8 +30,8 @@ hydra:
     # Parameters to optimize (with their search spaces)
     params:
       # Model parameters
-      model.learning_rate: interval(1e-5, 1e-3, log=true)
-      model.weight_decay: interval(1e-6, 1e-4, log=true)
+      model.learning_rate: tag(log, interval(1e-5, 1e-3))
+      model.weight_decay: tag(log, interval(1e-6, 1e-4))
       model.dropout: interval(0.1, 0.5)
       model.hidden_sizes.0: choice(512, 768, 1024, 2048)
       model.hidden_sizes.1: choice(512, 768, 1024, 2048)
