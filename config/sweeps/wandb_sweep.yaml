@@ -18,6 +18,7 @@ wandb:
   project: cathe_optimization
   entity: dmmiller597  # Your wandb username or team name
   sweep:
+    id: null  # This will be filled by the sweep initialization
     method: bayes  # Options: grid, random, bayes
     metric:
       name: val/balanced_acc  # Replace with your actual metric name
