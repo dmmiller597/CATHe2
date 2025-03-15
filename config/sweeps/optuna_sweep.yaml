@@ -20,7 +20,7 @@ hydra:
     # Study configuration
     study_name: cathe_optimization
     storage: sqlite:///optuna_studies.db
-    direction: minimize  # Use "minimize" for loss, "maximize" for accuracy/f1
+    direction: maximize  # Use "minimize" for loss, "maximize" for accuracy/f1
     n_trials: 20  # Total number of trials to run
     n_jobs: 1     # Number of parallel jobs (increase if multiple GPUs)
     
