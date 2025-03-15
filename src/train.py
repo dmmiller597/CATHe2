@@ -55,7 +55,7 @@ def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger) -> pl.Trainer:
         default_root_dir=cfg.training.output_dir
     )
 
-@hydra.main(config_path="../config", config_name="config", version_base="1.2")
+@hydra.main(config_path="../config", config_name="ted_s30", version_base="1.2")
 def main(cfg: DictConfig) -> None:
     """Complete training workflow with automatic setup"""
     # Reproducibility
