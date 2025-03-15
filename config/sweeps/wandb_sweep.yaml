@@ -1,0 +1,48 @@
+# @package _global_
+
+# Base configuration
+defaults:
+  - override /hydra/launcher: joblib
+
+# Enable multirun mode
+hydra:
+  mode: MULTIRUN
+  
+  # Customize output directory for multirun
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Wandb sweep configuration
+wandb:
+  project: cathe_optimization
+  entity: dmmiller597  # Your wandb username or team name
+  sweep:
+    method: bayes  # Options: grid, random, bayes
+    metric:
+      name: val/balanced_acc  # Replace with your actual metric name
+      goal: maximize  # Use "minimize" for loss, "maximize" for accuracy/f1
+    
+    # Parameters to optimize (with their search spaces)
+    parameters:
+      # Model parameters
+      model.learning_rate:
+        distribution: log_uniform
+        min: 0.00001
+        max: 0.001
+      model.weight_decay:
+        distribution: log_uniform
+        min: 0.000001
+        max: 0.0001
+      model.dropout:
+        distribution: uniform
+        min: 0.1
+        max: 0.5
+      model.hidden_sizes.0:
+        values: [512, 768, 1024, 2048]
+      model.hidden_sizes.1:
+        values: [512, 768, 1024, 2048]
+      
+      # Training parameters
+      training.batch_size:
+        values: [128, 256, 512] 
