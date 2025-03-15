@@ -185,14 +185,16 @@ class CATHeClassifier(pl.LightningModule):
         try:
             # Use macro averaging to handle class imbalance
             metrics["f1"] = f1_score(all_targets, all_preds, average='macro')
-        except:
-            self.log("test/f1", "failed due to memory constraints", sync_dist=True)
+        except Exception as e:
+            self.print(f"F1 calculation failed: {str(e)}")
         
         # Try to calculate MCC (can be memory intensive)
         try:
-            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds, average='macro')
-        except:
-            self.log("test/mcc_calculation", "failed due to memory constraints", sync_dist=True)
+            # Remove the 'average' parameter - matthews_corrcoef doesn't accept it
+            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds)
+        except Exception as e:
+            # Use self.print instead of self.log for error messages
+            self.print(f"MCC calculation failed: {str(e)}")
         
         # Log all metrics
         for name, value in metrics.items():
