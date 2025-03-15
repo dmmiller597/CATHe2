@@ -7,7 +7,7 @@ defaults:
 
 # Enable multirun mode
 hydra:
-  mode: multirun
+  mode: MULTIRUN
   
   # Customize output directory for multirun
   # This puts each run in a separate numbered subdirectory
