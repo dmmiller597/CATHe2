@@ -27,10 +27,6 @@ parameters:
   # Training parameters
   training.batch_size:
     values: [128, 256, 512] 
-  
-  parameters:
-  dataset:
-    values: [mnist, cifar10]
 
 command:
   - ${env}
