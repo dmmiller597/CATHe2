@@ -9,25 +9,35 @@ metric:
 parameters:
   # Model parameters
   model.learning_rate:
-    distribution: log_uniform_values  # Changed from log_uniform
+    distribution: log_uniform_values
     min: 0.00001
-    max: 0.001
+    max: 0.01  # Wider range since we're effectively disabling the scheduler
   model.weight_decay:
-    distribution: log_uniform_values  # Changed from log_uniform
+    distribution: log_uniform_values
     min: 0.000001
-    max: 0.0001
+    max: 0.001
   model.dropout:
     distribution: uniform
     min: 0.1
     max: 0.5
   model.hidden_sizes.0:
-    values: [512, 768, 1024, 2048]
+    values: [512, 768, 1024]
   model.hidden_sizes.1:
-    values: [512, 768, 1024, 2048]
+    values: [512, 768, 1024]
+  model.hidden_sizes.2:
+    values: [512, 768, 1024]
+  
+  # Disable scheduler by setting factor to 1.0 (no reduction)
+  model.lr_scheduler.factor:
+    value: 1.0
+  model.lr_scheduler.patience:
+    value: 1000  # Very high patience
   
   # Training parameters
   training.batch_size:
-    values: [128, 256, 512] 
+    values: [128, 256, 512]
+  training.early_stopping_patience:
+    values: [3, 5]  # Shorter patience to identify fast convergers
 
 command:
   - ${env}
