@@ -1,5 +1,6 @@
 program: src/train.py
 method: bayes
+project: CATHe
 metric:
   goal: maximize
   name: val/balanced_acc
