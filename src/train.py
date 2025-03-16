@@ -10,9 +10,6 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 import torch
 from pathlib import Path
-import wandb
-import os
-from omegaconf import open_dict
 
 from utils import get_logger, set_seed
 from data.data_module import CATHeDataModule
@@ -61,54 +58,6 @@ def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger) -> pl.Trainer:
 @hydra.main(config_path="../config", config_name="ted_s30", version_base="1.2")
 def main(cfg: DictConfig) -> None:
     """Complete training workflow with automatic setup"""
-    
-    # Check if this is a sweep run
-    if "wandb" in cfg and "sweep" in cfg.wandb:
-        run_sweep_agent(cfg)
-    else:
-        # Your existing training code
-        run_single_training(cfg)
-
-def run_sweep_agent(cfg: DictConfig):
-    """Run as a W&B sweep agent"""
-    # Initialize the sweep agent
-    def sweep_train():
-        # Get a new config from W&B sweep
-        with wandb.init() as run:
-            # Copy the sweep configuration into the Hydra config
-            sweep_config = dict(run.config)
-            
-            # Create a copy of the config that we can modify
-            sweep_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
-            
-            # Update our config with sweep values
-            with open_dict(sweep_cfg):
-                for key, value in sweep_config.items():
-                    # Handle nested parameters (e.g., model.learning_rate)
-                    if "." in key:
-                        parts = key.split(".")
-                        current = sweep_cfg
-                        for part in parts[:-1]:
-                            if part.isdigit():  # Handle list indices like hidden_sizes.0
-                                part = int(part)
-                            current = current[part]
-                        current[parts[-1]] = value
-                    else:
-                        sweep_cfg[key] = value
-            
-            # Run the training with the updated config
-            run_single_training(sweep_cfg, wandb_run=run)
-    
-    # Start the sweep agent
-    wandb.agent(
-        cfg.wandb.sweep.id,
-        function=sweep_train,
-        project=cfg.wandb.project,
-        entity=cfg.wandb.entity
-    )
-
-def run_single_training(cfg: DictConfig, wandb_run=None):
-    """Run a single training with the given config"""
     # Reproducibility
     set_seed(cfg.training.seed)
 
@@ -136,16 +85,13 @@ def run_single_training(cfg: DictConfig, wandb_run=None):
         lr_scheduler=cfg.model.lr_scheduler
     )
     
-    # Wandb Logger Setup - use existing run if provided (for sweeps)
-    if wandb_run:
-        wandb_logger = WandbLogger(experiment=wandb_run)
-    else:
-        wandb_logger = WandbLogger(
-            project="CATHe",
-            save_dir=cfg.training.log_dir,
-            log_model=True,
-            config=OmegaConf.to_container(cfg, resolve=True)
-        )
+    # Wandb Logger Setup
+    wandb_logger = WandbLogger(
+        project="CATHe",
+        save_dir=cfg.training.log_dir,
+        log_model=True,
+        config=OmegaConf.to_container(cfg, resolve=True)
+    )
     
     # Training
     trainer = setup_trainer(cfg, wandb_logger)
@@ -156,9 +102,8 @@ def run_single_training(cfg: DictConfig, wandb_run=None):
     trainer.test(model, data_module, ckpt_path="best")
     log.info("Testing completed - check W&B dashboard for metrics")
     
-    # Only finish the W&B run if we created it (not for sweep agents)
-    if not wandb_run:
-        wandb_logger.experiment.finish()
+    # Finish Wandb run
+    wandb_logger.experiment.finish()
 
 if __name__ == "__main__":
     main() 
