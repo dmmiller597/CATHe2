@@ -132,17 +132,17 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # L2 normalize the output embeddings
         return F.normalize(embeddings, p=2, dim=1)
     
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Perform a training step.
         
         Args:
-            batch: Tuple of (anchor, positive, negative) embeddings
+            batch: Tuple of (anchor, positive, negative, labels) embeddings
             batch_idx: Batch index
             
         Returns:
             Loss value
         """
-        anchor, positive, negative = batch
+        anchor, positive, negative, _ = batch
         
         # Project embeddings
         anchor_proj = self(anchor)
