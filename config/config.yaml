@@ -6,12 +6,12 @@ data:
   train_labels: "filtered/SF_Train_ProtT5_filtered.csv"
   val_labels: "annotations/Y_Val_SF.csv"
   test_labels: "annotations/Y_Test_SF.csv"
-  sampling_beta: 0.999  # Controls class balancing (0=no reweighting, 1=inverse frequency)
+  sampling_beta: 1  # Controls class balancing (0=no reweighting, 1=inverse frequency)
 
 model:
   # Architecture
   embedding_dim: 1024
-  hidden_sizes: [1024]
+  hidden_sizes: [1024, 1024, 1024]
   dropout: 0.3
   
   # Optimization
