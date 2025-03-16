@@ -37,7 +37,7 @@ parameters:
   training.batch_size:
     values: [128, 256, 512]
   training.early_stopping_patience:
-    value: 3  # Shorter patience to identify fast convergers
+    value: 5  # Shorter patience to identify fast convergers
 
 command:
   - ${env}
