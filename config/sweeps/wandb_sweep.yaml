@@ -26,18 +26,12 @@ parameters:
     values: [512, 768, 1024]
   model.hidden_sizes.2:
     values: [512, 768, 1024]
-  
-  # Disable scheduler by setting factor to 1.0 (no reduction)
-  model.lr_scheduler.factor:
-    value: 1.0
-  model.lr_scheduler.patience:
-    value: 1000  # Very high patience
+
   
   # Training parameters
   training.batch_size:
     values: [128, 256, 512]
-  training.early_stopping_patience:
-    value: 5  # Shorter patience to identify fast convergers
+
 
 command:
   - ${env}
