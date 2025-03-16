@@ -26,14 +26,7 @@ class TripletDataset(Dataset):
         try:
             data = np.load(embeddings_path)
             labels_df = pd.read_csv(labels_path)
-            
-            # Handle different embedding formats
-            if 'arr_0' in data:
-                self.embeddings = data['arr_0']
-                log.info("Using arr_0 key format for embeddings")
-            else:
-                self.embeddings = data['embeddings']
-                log.info("Using embeddings key format")
+            self.embeddings = data['embeddings']
                 
             # Get numerical codes for superfamily labels
             self.sf_labels = labels_df['SF'].values
@@ -65,15 +58,8 @@ class TripletDataset(Dataset):
         """Return the number of potential anchor samples."""
         return len(self.embeddings)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Generate a triplet (anchor, positive, negative) from the dataset.
-        
-        Args:
-            idx: Index of the anchor sample
-            
-        Returns:
-            Tuple of (anchor, positive, negative) embeddings
-        """
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """Generate a triplet (anchor, positive, negative) from the dataset."""
         anchor_embedding = self.embeddings[idx]
         anchor_label = self.labels[idx]
         
@@ -86,27 +72,74 @@ class TripletDataset(Dataset):
         else:
             pos_idx = random.choice(pos_indices)
         
-        # Find a negative sample (different class)
+        # Get positive embedding
+        pos_embedding = self.embeddings[pos_idx]
+        
+        # Different negative selection based on mining strategy
         if self.mining_strategy == "random":
+            # Random selection (current implementation)
             neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
             neg_idx = random.choice(self.label_to_indices[neg_label])
-        # elif self.mining_strategy == "semi-hard":
-        #     # Select semi-hard negative (implement distance-based selection)
-        #     # This would require pre-computing distances or using a cache
-        #     # ... semi-hard negative selection logic ...
-        # elif self.mining_strategy == "hard":
-        #     # Select hard negative (closest negative)
-        #     # ... hard negative selection logic ...
+            neg_embedding = self.embeddings[neg_idx]
             
-        
-        # Get embeddings
-        pos_embedding = self.embeddings[pos_idx]
-        neg_embedding = self.embeddings[neg_idx]
+        elif self.mining_strategy == "semi-hard":
+            # Semi-hard mining: select negative that is farther from anchor than positive
+            # but still produces non-zero triplet loss
+            anchor_tensor = torch.tensor(anchor_embedding, dtype=torch.float)
+            pos_tensor = torch.tensor(pos_embedding, dtype=torch.float)
+            pos_dist = torch.sum(torch.square(anchor_tensor - pos_tensor))
+            
+            # Try a limited number of random negatives to find a semi-hard one
+            candidates = []
+            for _ in range(10):  # Try 10 random candidates
+                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
+                neg_idx = random.choice(self.label_to_indices[neg_label])
+                neg_candidate = self.embeddings[neg_idx]
+                neg_tensor = torch.tensor(neg_candidate, dtype=torch.float)
+                neg_dist = torch.sum(torch.square(anchor_tensor - neg_tensor))
+                
+                # Check if this is a semi-hard negative
+                if neg_dist > pos_dist and neg_dist < pos_dist + 1.0:  # 1.0 is margin
+                    candidates.append((neg_idx, neg_dist.item()))
+            
+            if candidates:
+                # Choose a semi-hard negative
+                neg_idx = min(candidates, key=lambda x: x[1])[0]
+            else:
+                # Fallback to random if no semi-hard found
+                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
+                neg_idx = random.choice(self.label_to_indices[neg_label])
+            
+            neg_embedding = self.embeddings[neg_idx]
+            
+        elif self.mining_strategy == "hard":
+            # Hard mining: select closest negative
+            anchor_tensor = torch.tensor(anchor_embedding, dtype=torch.float)
+            
+            # Try a limited number of random negatives to find the hardest one
+            candidates = []
+            for _ in range(20):  # Try 20 random candidates
+                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
+                neg_idx = random.choice(self.label_to_indices[neg_label])
+                neg_candidate = self.embeddings[neg_idx]
+                neg_tensor = torch.tensor(neg_candidate, dtype=torch.float)
+                neg_dist = torch.sum(torch.square(anchor_tensor - neg_tensor)).item()
+                candidates.append((neg_idx, neg_dist))
+            
+            # Choose the hardest (closest) negative
+            neg_idx = min(candidates, key=lambda x: x[1])[0]
+            neg_embedding = self.embeddings[neg_idx]
+        else:
+            # Default to random
+            neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
+            neg_idx = random.choice(self.label_to_indices[neg_label])
+            neg_embedding = self.embeddings[neg_idx]
         
         return (
             torch.tensor(anchor_embedding, dtype=torch.float),
             torch.tensor(pos_embedding, dtype=torch.float),
-            torch.tensor(neg_embedding, dtype=torch.float)
+            torch.tensor(neg_embedding, dtype=torch.float),
+            anchor_label
         )
 
 

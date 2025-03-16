@@ -157,14 +157,14 @@ class ContrastiveCATHeModel(pl.LightningModule):
         
         return loss
     
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Perform a validation step.
         
         Args:
             batch: Tuple of (anchor, positive, negative) embeddings and their labels
             batch_idx: Batch index
         """
-        anchor, positive, negative = batch
+        anchor, positive, negative, labels = batch
         
         # Project embeddings
         anchor_proj = self(anchor)
@@ -179,13 +179,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         
         # Store embeddings for kNN evaluation (using anchors only)
         self.val_embeddings.append(anchor_proj.detach().cpu().numpy())
-        # Get labels from the dataset for anchors (assuming batch indices are sequential)
-        dataset = self.trainer.val_dataloaders[0].dataset
-        start_idx = batch_idx * self.trainer.val_dataloaders[0].batch_size
-        end_idx = start_idx + len(anchor)
-        anchor_indices = list(range(start_idx, end_idx))
-        anchor_labels = [dataset.labels[i % len(dataset)] for i in anchor_indices]
-        self.val_labels.append(np.array(anchor_labels))
+        # Use the labels directly
+        self.val_labels.append(labels.detach().cpu().numpy())
     
     def on_validation_epoch_end(self) -> None:
         """Evaluate embeddings using kNN at the end of validation epoch."""
