@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - data: esmc
+  - data: protT5
 
 data:
   sampling_beta: 1  # Controls class balancing (0=no reweighting, 1=inverse frequency)
