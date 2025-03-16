@@ -87,8 +87,17 @@ class TripletDataset(Dataset):
             pos_idx = random.choice(pos_indices)
         
         # Find a negative sample (different class)
-        neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-        neg_idx = random.choice(self.label_to_indices[neg_label])
+        if self.mining_strategy == "random":
+            neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
+            neg_idx = random.choice(self.label_to_indices[neg_label])
+        # elif self.mining_strategy == "semi-hard":
+        #     # Select semi-hard negative (implement distance-based selection)
+        #     # This would require pre-computing distances or using a cache
+        #     # ... semi-hard negative selection logic ...
+        # elif self.mining_strategy == "hard":
+        #     # Select hard negative (closest negative)
+        #     # ... hard negative selection logic ...
+            
         
         # Get embeddings
         pos_embedding = self.embeddings[pos_idx]
