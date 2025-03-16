@@ -1,0 +1,56 @@
+defaults:
+  - _self_
+  - data: protT5
+
+data:
+  sampling_beta: 0.0  # Not used for contrastive approach
+  mining_strategy: "random"  # Options: random, semi-hard, hard
+
+model:
+  # Architecture
+  embedding_dim: ${data.embedding_dim}
+  projection_dims: [1024, 512]
+  output_dim: 128  # Dimension of the final embedding space
+  dropout: 0.3
+  margin: 1.0  # Margin for triplet loss
+  n_neighbors: 5  # Number of neighbors for kNN evaluation
+  
+  # Optimization
+  learning_rate: 1e-4
+  weight_decay: 5e-5
+
+  # Learning rate scheduler
+  lr_scheduler:
+    monitor: "val/loss"
+    mode: "min"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-8
+
+training:
+  # Training parameters
+  batch_size: 256 
+  max_epochs: 100
+  accumulate_grad_batches: 4
+
+  # Monitoring 
+  monitor_metric: "val/knn_balanced_acc"
+  monitor_mode: "max"
+  early_stopping_patience: 10
+  log_every_n_steps: 50
+  
+  # Hardware configuration
+  num_workers: 4
+  accelerator:
+    float32_matmul_precision: "high"
+    devices: 1
+  
+  # Training options
+  seed: 42
+  gradient_clip_val: 1.0
+  precision: "16-mixed"
+
+  # Output paths
+  output_dir: "outputs_contrastive"
+  checkpoint_dir: "${training.output_dir}/checkpoints"
+  log_dir: "${training.output_dir}/logs" 
