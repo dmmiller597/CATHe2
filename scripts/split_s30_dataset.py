@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""
-Script to process the S30 dataset and create train/validation/test splits.
+"""Create stratified dataset splits for S30 protein classification.
 
-Loads data from s30_reps.parquet, filters by SF group size, and creates stratified splits.
+Key functionality:
+- Filters superfamilies by minimum sequence count requirement
+- Creates proportional train/val/test splits for balanced class distribution
+- Ensures each superfamily appears in all three splits
+- Logs detailed statistics about resulting split distribution
+
+Dependencies: pandas, numpy, scikit-learn
 """
 
 import logging
@@ -56,7 +61,8 @@ def load_and_filter_data(input_path, min_sequences):
         valid_sfs = sf_counts[sf_counts >= min_sequences].index
         filtered_df = s30_df[s30_df['SF'].isin(valid_sfs)]
         
-        logger.info(f"Retained {len(filtered_df):,} sequences from {len(valid_sfs):,} SF groups")
+        logger.info(f"Retained {len(filtered_df):,} sequences from {len(valid_sfs):,} 
+                    SF groups after min_sequences {min_sequences} filtering")
         return filtered_df
     except Exception as e:
         logger.error(f"Error processing dataset: {e}")

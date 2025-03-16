@@ -1,9 +1,23 @@
+#!/usr/bin/env python3
+"""Generate ESM-C embeddings for protein sequences.
+
+Key functionality:
+- Creates protein embeddings using the ESM-C model
+- Averages per-amino-acid embeddings for entire proteins
+- Utilizes Flash Attention for accelerated processing
+- Saves compressed embeddings with metadata for each dataset split
+
+Dependencies: torch, esm, pandas, numpy
+"""
+
+import os
+import argparse
+import logging
 import pandas as pd
 import torch
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-import argparse
 from faesm.esmc import ESMC
 
 # Load ESM-C model

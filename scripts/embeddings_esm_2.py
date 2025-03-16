@@ -1,10 +1,24 @@
+#!/usr/bin/env python3
+"""Generate ESM-2 embeddings for protein sequences.
+
+Key functionality:
+- Creates protein embeddings using the ESM-2 model (650M parameters)
+- Averages per-amino-acid embeddings for entire proteins
+- Supports both standard ESM-2 and Flash Attention implementations
+- Saves compressed embeddings with metadata for each dataset split
+
+Dependencies: torch, esm, pandas, numpy
+"""
+
+import os
+import argparse
+import logging
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-import argparse
 
 # Load ESM-2 model (650M parameters)
 def get_ESM_model(use_half_precision=True, use_flash_attention=False):

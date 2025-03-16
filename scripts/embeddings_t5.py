@@ -1,3 +1,18 @@
+#!/usr/bin/env python3
+"""Generate ProtT5 embeddings for protein sequences.
+
+Key functionality:
+- Processes protein sequences using ProtT5-XL-U50 encoder
+- Averages per-amino-acid embeddings for entire proteins
+- Handles rare/ambiguous amino acids through substitution
+- Saves compressed embeddings with metadata for each dataset split
+
+Dependencies: torch, transformers, pandas, numpy
+"""
+
+import os
+import argparse
+import logging
 import pandas as pd
 import torch
 from transformers import T5EncoderModel, T5Tokenizer
@@ -5,7 +20,6 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import re
-import argparse
 
 # Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50)
 def get_T5_model():

@@ -1,8 +1,7 @@
 #!/bin/bash
-# scripts/download_data.sh
-# This script downloads the CATHe Dataset from Zenodo, unzips it,
-# reorganizes the files by moving all contents from the top-level folder
-# into the "data" directory, and then removes the original folder.
+# Download and extract the CATHe Dataset from Zenodo
+# Downloads zip archive, extracts contents to the data directory,
+# and cleans up temporary files. Supports both wget and curl.
 # Ensure you are running this script from your desired working directory.
 
 # Zenodo dataset URL

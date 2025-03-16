@@ -1,8 +1,17 @@
-"""
-Sequence Clusterer for protein datasets.
-Uses MMseqs2 to cluster sequences at 30% sequence identity threshold.
+#!/usr/bin/env python3
+"""Generate S30 sequence clusters for protein datasets.
+
+Key functionality:
+- Clusters protein sequences at 30% identity using MMseqs2
+- Adds binary indicator to mark cluster representatives
+- Preserves all original sequences in output dataset
+- Enables filtering to non-redundant sequence sets
+
+Dependencies: pandas, MMseqs2
 """
 
+import os
+import argparse
 import logging
 from pathlib import Path
 import pandas as pd

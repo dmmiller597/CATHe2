@@ -18,9 +18,19 @@ checkpoints/
 
 # Data files
 data/
+!config/data/
+!src/data/
 
 # Venv
 venv/
 
 # Outputs
 outputs/
+
+*.ipynb
+*.png
+dataset_prompt.md
+dataset.md
+dataset2.md
+
+.DS_Store

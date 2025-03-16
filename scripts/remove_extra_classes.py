@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""
-Simple script to identify and remove superfamilies that are not present in all splits.
-Specifically removes superfamilies that appear in only one of train/val/test splits.
+"""Remove superfamilies not present in all dataset splits.
+
+Key functionality:
+- Analyzes superfamily distribution across train, validation, and test sets
+- Identifies classes unique to only one split
+- Filters out unique classes from training data
+- Saves filtered embeddings with corresponding labels
+
+Dependencies: pandas, numpy
 """
 
+import os
 import numpy as np
 import pandas as pd
-import os
+import logging
 from pathlib import Path
 
 # File paths - update these to match your actual file locations

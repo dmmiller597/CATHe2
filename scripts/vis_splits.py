@@ -1,3 +1,15 @@
+#!/usr/bin/env python3
+"""Visualize dataset split distributions for protein sequences.
+
+Key functionality:
+- Generates comparative histograms of sequence length distributions
+- Visualizes superfamily size distributions across dataset splits
+- Creates multi-panel figures showing dataset balance
+- Ensures dataset quality through visual verification
+
+Dependencies: pandas, matplotlib, numpy
+"""
+
 from typing import Tuple, List
 import pandas as pd
 import matplotlib.pyplot as plt

@@ -1,7 +1,13 @@
-"""
-Hierarchical Sequence Clusterer for protein datasets.
-Uses MMseqs2 to cluster sequences in a hierarchical manner from high to low identity thresholds.
-Starting with s80 representatives, then clustering those at s70, s60, etc. down to s30.
+#!/usr/bin/env python3
+"""Perform hierarchical sequence clustering for protein datasets.
+
+Key functionality:
+- Clusters proteins at multiple identity thresholds (80% to 30%)
+- Processes only representatives from higher thresholds at each level
+- Tracks representative status at each identity threshold
+- Produces enhanced dataset with representative indicators
+
+Dependencies: pandas, MMseqs2, numpy
 """
 
 import logging
@@ -11,6 +17,7 @@ import subprocess
 import shutil
 import os
 import multiprocessing
+import argparse
 
 # Configure logging
 logging.basicConfig(
