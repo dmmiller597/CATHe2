@@ -30,7 +30,6 @@ def main(cfg: DictConfig) -> None:
         num_workers=cfg.training.num_workers,
         mining_strategy=cfg.data.mining_strategy
     )
-    data_module.setup()
     
     # Model setup
     model = ContrastiveCATHeModel(
