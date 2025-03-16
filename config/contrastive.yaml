@@ -3,7 +3,6 @@ defaults:
   - data: protT5
 
 data:
-  sampling_beta: 0.0  # Not used for contrastive approach
   mining_strategy: "random"  # Options: random, semi-hard, hard
 
 model:
