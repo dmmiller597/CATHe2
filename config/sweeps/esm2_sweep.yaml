@@ -24,4 +24,5 @@ command:
   - ${env}
   - python
   - ${program}
-  - "+data=esm2"
+  - "data=esm2"
+  - ${args_no_hyphens}
