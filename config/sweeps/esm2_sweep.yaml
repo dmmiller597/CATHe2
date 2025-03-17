@@ -1,0 +1,28 @@
+program: src/train.py
+method: bayes
+project: CATHe
+name: ESM2_sweep
+metric:
+  goal: maximize
+  name: val/balanced_acc
+
+parameters:
+  model.learning_rate:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.01
+  model.weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.001
+  model.dropout:
+    distribution: uniform
+    min: 0.1
+    max: 0.5
+  data: esm2
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens} 
