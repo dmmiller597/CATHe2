@@ -19,10 +19,9 @@ parameters:
     distribution: uniform
     min: 0.1
     max: 0.5
-  data: esm2
 
 command:
   - ${env}
   - python
   - ${program}
-  - ${args_no_hyphens} 
+  - "+data=esm2"
