@@ -20,17 +20,6 @@ parameters:
     distribution: uniform
     min: 0.1
     max: 0.5
-  model.hidden_sizes.0:
-    values: [512, 768, 1024]
-  model.hidden_sizes.1:
-    values: [512, 768, 1024]
-  model.hidden_sizes.2:
-    values: [512, 768, 1024]
-
-  
-  # Training parameters
-  training.batch_size:
-    values: [128, 256, 512]
 
 
 command:
