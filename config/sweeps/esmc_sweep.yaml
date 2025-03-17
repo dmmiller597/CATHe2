@@ -19,14 +19,10 @@ parameters:
     distribution: uniform
     min: 0.1
     max: 0.5
-  
-  # For Hydra, we need to use the special +group=value syntax
-  # Note the + prefix which is required for Hydra overrides
-  +data:
-    value: esmc
 
 command:
   - ${env}
   - python
   - ${program}
+  - "+data=esmc"
   - ${args_no_hyphens} 
