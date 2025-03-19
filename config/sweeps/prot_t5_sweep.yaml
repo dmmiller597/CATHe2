@@ -1,6 +1,7 @@
 program: src/train.py
 method: bayes
 project: CATHe
+name: ProtT5_sweep
 metric:
   goal: maximize
   name: val/balanced_acc
@@ -26,4 +27,5 @@ command:
   - ${env}
   - python
   - ${program}
+  - "data=prot_t5"
   - ${args_no_hyphens}
