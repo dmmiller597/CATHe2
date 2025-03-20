@@ -9,6 +9,15 @@ from sklearn.decomposition import PCA
 import os
 import seaborn as sns
 import argparse
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Set up basic plot aesthetics
 plt.rcParams['font.family'] = 'sans-serif'
@@ -37,13 +46,13 @@ output_dir = args.output
 os.makedirs(output_dir, exist_ok=True)
 
 # Load embeddings
-print("Loading embeddings...")
+logger.info("Loading embeddings...")
 embeddings_data = np.load(embeddings_file)
 embeddings = embeddings_data['embeddings'] if 'embeddings' in embeddings_data else embeddings_data['arr_0']
-print(f"Loaded embeddings with shape: {embeddings.shape}")
+logger.info(f"Loaded embeddings with shape: {embeddings.shape}")
 
 # Load labels and parse CATH hierarchy
-print("Loading labels and parsing CATH hierarchy levels...")
+logger.info("Loading labels and parsing CATH hierarchy levels...")
 cath_levels = []  # Will contain lists of labels for each level
 cath_level_names = ['Class', 'Architecture', 'Topology', 'Homology']
 for _ in range(4):  # Initialize 4 empty lists for the 4 CATH levels
@@ -71,22 +80,22 @@ with open(labels_file, 'r') as f:
 
 # Check if dimensions match
 if len(cath_levels[0]) != embeddings.shape[0]:
-    print(f"Warning: Number of labels ({len(cath_levels[0])}) doesn't match number of embeddings ({embeddings.shape[0]})")
+    logger.warning(f"Warning: Number of labels ({len(cath_levels[0])}) doesn't match number of embeddings ({embeddings.shape[0]})")
     min_length = min(len(cath_levels[0]), embeddings.shape[0])
     for i in range(4):
         cath_levels[i] = cath_levels[i][:min_length]
     embeddings = embeddings[:min_length]
-    print(f"Trimmed to {min_length} samples")
+    logger.info(f"Trimmed to {min_length} samples")
 
 # Apply PCA before t-SNE to reduce computation
-print("Applying PCA to reduce dimensions to 50...")
+logger.info("Applying PCA to reduce dimensions to 50...")
 pca = PCA(n_components=50, random_state=42)
 embeddings_pca = pca.fit_transform(embeddings)
-print(f"Reduced embeddings shape after PCA: {embeddings_pca.shape}")
-print(f"Explained variance ratio: {np.sum(pca.explained_variance_ratio_):.2f}")
+logger.info(f"Reduced embeddings shape after PCA: {embeddings_pca.shape}")
+logger.info(f"Explained variance ratio: {np.sum(pca.explained_variance_ratio_):.2f}")
 
 # Run t-SNE on PCA-reduced data
-print("Running t-SNE on PCA-reduced data...")
+logger.info("Running t-SNE on PCA-reduced data...")
 tsne = TSNE(
     n_components=2,
     perplexity=30,
@@ -101,7 +110,7 @@ def create_tsne_plot(tsne_result, labels, level_name, output_dir):
     numeric_labels = np.array([label_to_id[label] for label in labels])
     
     n_classes = len(unique_classes)
-    print(f"Creating t-SNE visualization for {level_name} level with {n_classes} unique groups...")
+    logger.info(f"Creating t-SNE visualization for {level_name} level with {n_classes} unique groups...")
     
     # Create figure with appropriate aspect ratio
     plt.figure(figsize=(8, 8))
@@ -117,7 +126,7 @@ def create_tsne_plot(tsne_result, labels, level_name, output_dir):
     scatter = plt.scatter(
         tsne_result[:, 0], tsne_result[:, 1],
         c=colors,
-        s=20,
+        s=10,
         alpha=0.8,
         linewidth=0
     )
@@ -148,11 +157,11 @@ def create_tsne_plot(tsne_result, labels, level_name, output_dir):
     plt.tight_layout()
     filename = f'tsne_embeddings_CATH_{level_name.lower()}.png'
     plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"t-SNE visualization saved to {output_dir}/{filename}")
+    logger.info(f"t-SNE visualization saved to {output_dir}/{filename}")
     plt.close()
 
 # Create plots for each CATH level
 for i, level_labels in enumerate(cath_levels):
     create_tsne_plot(tsne_result, level_labels, cath_level_names[i], output_dir)
 
-print("All visualizations completed!")
+logger.info("All visualizations completed!")
