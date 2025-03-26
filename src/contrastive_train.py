@@ -25,10 +25,15 @@ def main(cfg: DictConfig) -> None:
     data_dir = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir
     data_module = ContrastiveDataModule(
         data_dir=data_dir,
-        **{k: v for k, v in cfg.data.items() if k not in ["data_dir", "embedding_dim", "mining_strategy"]},
+        train_embeddings_file=cfg.data.train_embeddings,
+        train_labels_file=cfg.data.train_labels,
+        val_embeddings_file=cfg.data.val_embeddings,
+        val_labels_file=cfg.data.val_labels,
+        test_embeddings_file=cfg.data.test_embeddings if hasattr(cfg.data, "test_embeddings") else None,
+        test_labels_file=cfg.data.test_labels if hasattr(cfg.data, "test_labels") else None,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers,
-        mining_strategy=cfg.data.mining_strategy
+        mining_strategy=cfg.data.mining_strategy if hasattr(cfg.data, "mining_strategy") else None
     )
     
     # Model setup
