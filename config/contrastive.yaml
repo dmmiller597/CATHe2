@@ -20,7 +20,7 @@ model:
 
   # Learning rate scheduler
   lr_scheduler:
-    monitor: "val/knn_balanced_acc"
+    monitor: "val/1nn_balanced_acc"
     mode: "min"
     factor: 0.5
     patience: 5
@@ -33,7 +33,7 @@ training:
   accumulate_grad_batches: 4
 
   # Monitoring 
-  monitor_metric: "val/knn_balanced_acc"
+  monitor_metric: "val/1nn_balanced_acc"
   monitor_mode: "max"
   early_stopping_patience: 10
   log_every_n_steps: 50
