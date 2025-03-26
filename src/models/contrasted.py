@@ -231,7 +231,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log('train/active_triplets', active_triplets, prog_bar=False, on_step=True)
             self.log('train/loss', loss, prog_bar=False, on_step=True)
         
-        return loss  # Return only the loss tensor
+        return loss
 
     def _log_zero_metrics(self, prefix: str, metrics: List[str], prog_bar: bool = False) -> None:
         """Helper to log zero values for metrics when evaluation is skipped."""

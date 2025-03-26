@@ -213,8 +213,9 @@ class ContrastiveDataModule(pl.LightningDataModule):
                     replacement=True
                 )
                 
-                log.info(f"Using class-balanced sampling for training (class counts: {dict(zip(range(len(class_counts)), class_counts))})")
-                
+                log.info(f"Using class-balanced sampling for training set")
+
+
                 loader = DataLoader(
                     self.datasets[split],
                     batch_size=self.hparams.batch_size,
