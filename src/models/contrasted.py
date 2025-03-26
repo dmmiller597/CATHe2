@@ -276,13 +276,29 @@ class ContrastiveCATHeModel(pl.LightningModule):
             batch_size = 512  # Adjust this value based on your GPU memory
             nearest_indices = torch.zeros(num_samples, dtype=torch.long, device=device)
             
+            log.info(f"Starting memory-efficient 1-NN search on {num_samples} validation samples (batch size: {batch_size})...")
+            progress_step = max(1, num_samples // 10)  # Report progress ~10 times
+            
+            # Track processing progress
+            processed_samples = 0
+            total_batches = (num_samples + batch_size - 1) // batch_size
+            start_time = torch.cuda.Event(enable_timing=True)
+            end_time = torch.cuda.Event(enable_timing=True)
+            start_time.record()
+            
             for i in range(0, num_samples, batch_size):
                 # Get query batch
                 end_idx = min(i + batch_size, num_samples)
                 query_batch = all_embeddings[i:end_idx]
+                batch_count = (i // batch_size) + 1
                 
                 # Initialize min distances for this batch
                 min_distances = torch.full((end_idx - i,), float('inf'), device=device)
+                
+                # Report batch progress
+                if i % progress_step == 0 or i == 0:
+                    log.info(f"Processing batch {batch_count}/{total_batches} " 
+                             f"({i}/{num_samples} samples, {i/num_samples*100:.1f}%)")
                 
                 # Compare against all embeddings in batches
                 for j in range(0, num_samples, batch_size):
@@ -307,6 +323,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
                     update_mask = batch_min_dist < min_distances
                     min_distances[update_mask] = batch_min_dist[update_mask]
                     nearest_indices[i:end_idx][update_mask] = batch_min_idx[update_mask] + j
+            
+            # Calculate and report elapsed time
+            end_time.record()
+            torch.cuda.synchronize()
+            elapsed_time = start_time.elapsed_time(end_time) / 1000.0  # Convert to seconds
+            log.info(f"Completed 1-NN search in {elapsed_time:.2f} seconds")
             
             # Get the labels of nearest neighbors (predictions)
             predicted_labels = all_labels[nearest_indices.cpu()]
