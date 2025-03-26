@@ -254,10 +254,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
         """Projects validation embeddings and stores them with labels for epoch-end evaluation."""
         embeddings, labels = batch
         projected_embeddings = self(embeddings)
-        # Store outputs: move to CPU to avoid GPU memory buildup across steps
+        # Store outputs: keep on GPU to accelerate distance calculations
         self._val_outputs.append({
-            "embeddings": projected_embeddings.detach().cpu(),
-            "labels": labels.detach().cpu()
+            "embeddings": projected_embeddings.detach(),  # Don't move to CPU
+            "labels": labels.detach().cpu()  # Labels can still go to CPU as they're small
         })
 
     def on_validation_epoch_end(self) -> None:
@@ -266,29 +266,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.warning("Validation epoch end called but no outputs were collected.")
             return
 
-        # Collate embeddings and labels from all validation steps
-        # Use torch tensors on CPU initially for potentially faster distance calculation
         try:
+            # Collect embeddings but keep on GPU for faster distance calculation
             all_embeddings_tensor = torch.cat([x["embeddings"] for x in self._val_outputs])
-            all_labels_tensor = torch.cat([x["labels"] for x in self._val_outputs])
+            all_labels_tensor = torch.cat([x["labels"] for x in self._val_outputs]).to(self.device)
             self._val_outputs.clear() # Free memory
-        except Exception as e:
-             log.error(f"Failed to collate validation outputs: {e}", exc_info=True)
-             self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
-             return
-
-        n_samples = len(all_embeddings_tensor)
-        n_classes = len(torch.unique(all_labels_tensor))
-
-        # Ensure enough data for 1-NN (need at least 2 samples to find a neighbor) and >1 class
-        if n_samples < 2 or n_classes < 2:
-            log.warning(f"Skipping validation 1-NN: Insufficient samples ({n_samples}) "
-                        f"or classes ({n_classes}). Need at least 2 samples and 2 classes.")
-            self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
-            return
-
-        try:
-            log.debug(f"Starting validation 1-NN evaluation on {n_samples} samples.")
+            
             # Calculate pairwise squared Euclidean distances
             # Use torch for potentially faster computation on CPU/GPU if available later
             dist_mat = pairwise_distance_optimized(all_embeddings_tensor, all_embeddings_tensor) # NxN matrix
@@ -302,9 +285,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             # Get the labels of the nearest neighbors
             predicted_labels = all_labels_tensor[nearest_neighbor_idx]
 
-            # Move labels to numpy for scikit-learn metrics
-            true_labels_np = all_labels_tensor.numpy()
-            predicted_labels_np = predicted_labels.numpy()
+            # Only move results to CPU when needed for sklearn metrics
+            true_labels_np = all_labels_tensor.cpu().numpy()
+            predicted_labels_np = predicted_labels.cpu().numpy()
 
             # Compute metrics
             accuracy = accuracy_score(true_labels_np, predicted_labels_np)
@@ -320,7 +303,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.info(f"Validation 1-NN - Acc: {accuracy:.4f}, Balanced Acc: {balanced_accuracy:.4f}")
 
         except Exception as e:
-            log.error(f"Error during validation 1-NN evaluation: {e}", exc_info=True)
+            log.error(f"Failed to collate validation outputs: {e}", exc_info=True)
             # Log zero metrics on error
             self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
 
