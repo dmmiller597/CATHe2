@@ -61,7 +61,7 @@ def main(cfg: DictConfig) -> None:
     callbacks = [
         ModelCheckpoint(
             dirpath=cfg.training.checkpoint_dir,
-            filename='{epoch:02d}-{val/1nn_balanced_acc:.4f}',
+            filename='{epoch:02d}-{val/knn_balanced_acc:.4f}',
             monitor=cfg.training.monitor_metric,
             mode=cfg.training.monitor_mode,
             save_last=True,
