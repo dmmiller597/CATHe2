@@ -218,7 +218,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log_dict({
                 "train/loss": zero_loss,
                 "train/active_triplets": 0.0
-            }, on_step=True, on_epoch=True, prog_bar=True)
+            }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=False)
             return zero_loss
 
         # Select the embeddings corresponding to the mined triplet indices
@@ -233,7 +233,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         self.log_dict({
             "train/loss": loss,
             "train/active_triplets": float(len(anchor_idx))
-        }, on_step=True, on_epoch=True, prog_bar=True)
+        }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=False)
 
         return loss
 
