@@ -37,15 +37,15 @@ def main(cfg: DictConfig) -> None:
     
     # Model setup
     model = ContrastiveCATHeModel(
-        embedding_dim=cfg.data.embedding_dim,
-        projection_dims=cfg.model.projection_dims,
-        output_dim=cfg.model.output_dim,
+        input_embedding_dim=cfg.data.embedding_dim,
+        projection_hidden_dims=cfg.model.projection_dims,
+        output_embedding_dim=cfg.model.output_dim,
         dropout=cfg.model.dropout,
         learning_rate=cfg.model.learning_rate,
         weight_decay=cfg.model.weight_decay,
-        margin=cfg.model.margin,
-        lr_scheduler=cfg.model.lr_scheduler,
-        n_neighbors=cfg.model.n_neighbors
+        triplet_margin=cfg.model.margin,
+        lr_scheduler_config=cfg.model.lr_scheduler,
+        knn_neighbors=cfg.model.n_neighbors
     )
     
     # Callbacks
