@@ -257,47 +257,75 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes 1-NN classification metrics on the validation set at the end of the epoch."""
+        """Computes 1-NN classification metrics on the validation set using memory-efficient batching."""
         if not self._val_outputs:
             log.warning("Validation epoch end called but no outputs were collected.")
             return
 
         try:
-            # Collect embeddings but keep on GPU for faster distance calculation
-            all_embeddings_tensor = torch.cat([x["embeddings"] for x in self._val_outputs])
-            all_labels_tensor = torch.cat([x["labels"] for x in self._val_outputs]).to(self.device)
-            self._val_outputs.clear() # Free memory
+            # Collect all embeddings and labels
+            all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
+            all_labels = torch.cat([x["labels"] for x in self._val_outputs])
+            self._val_outputs.clear()  # Free memory
             
-            # Calculate pairwise squared Euclidean distances
-            # Use torch for potentially faster computation on CPU/GPU if available later
-            dist_mat = pairwise_distance_optimized(all_embeddings_tensor, all_embeddings_tensor) # NxN matrix
-
-            # Mask out diagonal (distance to self)
-            dist_mat.fill_diagonal_(float('inf'))
-
-            # Find the index of the nearest neighbor for each sample
-            nearest_neighbor_idx = torch.argmin(dist_mat, dim=1)
-
-            # Get the labels of the nearest neighbors
-            predicted_labels = all_labels_tensor[nearest_neighbor_idx]
-
-            # Only move results to CPU when needed for sklearn metrics
-            true_labels_np = all_labels_tensor.cpu().numpy()
-            predicted_labels_np = predicted_labels.cpu().numpy()
-
+            # Get dimensions
+            num_samples = all_embeddings.size(0)
+            device = all_embeddings.device
+            
+            # Memory-efficient nearest neighbor search
+            batch_size = 512  # Adjust this value based on your GPU memory
+            nearest_indices = torch.zeros(num_samples, dtype=torch.long, device=device)
+            
+            for i in range(0, num_samples, batch_size):
+                # Get query batch
+                end_idx = min(i + batch_size, num_samples)
+                query_batch = all_embeddings[i:end_idx]
+                
+                # Initialize min distances for this batch
+                min_distances = torch.full((end_idx - i,), float('inf'), device=device)
+                
+                # Compare against all embeddings in batches
+                for j in range(0, num_samples, batch_size):
+                    ref_end_idx = min(j + batch_size, num_samples)
+                    ref_batch = all_embeddings[j:ref_end_idx]
+                    
+                    # Compute pairwise distances between current batches
+                    batch_dist = pairwise_distance_optimized(query_batch, ref_batch)
+                    
+                    # Exclude self-comparisons
+                    if i <= j < end_idx or j <= i < ref_end_idx:
+                        # Create mask for the overlapping region
+                        mask = torch.zeros_like(batch_dist, dtype=torch.bool)
+                        for k in range(query_batch.size(0)):
+                            query_idx = i + k
+                            if j <= query_idx < ref_end_idx:
+                                mask[k, query_idx - j] = True
+                        batch_dist.masked_fill_(mask, float('inf'))
+                    
+                    # Update nearest neighbors
+                    batch_min_dist, batch_min_idx = torch.min(batch_dist, dim=1)
+                    update_mask = batch_min_dist < min_distances
+                    min_distances[update_mask] = batch_min_dist[update_mask]
+                    nearest_indices[i:end_idx][update_mask] = batch_min_idx[update_mask] + j
+            
+            # Get the labels of nearest neighbors (predictions)
+            predicted_labels = all_labels[nearest_indices.cpu()]
+            
             # Compute metrics
+            true_labels_np = all_labels.cpu().numpy()
+            predicted_labels_np = predicted_labels.numpy()
+            
             accuracy = accuracy_score(true_labels_np, predicted_labels_np)
             balanced_accuracy = balanced_accuracy_score(true_labels_np, predicted_labels_np, adjusted=False)
-
-            # Log validation 1-NN metrics
+            
+            # Log validation metrics
             self.log_dict({
                 "val/1nn_acc": float(accuracy),
                 "val/1nn_balanced_acc": float(balanced_accuracy)
-                # Add F1 etc. if desired
-            }, prog_bar=True, on_epoch=True) # Ensure it's logged per epoch
-
+            }, prog_bar=True, on_epoch=True)
+            
             log.info(f"Validation 1-NN - Acc: {accuracy:.4f}, Balanced Acc: {balanced_accuracy:.4f}")
-
+            
         except Exception as e:
             log.error(f"Failed to collate validation outputs: {e}", exc_info=True)
             # Log zero metrics on error
