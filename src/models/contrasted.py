@@ -241,8 +241,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
     def on_validation_epoch_end(self) -> None:
         """Computes k-NN validation metrics."""
         if not self._val_outputs:
-            self.log("val/knn_accuracy", 0.0, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_accuracy", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
             return
 
         try:
@@ -283,13 +283,13 @@ class ContrastiveCATHeModel(pl.LightningModule):
             balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
 
             # Log metrics
-            self.log("val/knn_accuracy", accuracy, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_accuracy", balanced_accuracy, prog_bar=True, sync_dist=True)
+            self.log("val/knn_acc", accuracy, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_acc", balanced_accuracy, prog_bar=True, sync_dist=True)
             
         except Exception as e:
             log.error(f"Error in validation metrics: {e}")
-            self.log("val/knn_accuracy", 0.0, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_accuracy", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
 
     # --- Testing ---
     def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
@@ -308,8 +308,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         """Performs k-fold CV evaluation using k-NN classifier."""
         if not self._test_outputs:
             self.log_dict({
-                "test/cv_accuracy": 0.0,
-                "test/cv_balanced_accuracy": 0.0,
+                "test/cv_acc": 0.0,
+                "test/cv_balanced_acc": 0.0,
                 "test/cv_f1_macro": 0.0
             }, sync_dist=True)
             return
@@ -344,16 +344,16 @@ class ContrastiveCATHeModel(pl.LightningModule):
             
             # Log average metrics
             self.log_dict({
-                "test/cv_accuracy": np.mean(accuracies),
-                "test/cv_balanced_accuracy": np.mean(balanced_accuracies),
+                "test/cv_acc": np.mean(accuracies),
+                "test/cv_balanced_acc": np.mean(balanced_accuracies),
                 "test/cv_f1_macro": np.mean(f1_scores)
             }, sync_dist=True)
             
         except Exception as e:
             log.error(f"Error in test metrics: {e}")
             self.log_dict({
-                "test/cv_accuracy": 0.0,
-                "test/cv_balanced_accuracy": 0.0,
+                "test/cv_acc": 0.0,
+                "test/cv_balanced_acc": 0.0,
                 "test/cv_f1_macro": 0.0
             }, sync_dist=True)
 
@@ -381,7 +381,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_accuracy"),
+                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
                 "interval": "epoch",
                 "frequency": 1
             }
