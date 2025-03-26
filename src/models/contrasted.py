@@ -226,13 +226,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             loss = self.loss_fn(anchor_emb, positive_emb, negative_emb)
             active_triplets = len(anchor_idx)
 
-        # Log metrics only once per step with consistent parameters
-        self.log_dict({
-            "train/active_triplets": float(active_triplets),
-            "train/active_triplet_ratio": float(active_triplets) / len(labels) if len(labels) > 0 else 0.0,
-        }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=True)
         
-        return loss
+        return loss, active_triplets
 
     def _log_zero_metrics(self, prefix: str, metrics: List[str], prog_bar: bool = False) -> None:
         """Helper to log zero values for metrics when evaluation is skipped."""
