@@ -221,9 +221,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             loss = self.loss_fn(anchor_emb, positive_emb, negative_emb)
 
         # Log metrics
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train/active_triplets', float(active_triplets), on_step=False, on_epoch=True, sync_dist=True)
-        
+        if batch_idx % 100 == 0:
+            self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+            self.log('train/active_triplets', float(active_triplets), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
 
     # --- Validation ---
