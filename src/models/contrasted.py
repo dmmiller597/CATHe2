@@ -262,6 +262,71 @@ class ContrastiveCATHeModel(pl.LightningModule):
             dist_matrix = pairwise_distance_optimized(all_embeddings, all_embeddings)
             dist_matrix.fill_diagonal_(float('inf'))  # Exclude self
 
+            # --- Add distance statistics ---
+            # Calculate intra-class and inter-class distances
+            unique_labels = torch.unique(all_labels)
+            intra_dists = []
+            inter_dists = []
+            
+            # Sample subset for efficiency if needed
+            max_pairs_per_class = 1000  # Limit computation for large datasets
+            
+            for label in unique_labels:
+                mask_same = all_labels == label
+                mask_diff = all_labels != label
+                
+                # Get embeddings for this class
+                embeddings_same = all_embeddings[mask_same]
+                
+                # Sample if too large
+                if embeddings_same.size(0) > max_pairs_per_class:
+                    idx = torch.randperm(embeddings_same.size(0))[:max_pairs_per_class]
+                    embeddings_same = embeddings_same[idx]
+                    
+                # Compute intra-class distances (distances within the same class)
+                if embeddings_same.size(0) > 1:
+                    dist_same = pairwise_distance_optimized(embeddings_same, embeddings_same)
+                    dist_same = dist_same[~torch.eye(embeddings_same.size(0), dtype=bool, device=dist_same.device)]
+                    intra_dists.append(dist_same)
+                
+                # Sample inter-class
+                if torch.sum(mask_diff) > 0 and embeddings_same.size(0) > 0:
+                    embeddings_diff = all_embeddings[mask_diff]
+                    if embeddings_diff.size(0) > max_pairs_per_class:
+                        idx = torch.randperm(embeddings_diff.size(0))[:max_pairs_per_class]
+                        embeddings_diff = embeddings_diff[idx]
+                    
+                    # Compute inter-class distances (distances between different classes)
+                    dist_diff = pairwise_distance_optimized(embeddings_same, embeddings_diff)
+                    inter_dists.append(dist_diff)
+            
+            # Calculate statistics if we have data
+            if intra_dists and inter_dists:
+                intra_dists = torch.cat(intra_dists)
+                inter_dists = torch.cat(inter_dists)
+                
+                mean_intra = intra_dists.mean().item()
+                mean_inter = inter_dists.mean().item()
+                min_inter = inter_dists.min().item()
+                max_intra = intra_dists.max().item()
+                
+                # Log distance metrics
+                self.log("val/mean_intra_dist", mean_intra, sync_dist=True)
+                self.log("val/mean_inter_dist", mean_inter, sync_dist=True)
+                self.log("val/min_inter_dist", min_inter, sync_dist=True)
+                self.log("val/max_intra_dist", max_intra, sync_dist=True)
+                
+                # Discriminability ratio (higher is better)
+                if mean_intra > 0:
+                    self.log("val/inter_intra_ratio", mean_inter / mean_intra, sync_dist=True)
+                
+                # Distance margin (higher is better)
+                self.log("val/dist_margin", mean_inter - mean_intra, sync_dist=True)
+                
+                # Overlap measure: percentage of intra-distances larger than smallest inter-distance
+                overlap = torch.mean((intra_dists > min_inter).float()).item()
+                self.log("val/class_overlap", overlap, sync_dist=True)
+
             # Get nearest neighbor
             k = self.hparams.knn_val_neighbors
             _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)
@@ -373,8 +438,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
-            verbose=True
+            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
         
         return {
