@@ -5,247 +5,231 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
-import random
 from collections import defaultdict
+import logging
 
-from utils import get_logger
+# Use standard logging
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-log = get_logger()
+class EmbeddingDataset(Dataset):
+    """
+    Dataset class that loads pre-computed embeddings and corresponding labels.
 
-class TripletDataset(Dataset):
-    """Dataset class for triplet-based contrastive learning of CATH superfamilies."""
-    
-    def __init__(self, embeddings_path: Path, labels_path: Path, mining_strategy: str = "random"):
-        """Initialize dataset with protein embeddings and prepare for triplet generation.
-        
-        Args:
-            embeddings_path: Path to NPZ file containing ProtT5 embeddings
-            labels_path: Path to CSV file containing SF labels
-            mining_strategy: Strategy for triplet selection ('random', 'semi-hard', 'hard')
+    This dataset simply returns an embedding and its integer label for a given index.
+    It does not perform any triplet mining itself.
+    """
+
+    def __init__(self, embeddings_path: Path, labels_path: Path):
         """
+        Initializes the dataset by loading embeddings and labels.
+
+        Args:
+            embeddings_path: Path to the NPZ file containing embeddings (key: 'embeddings').
+            labels_path: Path to the CSV file containing labels (column: 'SF').
+
+        Raises:
+            FileNotFoundError: If embedding or label files do not exist.
+            ValueError: If required keys/columns are missing or data loading fails.
+        """
+        log.info(f"Initializing EmbeddingDataset from {embeddings_path} and {labels_path}")
+        if not embeddings_path.is_file():
+            raise FileNotFoundError(f"Embedding file not found: {embeddings_path}")
+        if not labels_path.is_file():
+            raise FileNotFoundError(f"Labels file not found: {labels_path}")
+
         try:
             data = np.load(embeddings_path)
+            if 'embeddings' not in data:
+                raise ValueError(f"'embeddings' key not found in NPZ file: {embeddings_path}")
+            self.embeddings = data['embeddings'].astype(np.float32)
+
             labels_df = pd.read_csv(labels_path)
-            self.embeddings = data['embeddings']
-                
-            # Get numerical codes for superfamily labels
+            if 'SF' not in labels_df.columns:
+                raise ValueError(f"'SF' column not found in CSV file: {labels_path}")
+
+            # Store string labels and create integer encodings
             self.sf_labels = labels_df['SF'].values
-            self.label_encoder = {sf: i for i, sf in enumerate(sorted(set(self.sf_labels)))}
+            unique_sorted_labels = sorted(list(set(self.sf_labels)))
+            self.label_encoder = {sf: i for i, sf in enumerate(unique_sorted_labels)}
             self.label_decoder = {i: sf for sf, i in self.label_encoder.items()}
-            self.labels = np.array([self.label_encoder[sf] for sf in self.sf_labels])
-            
-            # Create index mapping for each class to enable efficient triplet generation
-            self.label_to_indices = defaultdict(list)
-            for idx, label in enumerate(self.labels):
-                self.label_to_indices[label].append(idx)
-                
-            # Filter out classes with only a single example
-            self.valid_classes = [label for label, indices in self.label_to_indices.items() 
-                                 if len(indices) > 1]
-            
-            if len(self.valid_classes) < len(self.label_to_indices):
-                log.warning(f"Removed {len(self.label_to_indices) - len(self.valid_classes)} classes with only a single example")
-                
-            # Set mining strategy
-            self.mining_strategy = mining_strategy
-            log.info(f"Using {mining_strategy} triplet mining strategy")
-            
+            self.labels = np.array([self.label_encoder[sf] for sf in self.sf_labels], dtype=np.int64)
+
+            self.num_classes = len(self.label_encoder)
+            self.embedding_dim = self.embeddings.shape[1]
+
+            log.info(f"Loaded {len(self.embeddings)} embeddings with dimension {self.embedding_dim} and {self.num_classes} classes.")
+
+            # Sanity check: embeddings and labels count should match
+            if len(self.embeddings) != len(self.labels):
+                raise ValueError(
+                    f"Mismatch between number of embeddings ({len(self.embeddings)}) "
+                    f"and labels ({len(self.labels)})."
+                )
+
         except Exception as e:
-            log.error(f"Error loading data: {e}")
-            raise ValueError(f"Error loading embeddings from {embeddings_path}: {str(e)}")
-    
+            log.error(f"Error initializing EmbeddingDataset: {e}", exc_info=True)
+            raise ValueError(f"Failed to load data: {str(e)}") from e
+
     def __len__(self) -> int:
-        """Return the number of potential anchor samples."""
+        """Return the total number of samples in the dataset."""
         return len(self.embeddings)
-    
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-        """Generate a triplet (anchor, positive, negative) from the dataset."""
-        anchor_embedding = self.embeddings[idx]
-        anchor_label = self.labels[idx]
-        
-        # Find a positive sample (same class, different instance)
-        pos_indices = [i for i in self.label_to_indices[anchor_label] if i != idx]
-        if not pos_indices:
-            # Fallback if no other samples in this class
-            pos_idx = idx
-            log.warning(f"No positive samples found for class {self.label_decoder[anchor_label]}, using anchor as positive")
-        else:
-            pos_idx = random.choice(pos_indices)
-        
-        # Get positive embedding
-        pos_embedding = self.embeddings[pos_idx]
-        
-        # Different negative selection based on mining strategy
-        if self.mining_strategy == "random":
-            # Random selection (current implementation)
-            neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-            neg_idx = random.choice(self.label_to_indices[neg_label])
-            neg_embedding = self.embeddings[neg_idx]
-            
-        elif self.mining_strategy == "semi-hard":
-            # Semi-hard mining: select negative that is farther from anchor than positive
-            # but still produces non-zero triplet loss
-            anchor_tensor = torch.tensor(anchor_embedding, dtype=torch.float)
-            pos_tensor = torch.tensor(pos_embedding, dtype=torch.float)
-            pos_dist = torch.sum(torch.square(anchor_tensor - pos_tensor))
-            
-            # Try a limited number of random negatives to find a semi-hard one
-            candidates = []
-            for _ in range(10):  # Try 10 random candidates
-                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-                neg_idx = random.choice(self.label_to_indices[neg_label])
-                neg_candidate = self.embeddings[neg_idx]
-                neg_tensor = torch.tensor(neg_candidate, dtype=torch.float)
-                neg_dist = torch.sum(torch.square(anchor_tensor - neg_tensor))
-                
-                # Check if this is a semi-hard negative
-                if neg_dist > pos_dist and neg_dist < pos_dist + 1.0:  # 1.0 is margin
-                    candidates.append((neg_idx, neg_dist.item()))
-            
-            if candidates:
-                # Choose a semi-hard negative
-                neg_idx = min(candidates, key=lambda x: x[1])[0]
-            else:
-                # Fallback to random if no semi-hard found
-                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-                neg_idx = random.choice(self.label_to_indices[neg_label])
-            
-            neg_embedding = self.embeddings[neg_idx]
-            
-        elif self.mining_strategy == "hard":
-            # Hard mining: select closest negative
-            anchor_tensor = torch.tensor(anchor_embedding, dtype=torch.float)
-            
-            # Try a limited number of random negatives to find the hardest one
-            candidates = []
-            for _ in range(20):  # Try 20 random candidates
-                neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-                neg_idx = random.choice(self.label_to_indices[neg_label])
-                neg_candidate = self.embeddings[neg_idx]
-                neg_tensor = torch.tensor(neg_candidate, dtype=torch.float)
-                neg_dist = torch.sum(torch.square(anchor_tensor - neg_tensor)).item()
-                candidates.append((neg_idx, neg_dist))
-            
-            # Choose the hardest (closest) negative
-            neg_idx = min(candidates, key=lambda x: x[1])[0]
-            neg_embedding = self.embeddings[neg_idx]
-        else:
-            # Default to random
-            neg_label = random.choice([c for c in self.valid_classes if c != anchor_label])
-            neg_idx = random.choice(self.label_to_indices[neg_label])
-            neg_embedding = self.embeddings[neg_idx]
-        
-        return (
-            torch.tensor(anchor_embedding, dtype=torch.float),
-            torch.tensor(pos_embedding, dtype=torch.float),
-            torch.tensor(neg_embedding, dtype=torch.float),
-            anchor_label
-        )
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return the embedding and its integer label at the given index.
+        """
+        embedding = torch.from_numpy(self.embeddings[idx])
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return embedding, label
 
 
 class ContrastiveDataModule(pl.LightningDataModule):
-    """PyTorch Lightning data module for contrastive learning on CATH superfamilies."""
-    
+    """
+    PyTorch Lightning DataModule for contrastive learning.
+
+    Handles the creation of training, validation, and testing datasets and dataloaders
+    using the EmbeddingDataset. It assumes embeddings are pre-computed.
+    """
+
     def __init__(
         self,
         data_dir: str,
-        train_embeddings: str,
-        train_labels: str,
-        val_embeddings: str,
-        val_labels: str,
-        test_embeddings: str = None,
-        test_labels: str = None,
+        train_embeddings_file: str,
+        train_labels_file: str,
+        val_embeddings_file: str,
+        val_labels_file: str,
+        test_embeddings_file: Optional[str] = None,
+        test_labels_file: Optional[str] = None,
         batch_size: int = 128,
         num_workers: int = 4,
-        mining_strategy: str = "random",
+        pin_memory: bool = True, # Default to True if using GPU
+        persistent_workers: bool = True, # Default to True for efficiency
     ):
-        """Initialize data module.
-        
+        """
+        Initializes the DataModule.
+
         Args:
-            data_dir: Root directory containing data files
-            train_embeddings: Path to training embeddings file
-            train_labels: Path to training labels file
-            val_embeddings: Path to validation embeddings file
-            val_labels: Path to validation labels file
-            test_embeddings: Path to test embeddings file (optional)
-            test_labels: Path to test labels file (optional)
-            batch_size: Number of samples per batch
-            num_workers: Number of subprocesses for data loading
-            mining_strategy: Strategy for triplet selection ('random', 'semi-hard', 'hard')
+            data_dir: Root directory containing data files.
+            train_embeddings_file: Filename of training embeddings NPZ file (relative to data_dir).
+            train_labels_file: Filename of training labels CSV file (relative to data_dir).
+            val_embeddings_file: Filename of validation embeddings NPZ file (relative to data_dir).
+            val_labels_file: Filename of validation labels CSV file (relative to data_dir).
+            test_embeddings_file: Optional filename of test embeddings NPZ file.
+            test_labels_file: Optional filename of test labels CSV file.
+            batch_size: Number of samples per batch.
+            num_workers: Number of subprocesses for data loading.
+            pin_memory: If True, DataLoader will copy Tensors into CUDA pinned memory before returning them.
+            persistent_workers: If True, workers will not be shut down after an epoch.
         """
         super().__init__()
         self.data_dir = Path(data_dir).resolve()
-        self.train_embeddings = train_embeddings
-        self.train_labels = train_labels
-        self.val_embeddings = val_embeddings
-        self.val_labels = val_labels
-        self.test_embeddings = test_embeddings
-        self.test_labels = test_labels
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.mining_strategy = mining_strategy
-        self.datasets = {}
-        
+        self.train_embeddings_path = self.data_dir / train_embeddings_file
+        self.train_labels_path = self.data_dir / train_labels_file
+        self.val_embeddings_path = self.data_dir / val_embeddings_file
+        self.val_labels_path = self.data_dir / val_labels_file
+
+        self.test_embeddings_path = self.data_dir / test_embeddings_file if test_embeddings_file else None
+        self.test_labels_path = self.data_dir / test_labels_file if test_labels_file else None
+
+        # Store hyperparameters
+        self.save_hyperparameters(
+            "batch_size", "num_workers", "pin_memory", "persistent_workers"
+        )
+
+        self.datasets: Dict[str, EmbeddingDataset] = {}
+        self.embedding_dim: Optional[int] = None
+        self.num_classes: Optional[int] = None
+
     def setup(self, stage: Optional[str] = None):
-        """Set up datasets for each stage of training."""
+        """
+        Loads and prepares datasets for the specified stage ('fit', 'test', or None).
+
+        Args:
+            stage: The stage for which to set up data ('fit', 'test', or None for both).
+        """
+        log.info(f"Setting up data module for stage: {stage}")
+
+        # Setup for training and validation ('fit' stage)
         if stage in (None, "fit"):
-            self.datasets["train"] = TripletDataset(
-                self.data_dir / self.train_embeddings,
-                self.data_dir / self.train_labels,
-                mining_strategy=self.mining_strategy
-            )
-            self.datasets["val"] = TripletDataset(
-                self.data_dir / self.val_embeddings,
-                self.data_dir / self.val_labels,
-                mining_strategy=self.mining_strategy
-            )
-            # Store information about the embedding space
-            self.embedding_dim = self.datasets["train"].embeddings.shape[1]
-            self.num_classes = len(set(self.datasets["train"].labels))
+            if "train" not in self.datasets:
+                log.info("Loading training data...")
+                self.datasets["train"] = EmbeddingDataset(
+                    self.train_embeddings_path, self.train_labels_path
+                )
+                self.embedding_dim = self.datasets["train"].embedding_dim
+                self.num_classes = self.datasets["train"].num_classes
             
-            # Log statistics
-            log.info(f"Training set statistics:")
-            log.info(f"  - Total samples: {len(self.datasets['train'])}")
-            log.info(f"  - Total classes: {self.num_classes}")
-            log.info(f"  - Embedding dimension: {self.embedding_dim}")
-            
-        if stage == "test" and self.test_embeddings and self.test_labels:
-            self.datasets["test"] = TripletDataset(
-                self.data_dir / self.test_embeddings,
-                self.data_dir / self.test_labels,
-                mining_strategy=self.mining_strategy
+            if "val" not in self.datasets:
+                log.info("Loading validation data...")
+                self.datasets["val"] = EmbeddingDataset(
+                    self.val_embeddings_path, self.val_labels_path
+                )
+                # Ensure validation data compatibility
+                if self.datasets["val"].embedding_dim != self.embedding_dim:
+                     log.warning(f"Validation embedding dim ({self.datasets['val'].embedding_dim}) "
+                                 f"differs from train ({self.embedding_dim})!")
+                log.info("Validation data loaded.")
+
+        # Setup for testing ('test' stage)
+        if stage in (None, "test"):
+            if self.test_embeddings_path and self.test_labels_path:
+                if "test" not in self.datasets:
+                    log.info("Loading test data...")
+                    self.datasets["test"] = EmbeddingDataset(
+                        self.test_embeddings_path, self.test_labels_path
+                    )
+                    # Ensure test data compatibility
+                    if self.datasets["test"].embedding_dim != self.embedding_dim:
+                         log.warning(f"Test embedding dim ({self.datasets["test"].embedding_dim}) "
+                                     f"differs from train ({self.embedding_dim})!")
+                    log.info("Test data loaded.")
+            elif stage == "test":
+                log.warning("Test stage requested but test data paths were not provided.")
+
+    def _get_dataloader(self, split: str, shuffle: bool) -> Optional[DataLoader]:
+        """Helper function to create a DataLoader for a specific split."""
+        if split not in self.datasets:
+            log.warning(f"Dataset for split '{split}' not found.")
+            return None
+
+        is_train = (split == "train")
+        # Use persistent workers only for training by default
+        persist = self.hparams.persistent_workers if is_train else False
+        # Use prefetch factor for training
+        prefetch = 2 if is_train else None
+
+        try:
+            loader = DataLoader(
+                self.datasets[split],
+                batch_size=self.hparams.batch_size,
+                shuffle=shuffle,
+                num_workers=self.hparams.num_workers,
+                pin_memory=self.hparams.pin_memory,
+                persistent_workers=persist and self.hparams.num_workers > 0,
+                prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
+                drop_last=is_train # Drop last batch if incomplete during training
             )
+            return loader
+        except Exception as e:
+            log.error(f"Failed to create DataLoader for split '{split}': {e}", exc_info=True)
+            return None
 
-    def train_dataloader(self) -> DataLoader:
-        """Create training data loader."""
-        return DataLoader(
-            self.datasets["train"],
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            prefetch_factor=2,
-            persistent_workers=True
-        )
+    def train_dataloader(self) -> Optional[DataLoader]:
+        """Returns the DataLoader for the training set."""
+        return self._get_dataloader("train", shuffle=True)
 
-    def val_dataloader(self) -> DataLoader:
-        """Create validation data loader."""
-        return DataLoader(
-            self.datasets["val"],
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=True
-        )
+    def val_dataloader(self) -> Optional[DataLoader]:
+        """Returns the DataLoader for the validation set."""
+        return self._get_dataloader("val", shuffle=False)
 
     def test_dataloader(self) -> Optional[DataLoader]:
-        """Create test data loader if test data is available."""
-        if "test" in self.datasets:
-            return DataLoader(
-                self.datasets["test"],
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                pin_memory=True
-            )
-        return None 
+        """Returns the DataLoader for the test set."""
+        return self._get_dataloader("test", shuffle=False)
+
+    def get_label_decoder(self) -> Optional[Dict[int, str]]:
+        """Returns the label decoder dictionary (int -> string label)."""
+        if "train" in self.datasets:
+            return self.datasets["train"].label_decoder
+        log.warning("Label decoder requested but training dataset is not loaded.")
+        return None
