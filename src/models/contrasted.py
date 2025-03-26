@@ -211,28 +211,25 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # Mine hard triplets within the batch
         anchor_idx, positive_idx, negative_idx = self.miner(projected_embeddings, labels)
 
-        # If no valid triplets found in the batch, return zero loss
+        # Determine loss and number of active triplets based on mining results
         if len(anchor_idx) == 0:
-            # Consolidated logging
-            zero_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-            self.log_dict({
-                "train/loss": zero_loss,
-                "train/active_triplets": 0.0
-            }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=False)
-            return zero_loss
+            # No valid triplets found
+            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            active_triplets = 0
+        else:
+            # Select the embeddings corresponding to the mined triplet indices
+            anchor_emb = projected_embeddings[anchor_idx]
+            positive_emb = projected_embeddings[positive_idx]
+            negative_emb = projected_embeddings[negative_idx]
 
-        # Select the embeddings corresponding to the mined triplet indices
-        anchor_emb = projected_embeddings[anchor_idx]
-        positive_emb = projected_embeddings[positive_idx]
-        negative_emb = projected_embeddings[negative_idx]
+            # Calculate triplet loss
+            loss = self.loss_fn(anchor_emb, positive_emb, negative_emb)
+            active_triplets = len(anchor_idx)
 
-        # Calculate triplet loss
-        loss = self.loss_fn(anchor_emb, positive_emb, negative_emb)
-
-        # Consolidated logging
+        # Log metrics only once per step with consistent parameters
         self.log_dict({
             "train/loss": loss,
-            "train/active_triplets": float(len(anchor_idx))
+            "train/active_triplets": float(active_triplets)
         }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=False)
 
         return loss
