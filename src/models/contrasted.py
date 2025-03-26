@@ -102,7 +102,7 @@ class BatchHardMiner:
         return anchor_indices, positive_indices, negative_indices
 
 
-class ContrastiveLitModel(pl.LightningModule):
+class ContrastiveCATHeModel(pl.LightningModule):
     """
     PyTorch Lightning module for contrastive learning using a projection head
     and Batch Hard Triplet Loss.
