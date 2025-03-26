@@ -228,10 +228,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
         # Log metrics only once per step with consistent parameters
         self.log_dict({
-            "train/loss": loss,
-            "train/active_triplets": float(active_triplets)
-        }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=False)
-
+            "train/active_triplets": float(active_triplets),
+            "train/active_triplet_ratio": float(active_triplets) / len(labels) if len(labels) > 0 else 0.0,
+        }, on_step=batch_idx % 50 == 0, on_epoch=True, prog_bar=True)
+        
         return loss
 
     def _log_zero_metrics(self, prefix: str, metrics: List[str], prog_bar: bool = False) -> None:
