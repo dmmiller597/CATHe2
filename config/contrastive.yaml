@@ -20,7 +20,7 @@ model:
 
   # Learning rate scheduler
   lr_scheduler:
-    monitor: "val/loss"
+    monitor: "val/knn_balanced_acc"
     mode: "min"
     factor: 0.5
     patience: 5
