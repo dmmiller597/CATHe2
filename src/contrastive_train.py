@@ -32,8 +32,7 @@ def main(cfg: DictConfig) -> None:
         test_embeddings_file=cfg.data.test_embeddings if hasattr(cfg.data, "test_embeddings") else None,
         test_labels_file=cfg.data.test_labels if hasattr(cfg.data, "test_labels") else None,
         batch_size=cfg.training.batch_size,
-        num_workers=cfg.training.num_workers,
-        mining_strategy=cfg.data.mining_strategy if hasattr(cfg.data, "mining_strategy") else None
+        num_workers=cfg.training.num_workers
     )
     
     # Model setup
