@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import pytorch_lightning as pl
 from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
@@ -103,8 +103,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
         test_labels_file: Optional[str] = None,
         batch_size: int = 128,
         num_workers: int = 4,
-        pin_memory: bool = True, # Default to True if using GPU
-        persistent_workers: bool = True, # Default to True for efficiency
+        pin_memory: bool = True,
+        persistent_workers: bool = True,
     ):
         """
         Initializes the DataModule.
@@ -194,22 +194,49 @@ class ContrastiveDataModule(pl.LightningDataModule):
             return None
 
         is_train = (split == "train")
-        # Use persistent workers only for training by default
         persist = self.hparams.persistent_workers if is_train else False
-        # Use prefetch factor for training
         prefetch = 2 if is_train else None
 
         try:
-            loader = DataLoader(
-                self.datasets[split],
-                batch_size=self.hparams.batch_size,
-                shuffle=shuffle,
-                num_workers=self.hparams.num_workers,
-                pin_memory=self.hparams.pin_memory,
-                persistent_workers=persist and self.hparams.num_workers > 0,
-                prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
-                drop_last=is_train # Drop last batch if incomplete during training
-            )
+            # Always use balanced sampling for training
+            if is_train:
+                # Calculate inverse frequency weights for each class
+                labels = self.datasets[split].labels
+                class_counts = np.bincount(labels)
+                class_weights = 1.0 / np.maximum(class_counts, 1)  # Avoid division by zero
+                sample_weights = class_weights[labels]
+                
+                # Create weighted sampler
+                sampler = WeightedRandomSampler(
+                    weights=torch.from_numpy(sample_weights.astype(np.float32)),
+                    num_samples=len(sample_weights),
+                    replacement=True
+                )
+                
+                log.info(f"Using class-balanced sampling for training (class counts: {dict(zip(range(len(class_counts)), class_counts))})")
+                
+                loader = DataLoader(
+                    self.datasets[split],
+                    batch_size=self.hparams.batch_size,
+                    sampler=sampler,
+                    num_workers=self.hparams.num_workers,
+                    pin_memory=self.hparams.pin_memory,
+                    persistent_workers=persist and self.hparams.num_workers > 0,
+                    prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
+                    drop_last=is_train
+                )
+            else:
+                # Standard dataloader for validation/test
+                loader = DataLoader(
+                    self.datasets[split],
+                    batch_size=self.hparams.batch_size,
+                    shuffle=shuffle,
+                    num_workers=self.hparams.num_workers,
+                    pin_memory=self.hparams.pin_memory,
+                    persistent_workers=persist and self.hparams.num_workers > 0,
+                    prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
+                    drop_last=is_train
+                )
             return loader
         except Exception as e:
             log.error(f"Failed to create DataLoader for split '{split}': {e}", exc_info=True)
