@@ -6,24 +6,16 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import balanced_accuracy_score, f1_score, accuracy_score
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold
 import logging
 
 # Use standard logging
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Optional: For potentially faster distance calculations if available
-try:
-    import torch_cluster # pyg
-    def pairwise_distance_optimized(x, y):
-        # Using squared Euclidean distance
-        return torch.cdist(x, y, p=2.0).pow(2)
-except ImportError:
-    log.info("torch_cluster not found. Using torch.cdist for pairwise distances.")
-    def pairwise_distance_optimized(x, y):
-        # Fallback using native PyTorch - ensure squared Euclidean
-        return torch.cdist(x, y, p=2.0).pow(2)
+def pairwise_distance_optimized(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Computes squared pairwise Euclidean distances between two batches of vectors."""
+    return torch.cdist(x, y, p=2.0).pow(2)
 
 
 class BatchHardMiner:
@@ -77,13 +69,6 @@ class BatchHardMiner:
         hardest_neg_dist, hardest_neg_idx = torch.min(neg_dists, dim=1)
 
         # Create masks for valid triplets
-        # Check 1: Ensure hardest positive was found (at least one other sample with same label exists)
-        # Check 2: Ensure hardest negative was found (at least one sample with different label exists)
-        # Check 3: Ensure the triplet contributes to loss (hard_pos_dist > hard_neg_dist, before margin)
-        # Note: TripletLoss handles the margin, so we only need hard_pos > hard_neg conceptually,
-        # but the loss function itself will filter trivial triplets (loss <= 0).
-
-        # Find anchors where both a valid positive and negative were found
         valid_pos_mask = hardest_pos_dist > 0 # Needs a positive pair distance > 0
         valid_neg_mask = hardest_neg_dist != float('inf') # Needs a finite negative distance
         valid_anchor_mask = valid_pos_mask & valid_neg_mask
@@ -109,7 +94,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
     """
     # Constants for evaluation
     DEFAULT_KNN_NEIGHBORS = 5
-    DEFAULT_VAL_SPLIT_RATIO = 0.7
     DEFAULT_TEST_CV_FOLDS = 5
 
     def __init__(
@@ -125,7 +109,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
         # Evaluation parameters
         knn_neighbors: int = DEFAULT_KNN_NEIGHBORS,
-        knn_val_split_ratio: float = DEFAULT_VAL_SPLIT_RATIO,
         knn_test_cv_folds: int = DEFAULT_TEST_CV_FOLDS,
     ):
         """
@@ -141,9 +124,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             triplet_margin: Margin for the triplet loss function.
             use_layer_norm: Whether to use Layer Normalization in the projection head.
             lr_scheduler_config: Configuration dictionary for the LR scheduler (e.g., ReduceLROnPlateau).
-                                 Example: {"monitor": "val/loss", "factor": 0.5, "patience": 5}
-            knn_neighbors: Number of neighbors for kNN evaluation.
-            knn_val_split_ratio: Ratio to split validation data for kNN training (e.g., 0.7 means 70% train, 30% test).
+                                Example: {"monitor": "val/1nn_balanced_acc", "factor": 0.5, "patience": 5}
+            knn_neighbors: Number of neighbors for kNN evaluation during testing.
             knn_test_cv_folds: Number of folds for cross-validation during kNN testing.
         """
         super().__init__()
@@ -279,56 +261,68 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes kNN classification metrics on the validation set at the end of the epoch."""
+        """Computes 1-NN classification metrics on the validation set at the end of the epoch."""
         if not self._val_outputs:
             log.warning("Validation epoch end called but no outputs were collected.")
             return
 
         # Collate embeddings and labels from all validation steps
-        all_embeddings, all_labels = self._collect_and_clear_outputs(self._val_outputs)
+        # Use torch tensors on CPU initially for potentially faster distance calculation
+        try:
+            all_embeddings_tensor = torch.cat([x["embeddings"] for x in self._val_outputs])
+            all_labels_tensor = torch.cat([x["labels"] for x in self._val_outputs])
+            self._val_outputs.clear() # Free memory
+        except Exception as e:
+             log.error(f"Failed to collate validation outputs: {e}", exc_info=True)
+             self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
+             return
 
-        # Ensure enough data for split and kNN
-        min_samples_for_split = max(2, self.hparams.knn_neighbors) # Need at least k neighbors + 1 for train/test
-        if len(all_embeddings) < min_samples_for_split * 2 or len(np.unique(all_labels)) < 2:
-            log.warning(f"Skipping validation kNN: Insufficient samples ({len(all_embeddings)}) "
-                        f"or classes ({len(np.unique(all_labels))}).")
-            self._log_zero_metrics("val", ["knn_acc", "knn_balanced_acc"], prog_bar=True)
+        n_samples = len(all_embeddings_tensor)
+        n_classes = len(torch.unique(all_labels_tensor))
+
+        # Ensure enough data for 1-NN (need at least 2 samples to find a neighbor) and >1 class
+        if n_samples < 2 or n_classes < 2:
+            log.warning(f"Skipping validation 1-NN: Insufficient samples ({n_samples}) "
+                        f"or classes ({n_classes}). Need at least 2 samples and 2 classes.")
+            self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
             return
 
         try:
-            # Split validation data itself into train/test for kNN
-            knn_train_embeds, knn_test_embeds, knn_train_labels, knn_test_labels = train_test_split(
-                all_embeddings,
-                all_labels,
-                train_size=self.hparams.knn_val_split_ratio,
-                stratify=all_labels,
-                random_state=42
-            )
+            log.debug(f"Starting validation 1-NN evaluation on {n_samples} samples.")
+            # Calculate pairwise squared Euclidean distances
+            # Use torch for potentially faster computation on CPU/GPU if available later
+            dist_mat = pairwise_distance_optimized(all_embeddings_tensor, all_embeddings_tensor) # NxN matrix
 
-            # Ensure the test split is usable
-            if len(knn_test_embeds) == 0 or len(np.unique(knn_train_labels)) < 2:
-                 log.warning(f"Skipping validation kNN: Split resulted in unusable train/test sets.")
-                 self._log_zero_metrics("val", ["knn_acc", "knn_balanced_acc"], prog_bar=True)
-                 return
+            # Mask out diagonal (distance to self)
+            dist_mat.fill_diagonal_(float('inf'))
 
-            # Compute kNN metrics using the helper
-            metrics = self._compute_knn_metrics(
-                knn_train_embeds, knn_train_labels,
-                knn_test_embeds, knn_test_labels,
-                self.hparams.knn_neighbors
-            )
+            # Find the index of the nearest neighbor for each sample
+            nearest_neighbor_idx = torch.argmin(dist_mat, dim=1)
 
-            # Log validation kNN metrics
+            # Get the labels of the nearest neighbors
+            predicted_labels = all_labels_tensor[nearest_neighbor_idx]
+
+            # Move labels to numpy for scikit-learn metrics
+            true_labels_np = all_labels_tensor.numpy()
+            predicted_labels_np = predicted_labels.numpy()
+
+            # Compute metrics
+            accuracy = accuracy_score(true_labels_np, predicted_labels_np)
+            balanced_accuracy = balanced_accuracy_score(true_labels_np, predicted_labels_np, adjusted=False)
+
+            # Log validation 1-NN metrics
             self.log_dict({
-                "val/knn_acc": metrics["accuracy"],
-                "val/knn_balanced_acc": metrics["balanced_accuracy"]
-            }, prog_bar=True)
-            
-            log.info(f"Validation kNN - Acc: {metrics['accuracy']:.4f}, Balanced Acc: {metrics['balanced_accuracy']:.4f}")
+                "val/1nn_acc": float(accuracy),
+                "val/1nn_balanced_acc": float(balanced_accuracy)
+                # Add F1 etc. if desired
+            }, prog_bar=True, on_epoch=True) # Ensure it's logged per epoch
+
+            log.info(f"Validation 1-NN - Acc: {accuracy:.4f}, Balanced Acc: {balanced_accuracy:.4f}")
 
         except Exception as e:
-            log.error(f"Error during validation kNN evaluation: {e}", exc_info=True)
-            self._log_zero_metrics("val", ["knn_acc", "knn_balanced_acc"], prog_bar=True)
+            log.error(f"Error during validation 1-NN evaluation: {e}", exc_info=True)
+            # Log zero metrics on error
+            self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
 
     # --- Testing ---
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
@@ -357,7 +351,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         min_samples_for_cv = max(n_folds, self.hparams.knn_neighbors + 1)
         if n_samples < min_samples_for_cv or n_classes < 2:
             log.warning(f"Skipping test kNN CV: Insufficient samples ({n_samples}) "
-                        f"or classes ({n_classes}) for {n_folds}-fold CV.")
+                        f"or classes ({n_classes}) for {n_folds}-fold CV with k={self.hparams.knn_neighbors}.")
             self._log_zero_metrics("test", ["knn_acc_cv_mean", "knn_balanced_acc_cv_mean", "knn_f1_macro_cv_mean"])
             return
 
@@ -365,7 +359,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
             fold_metrics = {"accuracy": [], "balanced_accuracy": [], "f1_macro": []}
 
-            log.info(f"Starting {n_folds}-fold kNN Cross-Validation on test set...")
+            log.info(f"Starting {n_folds}-fold kNN Cross-Validation on test set (k={self.hparams.knn_neighbors})...")
             for fold_idx, (train_index, test_index) in enumerate(skf.split(all_embeddings, all_labels)):
                 knn_train_embeds, knn_test_embeds = all_embeddings[train_index], all_embeddings[test_index]
                 knn_train_labels, knn_test_labels = all_labels[train_index], all_labels[test_index]
@@ -406,7 +400,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log_dict(result_metrics)
 
             # Display summary
-            log.info(f"Test kNN CV Results ({n_folds}-fold):")
+            log.info(f"Test kNN CV Results ({n_folds}-fold, k={self.hparams.knn_neighbors}):")
             log.info(f"  Accuracy:          {result_metrics['test/knn_accuracy_cv_mean']:.4f} +/- {result_metrics['test/knn_accuracy_cv_std']:.4f}")
             log.info(f"  Balanced Accuracy: {result_metrics['test/knn_balanced_accuracy_cv_mean']:.4f} +/- {result_metrics['test/knn_balanced_accuracy_cv_std']:.4f}")
             log.info(f"  Macro F1-Score:    {result_metrics['test/knn_f1_macro_cv_mean']:.4f} +/- {result_metrics['test/knn_f1_macro_cv_std']:.4f}")
@@ -444,7 +438,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             return optimizer
             
         scheduler_params = self.hparams.lr_scheduler_config
-        monitor = scheduler_params.get("monitor", "val/knn_balanced_acc")
+        monitor = scheduler_params.get("monitor", "val/1nn_balanced_acc")  # Use 1NN metric by default
         mode = scheduler_params.get("mode", "max")
 
         # Example: Using ReduceLROnPlateau
