@@ -257,7 +257,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes 1-NN classification metrics on the validation set using memory-efficient batching."""
+        """Computes 1-NN classification metrics on the validation set using a subset for efficiency."""
         if not self._val_outputs:
             log.warning("Validation epoch end called but no outputs were collected.")
             return
@@ -272,70 +272,46 @@ class ContrastiveCATHeModel(pl.LightningModule):
             num_samples = all_embeddings.size(0)
             device = all_embeddings.device
             
-            # Memory-efficient nearest neighbor search
-            batch_size = 512  # Adjust this value based on your GPU memory
-            nearest_indices = torch.zeros(num_samples, dtype=torch.long, device=device)
+            # For large validation sets, use a subset for efficiency (10k samples or 10%, whichever is smaller)
+            max_samples = min(10000, num_samples // 10)
             
-            log.info(f"Starting memory-efficient 1-NN search on {num_samples} validation samples (batch size: {batch_size})...")
-            progress_step = max(1, num_samples // 10)  # Report progress ~10 times
+            if num_samples > max_samples:
+                log.info(f"Using {max_samples} samples out of {num_samples} for efficient validation")
+                # Sample indices without replacement
+                indices = torch.randperm(num_samples, device=device)[:max_samples]
+                subset_embeddings = all_embeddings[indices]
+                subset_labels = all_labels[indices]
+            else:
+                subset_embeddings = all_embeddings
+                subset_labels = all_labels
             
-            # Track processing progress
-            processed_samples = 0
-            total_batches = (num_samples + batch_size - 1) // batch_size
+            # Track timing
             start_time = torch.cuda.Event(enable_timing=True)
             end_time = torch.cuda.Event(enable_timing=True)
             start_time.record()
             
-            for i in range(0, num_samples, batch_size):
-                # Get query batch
-                end_idx = min(i + batch_size, num_samples)
-                query_batch = all_embeddings[i:end_idx]
-                batch_count = (i // batch_size) + 1
-                
-                # Initialize min distances for this batch
-                min_distances = torch.full((end_idx - i,), float('inf'), device=device)
-                
-                # Report batch progress
-                if i % progress_step == 0 or i == 0:
-                    log.info(f"Processing batch {batch_count}/{total_batches} " 
-                             f"({i}/{num_samples} samples, {i/num_samples*100:.1f}%)")
-                
-                # Compare against all embeddings in batches
-                for j in range(0, num_samples, batch_size):
-                    ref_end_idx = min(j + batch_size, num_samples)
-                    ref_batch = all_embeddings[j:ref_end_idx]
-                    
-                    # Compute pairwise distances between current batches
-                    batch_dist = pairwise_distance_optimized(query_batch, ref_batch)
-                    
-                    # Exclude self-comparisons
-                    if i <= j < end_idx or j <= i < ref_end_idx:
-                        # Create mask for the overlapping region
-                        mask = torch.zeros_like(batch_dist, dtype=torch.bool)
-                        for k in range(query_batch.size(0)):
-                            query_idx = i + k
-                            if j <= query_idx < ref_end_idx:
-                                mask[k, query_idx - j] = True
-                        batch_dist.masked_fill_(mask, float('inf'))
-                    
-                    # Update nearest neighbors
-                    batch_min_dist, batch_min_idx = torch.min(batch_dist, dim=1)
-                    update_mask = batch_min_dist < min_distances
-                    min_distances[update_mask] = batch_min_dist[update_mask]
-                    nearest_indices[i:end_idx][update_mask] = batch_min_idx[update_mask] + j
+            # Compute pairwise distances in a single batch operation
+            # Using full distance matrix is fine for the reduced subset
+            dist_matrix = torch.cdist(subset_embeddings, subset_embeddings, p=2.0)
+            
+            # Set self-distances to infinity to ignore them
+            dist_matrix.fill_diagonal_(float('inf'))
+            
+            # Find nearest neighbors (minimum distance) 
+            _, nearest_indices = torch.min(dist_matrix, dim=1)
             
             # Calculate and report elapsed time
             end_time.record()
             torch.cuda.synchronize()
             elapsed_time = start_time.elapsed_time(end_time) / 1000.0  # Convert to seconds
-            log.info(f"Completed 1-NN search in {elapsed_time:.2f} seconds")
+            log.info(f"Completed 1-NN validation in {elapsed_time:.2f} seconds")
             
             # Get the labels of nearest neighbors (predictions)
-            predicted_labels = all_labels[nearest_indices.cpu()]
+            predicted_labels = subset_labels[nearest_indices]
             
             # Compute metrics
-            true_labels_np = all_labels.cpu().numpy()
-            predicted_labels_np = predicted_labels.numpy()
+            true_labels_np = subset_labels.cpu().numpy()
+            predicted_labels_np = predicted_labels.cpu().numpy()
             
             accuracy = accuracy_score(true_labels_np, predicted_labels_np)
             balanced_accuracy = balanced_accuracy_score(true_labels_np, predicted_labels_np, adjusted=False)
@@ -349,7 +325,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.info(f"Validation 1-NN - Acc: {accuracy:.4f}, Balanced Acc: {balanced_accuracy:.4f}")
             
         except Exception as e:
-            log.error(f"Failed to collate validation outputs: {e}", exc_info=True)
+            log.error(f"Failed to process validation outputs: {e}", exc_info=True)
             # Log zero metrics on error
             self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
 
