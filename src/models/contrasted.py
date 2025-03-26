@@ -1,39 +1,49 @@
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_lightning as pl
-from typing import List, Dict, Any, Tuple, Optional, Union
-import numpy as np
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import balanced_accuracy_score, f1_score, accuracy_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from sklearn.model_selection import StratifiedKFold
-import logging
+from sklearn.neighbors import KNeighborsClassifier
+from torch import Tensor # Explicit type hinting
 
-# Use standard logging
+# Configure logging
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
+)
 
-def pairwise_distance_optimized(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    """Computes squared pairwise Euclidean distances between two batches of vectors."""
+# --- Distance & Mining ---
+
+def pairwise_distance_optimized(x: Tensor, y: Tensor) -> Tensor:
+    """
+    Computes squared pairwise Euclidean distances between two batches of vectors
+    using torch.cdist for efficiency.
+    """
     return torch.cdist(x, y, p=2.0).pow(2)
-
 
 class BatchHardMiner:
     """
     Implements Batch Hard Mining strategy for triplet selection within a batch.
 
     For each anchor, selects the hardest positive (farthest) and hardest negative
-    (closest) sample within the batch.
+    (closest) sample within the batch based on squared Euclidean distance.
     """
     def __init__(self, distance_metric_func=pairwise_distance_optimized):
         self.distance_metric = distance_metric_func
 
-    def __call__(self, embeddings: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Selects batch-hard triplets.
 
         Args:
-            embeddings: Tensor of embeddings (batch_size, embedding_dim).
+            embeddings: Tensor of embeddings (batch_size, embedding_dim). Assumed normalized.
             labels: Tensor of integer labels (batch_size,).
 
         Returns:
@@ -45,57 +55,58 @@ class BatchHardMiner:
         batch_size = embeddings.size(0)
 
         # Calculate pairwise distances (squared Euclidean)
-        dist_mat = self.distance_metric(embeddings, embeddings)
+        dist_mat = self.distance_metric(embeddings, embeddings) # Shape: (batch_size, batch_size)
 
         # Create masks for positive and negative pairs
-        labels_equal = labels.unsqueeze(0) == labels.unsqueeze(1)
+        labels_equal = labels.unsqueeze(0) == labels.unsqueeze(1) # Shape: (batch_size, batch_size)
         labels_not_equal = ~labels_equal
-        # Mask out diagonal (distance to self)
         identity_mask = torch.eye(batch_size, dtype=torch.bool, device=device)
-        labels_equal.masked_fill_(identity_mask, False) # Cannot be positive of oneself
 
-        # Find hardest positive for each anchor
-        # Set non-positive distances to negative infinity
-        hardest_pos_dist, hardest_pos_idx = torch.max(
-            dist_mat * labels_equal.float(), # Zero out non-positives
-            dim=1
-        )
+        # --- Find Hardest Positive ---
+        # Mask out self and negatives. For positives, we want the *max* distance.
+        pos_dist_mat = dist_mat.clone()
+        pos_dist_mat.masked_fill_(~labels_equal | identity_mask, -torch.inf) # Invalidate non-positives
+        hardest_pos_dist, hardest_pos_idx = torch.max(pos_dist_mat, dim=1)
 
-        # Find hardest negative for each anchor
-        # Set non-negative distances to positive infinity
-        neg_dists = dist_mat.clone()
-        neg_dists[labels_equal] = float('inf') # Ignore positives
-        neg_dists[identity_mask] = float('inf') # Ignore self
-        hardest_neg_dist, hardest_neg_idx = torch.min(neg_dists, dim=1)
+        # --- Find Hardest Negative ---
+        # Mask out self and positives. For negatives, we want the *min* distance.
+        neg_dist_mat = dist_mat.clone()
+        # Invalidate positives and self by setting distance to +infinity
+        neg_dist_mat.masked_fill_(labels_equal | identity_mask, torch.inf)
+        hardest_neg_dist, hardest_neg_idx = torch.min(neg_dist_mat, dim=1)
 
-        # Create masks for valid triplets
-        valid_pos_mask = hardest_pos_dist > 0 # Needs a positive pair distance > 0
-        valid_neg_mask = hardest_neg_dist != float('inf') # Needs a finite negative distance
+        # --- Filter Valid Triplets ---
+        # Valid if a positive exists (dist > -inf) and a negative exists (dist < inf)
+        valid_pos_mask = hardest_pos_dist > -torch.inf
+        valid_neg_mask = hardest_neg_dist < torch.inf
         valid_anchor_mask = valid_pos_mask & valid_neg_mask
 
         # Get the indices for the valid hard triplets
         anchor_indices = torch.where(valid_anchor_mask)[0]
-        positive_indices = hardest_pos_idx[anchor_indices]
-        negative_indices = hardest_neg_idx[anchor_indices]
 
         if len(anchor_indices) == 0:
-             log.debug("No valid triplets found in this batch.")
-             return torch.empty(0, dtype=torch.long, device=device), \
-                    torch.empty(0, dtype=torch.long, device=device), \
-                    torch.empty(0, dtype=torch.long, device=device)
+            # log.debug("No valid triplets found in this batch.") # Can be noisy
+            return (
+                torch.empty(0, dtype=torch.long, device=device),
+                torch.empty(0, dtype=torch.long, device=device),
+                torch.empty(0, dtype=torch.long, device=device),
+            )
+
+        positive_indices = hardest_pos_idx[anchor_indices]
+        negative_indices = hardest_neg_idx[anchor_indices]
 
         return anchor_indices, positive_indices, negative_indices
 
 
+# --- Main Lightning Module ---
+
 class ContrastiveCATHeModel(pl.LightningModule):
     """
-    PyTorch Lightning module for contrastive learning using a projection head
-    and Batch Hard Triplet Loss.
-    """
-    # Constants for evaluation
-    DEFAULT_KNN_NEIGHBORS = 5
-    DEFAULT_TEST_CV_FOLDS = 5
+    PyTorch Lightning module for CATH superfamily contrastive learning.
 
+    Uses a projection head, Batch Hard Triplet Loss, and kNN evaluation.
+    Assumes input is pre-computed protein embeddings.
+    """
     def __init__(
         self,
         input_embedding_dim: int,
@@ -104,32 +115,32 @@ class ContrastiveCATHeModel(pl.LightningModule):
         dropout: float = 0.3,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
-        triplet_margin: float = 1.0,
+        triplet_margin: float = 0.5,
         use_layer_norm: bool = True,
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
-        # Evaluation parameters
-        knn_neighbors: int = DEFAULT_KNN_NEIGHBORS,
-        knn_test_cv_folds: int = DEFAULT_TEST_CV_FOLDS,
+        knn_val_neighbors: int = 1,
+        knn_test_neighbors: int = 5,
+        knn_test_cv_folds: int = 5,
+        val_max_samples: int = 10000,
     ):
         """
-        Initializes the contrastive learning model.
-
         Args:
-            input_embedding_dim: Dimension of the input pre-computed embeddings.
-            projection_hidden_dims: List of hidden layer sizes for the MLP projection network.
-            output_embedding_dim: Dimension of the final output embedding space.
-            dropout: Dropout probability in the projection network.
+            input_embedding_dim: Dimension of input protein embeddings.
+            projection_hidden_dims: List of hidden layer sizes for MLP projection head.
+            output_embedding_dim: Dimension of the final contrastive embedding space.
+            dropout: Dropout probability in the projection head.
             learning_rate: Optimizer learning rate.
             weight_decay: Optimizer weight decay (L2 regularization).
-            triplet_margin: Margin for the triplet loss function.
+            triplet_margin: Margin for the TripletMarginLoss.
             use_layer_norm: Whether to use Layer Normalization in the projection head.
-            lr_scheduler_config: Configuration dictionary for the LR scheduler (e.g., ReduceLROnPlateau).
-                                Example: {"monitor": "val/1nn_balanced_acc", "factor": 0.5, "patience": 5}
-            knn_neighbors: Number of neighbors for kNN evaluation during testing.
-            knn_test_cv_folds: Number of folds for cross-validation during kNN testing.
+            lr_scheduler_config: Config for LR scheduler.
+            knn_val_neighbors: Number of neighbors for validation kNN.
+            knn_test_neighbors: Number of neighbors for test kNN.
+            knn_test_cv_folds: Number of CV folds for testing.
+            val_max_samples: Maximum validation samples to use for kNN.
         """
         super().__init__()
-        # Store hyperparameters (automatically logs them)
+        # Store hyperparameters
         self.save_hyperparameters()
 
         # Build the projection network (MLP)
@@ -140,24 +151,28 @@ class ContrastiveCATHeModel(pl.LightningModule):
             dropout=self.hparams.dropout,
             use_layer_norm=self.hparams.use_layer_norm
         )
-        self._init_weights()
 
-        # Loss function: Standard TripletMarginLoss using squared Euclidean distance (p=2)
-        self.loss_fn = nn.TripletMarginLoss(
+        # Loss function with squared Euclidean distance
+        self.loss_fn = nn.TripletMarginWithDistanceLoss(
+            distance_function=pairwise_distance_optimized,
             margin=self.hparams.triplet_margin,
-            p=2.0,  # Euclidean distance
-            reduction='mean' # Average loss over the batch of valid triplets
+            reduction='mean'
         )
 
         # Triplet miner
-        self.miner = BatchHardMiner()
+        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
 
-        # Lists to store validation/test outputs for epoch-end evaluation
+        # Initialize weights
+        self._init_weights()
+
+        # Lists to store validation/test outputs
         self._val_outputs = []
         self._test_outputs = []
 
-    def _build_projection_network(self, input_dim: int, hidden_dims: List[int],
-                                  output_dim: int, dropout: float, use_layer_norm: bool) -> nn.Sequential:
+    def _build_projection_network(
+        self, input_dim: int, hidden_dims: List[int], output_dim: int,
+        dropout: float, use_layer_norm: bool
+    ) -> nn.Sequential:
         """Helper function to build the MLP projection head."""
         layers: List[nn.Module] = []
         current_dim = input_dim
@@ -169,7 +184,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             layers.append(nn.Dropout(dropout))
             current_dim = h_dim
 
-        # Final projection layer (no activation/norm here, done in forward)
+        # Final projection layer
         layers.append(nn.Linear(current_dim, output_dim))
         return nn.Sequential(*layers)
 
@@ -180,303 +195,206 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.LayerNorm):
-                nn.init.constant_(module.weight, 1.0)
-                nn.init.constant_(module.bias, 0.0)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Passes input embeddings through the projection network and applies L2 normalization.
-
-        Args:
-            x: Input protein embeddings tensor (batch_size, input_embedding_dim).
-
-        Returns:
-            Projected and L2-normalized embeddings tensor (batch_size, output_embedding_dim).
-        """
+    def forward(self, x: Tensor) -> Tensor:
+        """Projects input embeddings and applies L2 normalization."""
         projected_embeddings = self.projection(x)
-        # L2 normalization is crucial for many metric learning losses
         normalized_embeddings = F.normalize(projected_embeddings, p=2, dim=1)
         return normalized_embeddings
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """
-        Performs a single training step: projects embeddings, mines triplets, calculates loss.
-        """
+    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
+        """Performs a training step with triplet mining."""
         embeddings, labels = batch
-
-        # Project embeddings into the learned space
         projected_embeddings = self(embeddings)
-
+        
         # Mine hard triplets within the batch
         anchor_idx, positive_idx, negative_idx = self.miner(projected_embeddings, labels)
 
-        # Determine loss and number of active triplets based on mining results
-        if len(anchor_idx) == 0:
-            # No valid triplets found
+        active_triplets = len(anchor_idx)
+        if active_triplets == 0:
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-            active_triplets = 0
         else:
             # Select the embeddings corresponding to the mined triplet indices
             anchor_emb = projected_embeddings[anchor_idx]
             positive_emb = projected_embeddings[positive_idx]
             negative_emb = projected_embeddings[negative_idx]
-
-            # Calculate triplet loss
             loss = self.loss_fn(anchor_emb, positive_emb, negative_emb)
-            active_triplets = len(anchor_idx)
 
-        # Log number of active triplets every 50 steps
-        if batch_idx % 50 == 0:
-            self.log('train/active_triplets', active_triplets, prog_bar=False, on_step=True)
-            self.log('train/loss', loss, prog_bar=False, on_step=True)
+        # Log metrics
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train/active_triplets', float(active_triplets), on_step=False, on_epoch=True, sync_dist=True)
         
         return loss
 
-    def _log_zero_metrics(self, prefix: str, metrics: List[str], prog_bar: bool = False) -> None:
-        """Helper to log zero values for metrics when evaluation is skipped."""
-        metric_dict = {f"{prefix}/{metric}": 0.0 for metric in metrics}
-        self.log_dict(metric_dict, prog_bar=prog_bar)
-
-    def _collect_and_clear_outputs(self, outputs: List[Dict[str, torch.Tensor]]) -> Tuple[np.ndarray, np.ndarray]:
-        """Collects embeddings and labels from outputs list and clears it."""
-        all_embeddings = torch.cat([x["embeddings"] for x in outputs]).numpy()
-        all_labels = torch.cat([x["labels"] for x in outputs]).numpy()
-        outputs.clear()  # Free memory
-        return all_embeddings, all_labels
-
     # --- Validation ---
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Projects validation embeddings and stores them with labels for epoch-end evaluation."""
+    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
+        """Stores projected validation embeddings for epoch-end evaluation."""
         embeddings, labels = batch
-        projected_embeddings = self(embeddings)
-        # Store outputs: keep on GPU to accelerate distance calculations
+        with torch.inference_mode():
+            projected_embeddings = self(embeddings)
+
         self._val_outputs.append({
-            "embeddings": projected_embeddings.detach(),  # Don't move to CPU
-            "labels": labels.detach().cpu()  # Labels can still go to CPU as they're small
+            "embeddings": projected_embeddings.detach(),
+            "labels": labels.detach()
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes 1-NN classification metrics on the validation set using a subset for efficiency."""
+        """Computes k-NN validation metrics."""
         if not self._val_outputs:
-            log.warning("Validation epoch end called but no outputs were collected.")
+            self.log("val/knn_accuracy", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_accuracy", 0.0, prog_bar=True, sync_dist=True)
             return
 
         try:
-            # Collect all embeddings and labels
+            # Concatenate embeddings and labels
             all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
             self._val_outputs.clear()  # Free memory
-            
-            # Get dimensions
+
+            # Sample validation data if too large
             num_samples = all_embeddings.size(0)
-            device = all_embeddings.device
-            
-            # For large validation sets, use a subset for efficiency (10k samples or 10%, whichever is smaller)
-            max_samples = min(10000, num_samples // 10)
-            
-            if num_samples > max_samples:
-                log.info(f"Using {max_samples} samples out of {num_samples} for efficient validation")
-                # Sample indices without replacement
-                indices = torch.randperm(num_samples, device=device)[:max_samples]
-                subset_embeddings = all_embeddings[indices]
-                subset_labels = all_labels[indices]
+            if num_samples > self.hparams.val_max_samples:
+                indices = torch.randperm(num_samples, device=self.device)[:self.hparams.val_max_samples]
+                all_embeddings = all_embeddings[indices]
+                all_labels = all_labels[indices]
+
+            # Compute pairwise distances
+            dist_matrix = pairwise_distance_optimized(all_embeddings, all_embeddings)
+            dist_matrix.fill_diagonal_(float('inf'))  # Exclude self
+
+            # Get nearest neighbor
+            k = self.hparams.knn_val_neighbors
+            _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)
+            neighbor_labels = all_labels[indices]
+
+            # For k=1, just use the nearest neighbor's label
+            if k == 1:
+                predicted_labels = neighbor_labels.squeeze(1)
             else:
-                subset_embeddings = all_embeddings
-                subset_labels = all_labels
-            
-            # Track timing
-            start_time = torch.cuda.Event(enable_timing=True)
-            end_time = torch.cuda.Event(enable_timing=True)
-            start_time.record()
-            
-            # Compute pairwise distances in a single batch operation
-            # Using full distance matrix is fine for the reduced subset
-            dist_matrix = torch.cdist(subset_embeddings, subset_embeddings, p=2.0)
-            
-            # Set self-distances to infinity to ignore them
-            dist_matrix.fill_diagonal_(float('inf'))
-            
-            # Find nearest neighbors (minimum distance) 
-            _, nearest_indices = torch.min(dist_matrix, dim=1)
-            
-            # Calculate and report elapsed time
-            end_time.record()
-            torch.cuda.synchronize()
-            elapsed_time = start_time.elapsed_time(end_time) / 1000.0  # Convert to seconds
-            log.info(f"Completed 1-NN validation in {elapsed_time:.2f} seconds")
-            
-            # Get the labels of nearest neighbors (predictions)
-            predicted_labels = subset_labels[nearest_indices]
-            
+                # Majority voting for k>1
+                predicted_labels, _ = torch.mode(neighbor_labels, dim=1)
+
+            # Move to CPU for sklearn metrics
+            y_true = all_labels.cpu().numpy()
+            y_pred = predicted_labels.cpu().numpy()
+
             # Compute metrics
-            true_labels_np = subset_labels.cpu().numpy()
-            predicted_labels_np = predicted_labels.cpu().numpy()
-            
-            accuracy = accuracy_score(true_labels_np, predicted_labels_np)
-            balanced_accuracy = balanced_accuracy_score(true_labels_np, predicted_labels_np, adjusted=False)
-            
-            # Log validation metrics
-            self.log_dict({
-                "val/1nn_acc": float(accuracy),
-                "val/1nn_balanced_acc": float(balanced_accuracy)
-            }, prog_bar=True, on_epoch=True)
-            
-            log.info(f"Validation 1-NN - Acc: {accuracy:.4f}, Balanced Acc: {balanced_accuracy:.4f}")
+            accuracy = accuracy_score(y_true, y_pred)
+            balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
+
+            # Log metrics
+            self.log("val/knn_accuracy", accuracy, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_accuracy", balanced_accuracy, prog_bar=True, sync_dist=True)
             
         except Exception as e:
-            log.error(f"Failed to process validation outputs: {e}", exc_info=True)
-            # Log zero metrics on error
-            self._log_zero_metrics("val", ["1nn_acc", "1nn_balanced_acc"], prog_bar=True)
+            log.error(f"Error in validation metrics: {e}")
+            self.log("val/knn_accuracy", 0.0, prog_bar=True, sync_dist=True)
+            self.log("val/knn_balanced_accuracy", 0.0, prog_bar=True, sync_dist=True)
 
     # --- Testing ---
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Projects test embeddings and stores them with labels for epoch-end evaluation."""
+    def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
+        """Stores projected test embeddings for end-of-epoch evaluation."""
         embeddings, labels = batch
-        projected_embeddings = self(embeddings)
+        with torch.inference_mode():
+            projected_embeddings = self(embeddings)
+        
+        # Move to CPU to free GPU memory
         self._test_outputs.append({
             "embeddings": projected_embeddings.detach().cpu(),
             "labels": labels.detach().cpu()
         })
 
     def on_test_epoch_end(self) -> None:
-        """Computes kNN classification metrics using k-fold CV on the test set."""
+        """Performs k-fold CV evaluation using k-NN classifier."""
         if not self._test_outputs:
-            log.warning("Test epoch end called but no outputs were collected.")
-            return
-
-        # Collate embeddings and labels
-        all_embeddings, all_labels = self._collect_and_clear_outputs(self._test_outputs)
-
-        n_samples = len(all_embeddings)
-        n_classes = len(np.unique(all_labels))
-        n_folds = self.hparams.knn_test_cv_folds
-
-        # Ensure enough data for k-fold CV and kNN
-        min_samples_for_cv = max(n_folds, self.hparams.knn_neighbors + 1)
-        if n_samples < min_samples_for_cv or n_classes < 2:
-            log.warning(f"Skipping test kNN CV: Insufficient samples ({n_samples}) "
-                        f"or classes ({n_classes}) for {n_folds}-fold CV with k={self.hparams.knn_neighbors}.")
-            self._log_zero_metrics("test", ["knn_acc_cv_mean", "knn_balanced_acc_cv_mean", "knn_f1_macro_cv_mean"])
+            self.log_dict({
+                "test/cv_accuracy": 0.0,
+                "test/cv_balanced_accuracy": 0.0,
+                "test/cv_f1_macro": 0.0
+            }, sync_dist=True)
             return
 
         try:
+            # Collect all embeddings and labels
+            all_embeddings = torch.cat([x["embeddings"] for x in self._test_outputs]).numpy()
+            all_labels = torch.cat([x["labels"] for x in self._test_outputs]).numpy()
+            self._test_outputs.clear()  # Free memory
+
+            # Perform k-fold cross-validation
+            k = self.hparams.knn_test_neighbors
+            n_folds = self.hparams.knn_test_cv_folds
+            
             skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-            fold_metrics = {"accuracy": [], "balanced_accuracy": [], "f1_macro": []}
-
-            log.info(f"Starting {n_folds}-fold kNN Cross-Validation on test set (k={self.hparams.knn_neighbors})...")
-            for fold_idx, (train_index, test_index) in enumerate(skf.split(all_embeddings, all_labels)):
-                knn_train_embeds, knn_test_embeds = all_embeddings[train_index], all_embeddings[test_index]
-                knn_train_labels, knn_test_labels = all_labels[train_index], all_labels[test_index]
-
-                # Ensure fold is usable
-                if len(knn_test_embeds) == 0 or len(np.unique(knn_train_labels)) < 2:
-                    log.warning(f"Skipping Fold {fold_idx+1}/{n_folds} in test kNN CV: Insufficient data.")
-                    continue
-
-                # Compute metrics for the fold
-                metrics = self._compute_knn_metrics(
-                    knn_train_embeds, knn_train_labels,
-                    knn_test_embeds, knn_test_labels,
-                    self.hparams.knn_neighbors
-                )
-                
-                # Collect metrics for this fold
-                for metric_name, value in metrics.items():
-                    if metric_name in fold_metrics:
-                        fold_metrics[metric_name].append(value)
-                
-                log.debug(f"  Fold {fold_idx+1}/{n_folds} - Acc: {metrics['accuracy']:.4f}, BalAcc: {metrics['balanced_accuracy']:.4f}")
-
-            # Calculate mean and std dev over folds if metrics were collected
-            if not fold_metrics["accuracy"]:  # Check if any folds were successful
-                log.warning("No successful folds completed during test kNN CV.")
-                self._log_zero_metrics("test", ["knn_acc_cv_mean", "knn_balanced_acc_cv_mean", "knn_f1_macro_cv_mean"])
-                return
+            accuracies = []
+            balanced_accuracies = []
+            f1_scores = []
             
-            # Calculate and log statistics from folds
-            result_metrics = {}
-            for metric_name, values in fold_metrics.items():
-                mean_val = float(np.mean(values))
-                std_val = float(np.std(values))
-                result_metrics[f"test/knn_{metric_name}_cv_mean"] = mean_val
-                result_metrics[f"test/knn_{metric_name}_cv_std"] = std_val
+            for train_idx, test_idx in skf.split(all_embeddings, all_labels):
+                # Train k-NN classifier
+                knn = KNeighborsClassifier(n_neighbors=k)
+                knn.fit(all_embeddings[train_idx], all_labels[train_idx])
+                
+                # Predict and evaluate
+                y_pred = knn.predict(all_embeddings[test_idx])
+                y_true = all_labels[test_idx]
+                
+                accuracies.append(accuracy_score(y_true, y_pred))
+                balanced_accuracies.append(balanced_accuracy_score(y_true, y_pred))
+                f1_scores.append(f1_score(y_true, y_pred, average='macro', zero_division=0))
             
-            self.log_dict(result_metrics)
-
-            # Display summary
-            log.info(f"Test kNN CV Results ({n_folds}-fold, k={self.hparams.knn_neighbors}):")
-            log.info(f"  Accuracy:          {result_metrics['test/knn_accuracy_cv_mean']:.4f} +/- {result_metrics['test/knn_accuracy_cv_std']:.4f}")
-            log.info(f"  Balanced Accuracy: {result_metrics['test/knn_balanced_accuracy_cv_mean']:.4f} +/- {result_metrics['test/knn_balanced_accuracy_cv_std']:.4f}")
-            log.info(f"  Macro F1-Score:    {result_metrics['test/knn_f1_macro_cv_mean']:.4f} +/- {result_metrics['test/knn_f1_macro_cv_std']:.4f}")
-
+            # Log average metrics
+            self.log_dict({
+                "test/cv_accuracy": np.mean(accuracies),
+                "test/cv_balanced_accuracy": np.mean(balanced_accuracies),
+                "test/cv_f1_macro": np.mean(f1_scores)
+            }, sync_dist=True)
+            
         except Exception as e:
-            log.error(f"Error during test kNN CV evaluation: {e}", exc_info=True)
-            self._log_zero_metrics("test", ["knn_acc_cv_mean", "knn_balanced_acc_cv_mean", "knn_f1_macro_cv_mean"])
+            log.error(f"Error in test metrics: {e}")
+            self.log_dict({
+                "test/cv_accuracy": 0.0,
+                "test/cv_balanced_accuracy": 0.0,
+                "test/cv_f1_macro": 0.0
+            }, sync_dist=True)
 
-    def _compute_knn_metrics(self, train_embeds: np.ndarray, train_labels: np.ndarray,
-                             test_embeds: np.ndarray, test_labels: np.ndarray,
-                             n_neighbors: int) -> Dict[str, float]:
-        """Helper function to fit kNN and compute classification metrics."""
-        knn = KNeighborsClassifier(n_neighbors=n_neighbors, n_jobs=-1)
-        knn.fit(train_embeds, train_labels)
-        y_pred = knn.predict(test_embeds)
-
-        return {
-            "accuracy": float(accuracy_score(test_labels, y_pred)),
-            "balanced_accuracy": float(balanced_accuracy_score(test_labels, y_pred, adjusted=False)),
-            "f1_macro": float(f1_score(test_labels, y_pred, average='macro', zero_division=0))
-        }
-
-    # --- Optimizer and Scheduler ---
     def configure_optimizers(self):
-        """Configures the AdamW optimizer and an optional LR scheduler."""
+        """Configures optimizer and learning rate scheduler."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-
-        # Configure optional learning rate scheduler
+        
         if not self.hparams.lr_scheduler_config:
-            log.info("No LR scheduler configured.")
             return optimizer
             
-        scheduler_params = self.hparams.lr_scheduler_config
-        monitor = scheduler_params.get("monitor", "val/1nn_balanced_acc")  # Use 1NN metric by default
-        mode = scheduler_params.get("mode", "max")
-
-        # Example: Using ReduceLROnPlateau
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode=mode,
-            factor=scheduler_params.get("factor", 0.5),
-            patience=scheduler_params.get("patience", 5),
-            min_lr=scheduler_params.get("min_lr", 1e-7),
+            mode=self.hparams.lr_scheduler_config.get("mode", "max"),
+            factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
+            patience=self.hparams.lr_scheduler_config.get("patience", 5),
+            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
             verbose=True
         )
         
-        log.info(f"Using ReduceLROnPlateau LR scheduler, monitoring '{monitor}' (mode: {mode}).")
         return {
-            "optimizer": optimizer, 
+            "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": monitor,
+                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_accuracy"),
                 "interval": "epoch",
-                "frequency": 1,
-                "strict": False,
+                "frequency": 1
             }
         }
 
-    # --- Prediction ---
-    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
-        """Projects input embeddings for inference."""
-        if isinstance(batch, (tuple, list)):
-            # Assume first element is the embedding if batch is tuple/list
-            embeddings = batch[0]
+    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
+        """Generates embeddings for prediction."""
+        if isinstance(batch, tuple) and len(batch) > 0:
+            embeddings = batch[0].to(self.device)
         elif isinstance(batch, torch.Tensor):
-            embeddings = batch
+            embeddings = batch.to(self.device)
         else:
-            raise TypeError(f"Unsupported batch type for prediction: {type(batch)}")
-
-        return self(embeddings.to(self.device))
+            raise ValueError(f"Unsupported batch type: {type(batch)}")
+            
+        with torch.inference_mode():
+            return self(embeddings).cpu()
