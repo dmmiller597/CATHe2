@@ -8,7 +8,7 @@ model:
   projection_dims: [2048, 1024]  # Increase capacity for 3000 classes
   output_dim: 256  # Increase from 128 for better class separation
   dropout: 0.3
-  margin: 2.0  # Reasonable margin for triplet loss
+  margin: 1.0  
   n_neighbors: 15  # Increase for better kNN with 3000 classes
   
   # Optimization
@@ -25,9 +25,9 @@ model:
 
 training:
   # Training parameters
-  batch_size: 2048  # large batch size for better triplet mining
+  batch_size: 4096  # large batch size for better triplet mining
   max_epochs: 50  
-  accumulate_grad_batches: 8  # effective batch size of 16K
+  accumulate_grad_batches: 4  # effective batch size of 16K
   
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
