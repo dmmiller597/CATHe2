@@ -33,7 +33,6 @@ def main(cfg: DictConfig) -> None:
         test_labels_file=cfg.data.test_labels if hasattr(cfg.data, "test_labels") else None,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers,
-        sampling_strategy=cfg.training.sampling_strategy
     )
     
     # Model setup
@@ -69,8 +68,7 @@ def main(cfg: DictConfig) -> None:
         EarlyStopping(
             monitor=cfg.training.monitor_metric,
             patience=cfg.training.early_stopping_patience,
-            mode=cfg.training.monitor_mode,
-            check_on_train_epoch_end=False
+            mode=cfg.training.monitor_mode
         ),
         LearningRateMonitor(logging_interval="epoch"),
         RichProgressBar()
