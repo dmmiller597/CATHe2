@@ -59,10 +59,13 @@ class MPerClassSampler(Sampler):
         
         # Calculate number of batches
         n_batches = len(self.valid_classes) // classes_per_batch
-        self.length = n_batches * classes_per_batch
+        if not drop_last and len(self.valid_classes) % classes_per_batch > 0:
+            n_batches += 1
+        self.length = n_batches  # Fix: store the number of batches, not classes
         
         log.info(f"Created MPerClassSampler with {len(self.valid_classes)} valid classes, "
-                f"{classes_per_batch} classes per batch, {samples_per_class} samples per class")
+                f"{classes_per_batch} classes per batch, {samples_per_class} samples per class, "
+                f"resulting in {n_batches} batches")
     
     def __iter__(self) -> Iterator[int]:
         """Generate batch indices for sampling."""
@@ -71,7 +74,7 @@ class MPerClassSampler(Sampler):
         random.shuffle(classes)
         
         # For each batch, select P classes and M samples from each class
-        batches = []
+        all_indices = []
         for i in range(0, len(classes), self.classes_per_batch):
             batch_classes = classes[i:i+self.classes_per_batch]
             
@@ -80,22 +83,37 @@ class MPerClassSampler(Sampler):
                 break
                 
             # For each class, randomly select M samples
-            indices = []
+            batch_indices = []
             for cls in batch_classes:
                 cls_indices = self.label_to_indices[cls]
                 # Sample with replacement if we don't have enough samples
                 replace = len(cls_indices) < self.samples_per_class
-                indices.extend(random.choices(cls_indices, k=self.samples_per_class))
+                batch_indices.extend(random.choices(cls_indices, k=self.samples_per_class))
             
             # Shuffle the indices within each batch
-            random.shuffle(indices)
-            batches.extend(indices)
-            
-        return iter(batches)
+            random.shuffle(batch_indices)
+            all_indices.append(batch_indices)
+        
+        # Flatten all batch indices into a single list
+        flattened_indices = [idx for batch in all_indices for idx in batch]
+        return iter(flattened_indices)
     
     def __len__(self) -> int:
-        """Return the number of batches."""
-        return self.length
+        """Return the total number of samples across all batches."""
+        # Calculate the expected number of samples based on batches
+        # If the last batch is incomplete and we're not dropping it, we need to account for that
+        if self.drop_last:
+            return self.length * self.batch_size
+        else:
+            # For full batches
+            full_batches = (len(self.valid_classes) // self.classes_per_batch)
+            full_samples = full_batches * self.classes_per_batch * self.samples_per_class
+            
+            # For the last partial batch (if any)
+            remaining_classes = len(self.valid_classes) % self.classes_per_batch
+            if remaining_classes > 0:
+                return full_samples + (remaining_classes * self.samples_per_class)
+            return full_samples
 
 class EmbeddingDataset(Dataset):
     """
