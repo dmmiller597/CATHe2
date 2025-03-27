@@ -181,8 +181,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
                     )
                     # Ensure test data compatibility
                     if self.datasets["test"].embedding_dim != self.embedding_dim:
-                         log.warning(f"Test embedding dim ({self.datasets["test"].embedding_dim}) "
-                                     f"differs from train ({self.embedding_dim})!")
+                        log.warning(f"Test embedding dim ({self.datasets['test'].embedding_dim}) "
+                                   f"differs from train ({self.embedding_dim})!")
                     log.info("Test data loaded.")
             elif stage == "test":
                 log.warning("Test stage requested but test data paths were not provided.")
@@ -203,21 +203,27 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 # Get all labels
                 labels = self.datasets[split].labels
                 
-                # Create contrastive batch sampler
-                batch_sampler = ContrastiveBatchSampler(
-                    labels=labels,
-                    batch_size=self.hparams.batch_size,
-                    samples_per_class=2,  # 2 samples per class for contrastive pairs
-                    preselect_size=18
+                # Create class-balanced sampler for contrastive learning
+                class_counts = np.bincount(labels)
+                class_weights = 1.0 / class_counts
+                sample_weights = class_weights[labels]
+                
+                # Create weighted random sampler to balance classes
+                sampler = WeightedRandomSampler(
+                    weights=sample_weights,
+                    num_samples=len(labels),
+                    replacement=True
                 )
                 
                 loader = DataLoader(
                     self.datasets[split],
-                    batch_sampler=batch_sampler,
+                    batch_size=self.hparams.batch_size,
+                    sampler=sampler,
                     num_workers=self.hparams.num_workers,
                     pin_memory=self.hparams.pin_memory,
                     persistent_workers=persist and self.hparams.num_workers > 0,
                     prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
+                    drop_last=True
                 )
             else:
                 # Standard dataloader for validation/test
@@ -254,89 +260,3 @@ class ContrastiveDataModule(pl.LightningDataModule):
             return self.datasets["train"].label_decoder
         log.warning("Label decoder requested but training dataset is not loaded.")
         return None
-
-
-class ContrastiveBatchSampler(BatchSampler):
-    """
-    Memory-efficient batch sampler for contrastive learning with class-balanced sampling.
-    
-    Pre-selects up to 100 indices per class (or all available if fewer) and ensures all are used exactly once per epoch.
-    """
-    
-    def __init__(self, labels, batch_size=1024, samples_per_class=3, preselect_size=100):
-        """
-        Initialize the contrastive batch sampler.
-        
-        Args:
-            labels: Array-like of integer class labels for each sample
-            batch_size: Target batch size
-            samples_per_class: Minimum number of samples to include from each selected class
-            preselect_size: Maximum number of samples to pre-select per class (default: 100)
-        """
-        self.labels = np.asarray(labels)
-        self.num_samples = len(labels)
-        self.samples_per_class = samples_per_class
-        self.preselect_size = preselect_size
-        
-        # Get unique classes and their frequencies
-        unique_labels, counts = np.unique(self.labels, return_counts=True)
-        self.unique_classes = unique_labels
-        self.num_classes = len(unique_labels)
-        
-        # Calculate class sampling weights (inverse square root of frequency)
-        weights = 1.0 / np.sqrt(counts)
-        self.class_weights = weights / weights.sum()
-        
-        # Pre-compute class indices (major speedup)
-        self.class_indices = {}
-        for label in self.unique_classes:
-            self.class_indices[label] = np.where(self.labels == label)[0]
-            
-        # Pre-select indices for each class
-        self.preselected_indices = {}
-        for label in self.unique_classes:
-            indices = self.class_indices[label]
-            if len(indices) <= self.preselect_size:
-                # Use all available samples if fewer than preselect_size
-                self.preselected_indices[label] = indices.copy()
-            else:
-                # Randomly select preselect_size samples
-                self.preselected_indices[label] = np.random.choice(
-                    indices, size=self.preselect_size, replace=False
-                )
-                
-        # Calculate batch size parameters
-        self.effective_batch_size = batch_size
-        
-    def __iter__(self):
-        """
-        Generate batches by ensuring all pre-selected samples are used exactly once.
-        """
-        # Create a flat list of all pre-selected indices and their classes
-        all_indices = []
-        for label, indices in self.preselected_indices.items():
-            for idx in indices:
-                all_indices.append((idx, label))
-        
-        # Shuffle all indices to randomize the order
-        np.random.shuffle(all_indices)
-        
-        # Create batches
-        current_batch = []
-        
-        for idx, _ in all_indices:
-            current_batch.append(idx)
-            
-            # When batch is full, yield it
-            if len(current_batch) >= self.effective_batch_size:
-                yield current_batch
-                current_batch = []
-        
-        # Yield the last batch if not empty
-        if current_batch:
-            yield current_batch
-    
-    def __len__(self):
-        """Return the number of batches per epoch."""
-        total_samples = sum(len(indices) for indices in self.preselected_indices.values())
-        return max(1, (total_samples + self.effective_batch_size - 1) // self.effective_batch_size)
