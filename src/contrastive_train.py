@@ -101,9 +101,9 @@ def main(cfg: DictConfig) -> None:
     )
     
     # Preview training data batch
-    data_module.setup("fit")
-    log.info("Previewing training data batch:")
-    data_module.preview_batch("train")
+    # data_module.setup("fit")
+    # log.info("Previewing training data batch:")
+    # data_module.preview_batch("train")
     
     # Training
     trainer.fit(model, data_module)
