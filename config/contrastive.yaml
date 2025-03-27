@@ -10,7 +10,7 @@ model:
   dropout: 0.3
   margin: 0.5
   n_neighbors: 1  # take closest neighbor
-  val_max_samples: 100000
+  val_max_samples: 50000
   # Optimization
   learning_rate: 1e-5  # Slightly lower for stability with larger batches
   weight_decay: 1e-4  
