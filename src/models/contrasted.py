@@ -8,8 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
-from sklearn.model_selection import StratifiedKFold
-from sklearn.neighbors import KNeighborsClassifier
 from torch import Tensor # Explicit type hinting
 
 # Configure logging
