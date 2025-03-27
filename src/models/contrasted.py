@@ -102,7 +102,7 @@ class SemiHardMiner:
     Implements Semi-Hard Mining strategy for triplet selection within a batch.
     
     For each anchor, selects the hardest positive (farthest) and semi-hard negative
-    (further than the positive but not the absolute closest) sample within the batch.
+    (further than the positive but not too far) sample using vectorized operations.
     """
     def __init__(self, distance_metric_func=pairwise_distance_optimized, margin=0.5):
         self.distance_metric = distance_metric_func
@@ -110,7 +110,7 @@ class SemiHardMiner:
 
     def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
-        Selects semi-hard triplets.
+        Selects semi-hard triplets using vectorized operations.
         """
         device = embeddings.device
         batch_size = embeddings.size(0)
@@ -124,27 +124,26 @@ class SemiHardMiner:
         identity_mask = torch.eye(batch_size, dtype=torch.bool, device=device)
 
         # --- Find Hardest Positive ---
+        # Mask out self and negatives. For positives, we want the *max* distance.
         pos_dist_mat = dist_mat.clone()
         pos_dist_mat.masked_fill_(~labels_equal | identity_mask, -torch.inf)
         hardest_pos_dist, hardest_pos_idx = torch.max(pos_dist_mat, dim=1)
 
-        # --- Find Semi-Hard Negatives ---
-        # These are negatives that are further than the positive but not too far
-        semi_hard_mask = labels_not_equal & identity_mask.logical_not()
+        # --- Find Semi-Hard Negatives Efficiently ---
+        # Get distance threshold matrix for each anchor (based on its hardest positive)
+        # This is an efficient replacement for the loop
+        # Broadcasting hardest_pos_dist to create thresholds for each anchor
+        pos_dist_threshold = hardest_pos_dist.unsqueeze(1).expand(-1, batch_size)
         
-        # For each anchor, find negatives that are within margin of the positive
-        # but still further than the positive (semi-hard)
-        for i in range(batch_size):
-            if hardest_pos_dist[i] > -torch.inf:  # If we have a valid positive
-                # Get the positive distance for this anchor
-                pos_dist = hardest_pos_dist[i]
-                
-                # Mark negatives that are not semi-hard
-                # Semi-hard: distance > pos_dist but < pos_dist + margin
-                too_easy = dist_mat[i] <= pos_dist
-                too_hard = dist_mat[i] >= pos_dist + self.margin
-                semi_hard_mask[i] = semi_hard_mask[i] & ~too_easy & ~too_hard
-
+        # Create masks for semi-hard negatives (between pos_dist and pos_dist + margin)
+        semi_hard_mask = (dist_mat > pos_dist_threshold) & (dist_mat < pos_dist_threshold + self.margin)
+        
+        # Only consider actual negatives (different class)
+        semi_hard_mask = semi_hard_mask & labels_not_equal
+        
+        # Don't consider self as negative
+        semi_hard_mask = semi_hard_mask & ~identity_mask
+        
         # Create negative distance matrix with only semi-hard negatives
         neg_dist_mat = dist_mat.clone()
         neg_dist_mat.masked_fill_(~semi_hard_mask, torch.inf)
@@ -154,6 +153,7 @@ class SemiHardMiner:
         if no_semi_hard.any():
             hard_neg_dist_mat = dist_mat.clone()
             hard_neg_dist_mat.masked_fill_(~labels_not_equal | identity_mask, torch.inf)
+            # Only replace rows that don't have semi-hard negatives
             neg_dist_mat[no_semi_hard] = hard_neg_dist_mat[no_semi_hard]
         
         # Get minimum distance negative (closest semi-hard or hard negative)
