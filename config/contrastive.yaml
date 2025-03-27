@@ -32,7 +32,7 @@ training:
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
   monitor_mode: "max"
-  early_stopping_patience: 10
+  early_stopping_patience: 20
   log_every_n_steps: 100
   
   # Hardware configuration
