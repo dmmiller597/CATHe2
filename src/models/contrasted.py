@@ -346,9 +346,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
                     # Triplet violation rate: % of potential triplets violating margin constraint
                     # (intra_dist > inter_dist - margin)
                     margin = self.hparams.triplet_margin
-                    sample_size = min(10000, len(intra_dists))
-                    intra_sample = intra_dists[torch.randperm(len(intra_dists))[:sample_size]]
-                    inter_sample = inter_dists[torch.randperm(len(inter_dists))[:sample_size]]
+                    # Use the same sample size for both to avoid dimension mismatch
+                    common_sample_size = min(10000, len(intra_dists), len(inter_dists))
+                    intra_sample = intra_dists[torch.randperm(len(intra_dists))[:common_sample_size]]
+                    inter_sample = inter_dists[torch.randperm(len(inter_dists))[:common_sample_size]]
                     violation_rate = torch.mean(
                         (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0) - margin).float()
                     ).item()
