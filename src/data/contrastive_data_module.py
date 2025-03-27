@@ -198,16 +198,16 @@ class ContrastiveDataModule(pl.LightningDataModule):
         prefetch = 2 if is_train else None
 
         try:
-            # Use balanced class sampling for training
+            # Use contrastive sampling for training
             if is_train:
                 # Get all labels
                 labels = self.datasets[split].labels
                 
-                # Create class-balanced batch sampler
-                batch_sampler = BalancedClassSampler(
+                # Create contrastive batch sampler
+                batch_sampler = ContrastiveBatchSampler(
                     labels=labels,
-                    samples_per_class=2,  # 2 samples per class
-                    classes_per_batch=min(1024, self.datasets[split].num_classes)  # Adjust based on GPU memory
+                    batch_size=self.hparams.batch_size,
+                    samples_per_class=2  # 2 samples per class for contrastive pairs
                 )
                 
                 loader = DataLoader(
@@ -254,54 +254,99 @@ class ContrastiveDataModule(pl.LightningDataModule):
         log.warning("Label decoder requested but training dataset is not loaded.")
         return None
 
-class BalancedClassSampler(BatchSampler):
-    """Samples N instances for each class in the dataset."""
+class ContrastiveBatchSampler(BatchSampler):
+    """
+    Efficient batch sampler optimized for contrastive learning with class-balanced sampling.
     
-    def __init__(self, labels, samples_per_class=2, classes_per_batch=None):
-        self.labels_list = labels
+    Handles large datasets with many classes and class imbalance by ensuring each batch 
+    contains a diverse set of classes with multiple instances per class.
+    """
+    
+    def __init__(self, labels, batch_size=1024, samples_per_class=2):
+        """
+        Initialize the contrastive batch sampler.
+        
+        Args:
+            labels: Array-like of integer class labels for each sample
+            batch_size: Target batch size (actual size will be classes_per_batch * samples_per_class)
+            samples_per_class: Number of samples to include from each selected class
+        """
+        self.labels = np.asarray(labels)
         self.samples_per_class = samples_per_class
-        self.class_indices = self._build_class_indices()
-        self.classes_per_batch = classes_per_batch or len(self.class_indices)
-        # Limit classes per batch if needed
+        
+        # Build class-to-indices mapping
+        self.class_indices = {}
+        for i, label in enumerate(self.labels):
+            if label not in self.class_indices:
+                self.class_indices[label] = []
+            self.class_indices[label].append(i)
+            
+        # Calculate how many classes per batch to maintain target batch size
+        self.classes_per_batch = max(1, batch_size // samples_per_class)
         self.classes_per_batch = min(self.classes_per_batch, len(self.class_indices))
         
-    def _build_class_indices(self):
-        indices = defaultdict(list)
-        for i, label in enumerate(self.labels_list):
-            indices[label].append(i)
-        return indices
+        # Compute class weights inversely proportional to frequency
+        class_counts = np.array([len(indices) for indices in self.class_indices.values()])
+        self.class_weights = 1.0 / np.power(class_counts, 0.5)  # Use sqrt to moderate extreme imbalance
+        self.class_weights /= self.class_weights.sum()
+        
+        # Determine number of batches per epoch based on dataset size and class distribution
+        self.num_batches = self._calculate_num_batches()
+        
+    def _calculate_num_batches(self):
+        """Calculate the number of batches to use per epoch."""
+        # Aim for an epoch size that ensures all classes are well-represented
+        # For very large datasets, we don't need to see every sample in each epoch
+        
+        # Base estimate on largest class
+        largest_class_size = max(len(indices) for indices in self.class_indices.values())
+        samples_needed = largest_class_size
+        
+        # Scale by how many classes we have (more classes = larger epoch size)
+        num_classes = len(self.class_indices)
+        scaling_factor = min(1.0, np.sqrt(100 / max(1, num_classes)))
+        
+        # Calculate batches needed
+        samples_per_batch = self.classes_per_batch * self.samples_per_class
+        return max(100, int((samples_needed * scaling_factor) / samples_per_batch))
     
     def __iter__(self):
-        for _ in range(len(self)):
-            # Select which classes to include in this batch
-            class_keys = list(self.class_indices.keys())
-            # If we can't fit all classes in a batch, randomly select some
-            if len(class_keys) > self.classes_per_batch:
-                class_keys = np.random.choice(class_keys, self.classes_per_batch, replace=False)
-                
+        """Generate balanced batches for contrastive learning."""
+        classes = list(self.class_indices.keys())
+        
+        for _ in range(self.num_batches):
             batch_indices = []
             
-            # For each selected class
-            for class_idx in class_keys:
-                class_samples = self.class_indices[class_idx]
-                # Handle cases where a class has fewer than requested samples
-                samples_to_take = min(self.samples_per_class, len(class_samples))
-                
-                # Select samples without replacement if possible
-                if len(class_samples) <= samples_to_take:
-                    # If we have fewer samples than needed, take all
-                    batch_indices.extend(class_samples)
-                else:
-                    # Otherwise, randomly sample without replacement
-                    batch_indices.extend(
-                        np.random.choice(class_samples, samples_to_take, replace=False)
-                    )
+            # Select classes for this batch using weighted sampling
+            batch_classes = np.random.choice(
+                classes, 
+                size=min(self.classes_per_batch, len(classes)),
+                replace=False, 
+                p=self.class_weights
+            )
             
-            np.random.shuffle(batch_indices)  # Shuffle to prevent class ordering bias
+            # Sample instances from each selected class
+            for cls in batch_classes:
+                cls_indices = self.class_indices[cls]
+                
+                # Handle classes with fewer samples than requested
+                if len(cls_indices) <= self.samples_per_class:
+                    # For small classes, use all samples and supplement with repeats if needed
+                    sample_idx = list(cls_indices)
+                    if len(sample_idx) < self.samples_per_class:
+                        # Add repeats if needed
+                        extras = np.random.choice(cls_indices, self.samples_per_class - len(sample_idx), replace=True)
+                        sample_idx.extend(extras)
+                else:
+                    # For larger classes, sample without replacement
+                    sample_idx = np.random.choice(cls_indices, self.samples_per_class, replace=False).tolist()
+                
+                batch_indices.extend(sample_idx)
+            
+            # Shuffle indices to prevent ordering bias
+            np.random.shuffle(batch_indices)
             yield batch_indices
     
     def __len__(self):
-        # Depends on your desired number of batches per epoch
-        # One approach: each class should be seen roughly same number of times
-        max_samples_per_class = max(len(samples) for samples in self.class_indices.values())
-        return max(1, max_samples_per_class // self.samples_per_class)
+        """Return the number of batches per epoch."""
+        return self.num_batches
