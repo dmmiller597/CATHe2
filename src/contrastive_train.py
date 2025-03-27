@@ -44,6 +44,8 @@ def main(cfg: DictConfig) -> None:
         learning_rate=cfg.model.learning_rate,
         weight_decay=cfg.model.weight_decay,
         triplet_margin=cfg.model.margin,
+        knn_val_neighbors=cfg.model.n_neighbors,  # Use 1 for faster validation
+        val_max_samples=cfg.model.val_max_samples,
         lr_scheduler_config={
             "monitor": cfg.model.lr_scheduler.monitor,
             "mode": cfg.model.lr_scheduler.mode,
@@ -51,10 +53,6 @@ def main(cfg: DictConfig) -> None:
             "patience": cfg.model.lr_scheduler.patience,
             "min_lr": cfg.model.lr_scheduler.min_lr
         },
-        knn_val_neighbors=1,  # Use 1 for faster validation
-        knn_test_neighbors=cfg.model.n_neighbors,
-        knn_test_cv_folds=5,
-        val_max_samples=10000
     )
     
     # Callbacks
