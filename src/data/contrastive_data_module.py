@@ -207,7 +207,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 batch_sampler = ContrastiveBatchSampler(
                     labels=labels,
                     batch_size=self.hparams.batch_size,
-                    samples_per_class=2  # 2 samples per class for contrastive pairs
+                    samples_per_class=2,  # 2 samples per class for contrastive pairs
+                    preselect_size=18
                 )
                 
                 loader = DataLoader(
@@ -318,11 +319,10 @@ class ContrastiveBatchSampler(BatchSampler):
     """
     Memory-efficient batch sampler for contrastive learning with class-balanced sampling.
     
-    Dynamically generates batches to ensure multiple instances of each class appear together,
-    while avoiding storing all indices in memory upfront.
+    Pre-selects a fixed number of indices per class and samples from this pool to create batches.
     """
     
-    def __init__(self, labels, batch_size=1024, samples_per_class=2):
+    def __init__(self, labels, batch_size=1024, samples_per_class=3, preselect_size=18):
         """
         Initialize the contrastive batch sampler.
         
@@ -330,10 +330,12 @@ class ContrastiveBatchSampler(BatchSampler):
             labels: Array-like of integer class labels for each sample
             batch_size: Target batch size
             samples_per_class: Minimum number of samples to include from each selected class
+            preselect_size: Number of samples to pre-select per class
         """
         self.labels = np.asarray(labels)
         self.num_samples = len(labels)
         self.samples_per_class = samples_per_class
+        self.preselect_size = preselect_size
         
         # Get unique classes and their frequencies
         unique_labels, counts = np.unique(self.labels, return_counts=True)
@@ -354,6 +356,24 @@ class ContrastiveBatchSampler(BatchSampler):
         
         # Determine batches per epoch
         self.num_batches = self._calculate_num_batches()
+        
+        # Pre-compute class indices (major speedup)
+        self.class_indices = {}
+        for label in self.unique_classes:
+            self.class_indices[label] = np.where(self.labels == label)[0]
+            
+        # Pre-select indices for each class
+        self.preselected_indices = {}
+        for label in self.unique_classes:
+            indices = self.class_indices[label]
+            if len(indices) <= self.preselect_size:
+                # Use all available samples if fewer than preselect_size
+                self.preselected_indices[label] = indices.copy()
+            else:
+                # Randomly select preselect_size samples
+                self.preselected_indices[label] = np.random.choice(
+                    indices, size=self.preselect_size, replace=False
+                )
     
     def _calculate_num_batches(self):
         """Calculate optimal number of batches per epoch."""
@@ -368,12 +388,8 @@ class ContrastiveBatchSampler(BatchSampler):
         
         return max(100, int(samples_covered / self.effective_batch_size))
     
-    def _get_class_indices(self, class_label):
-        """Efficiently get indices for a specific class (calculated on demand)."""
-        return np.where(self.labels == class_label)[0]
-    
     def __iter__(self):
-        """Generate balanced batches ensuring multiple samples per class."""
+        """Generate balanced batches using pre-selected indices."""
         for _ in range(self.num_batches):
             batch_indices = []
             
@@ -385,17 +401,15 @@ class ContrastiveBatchSampler(BatchSampler):
                 p=self.class_weights
             )
             
-            # For each selected class, sample the required number of instances
+            # For each selected class, sample instances from pre-selected indices
             for cls in batch_classes:
-                # Get indices for this class on-demand
-                cls_indices = self._get_class_indices(cls)
+                cls_indices = self.preselected_indices[cls]
                 
                 # Handle class size appropriately
                 if len(cls_indices) <= self.samples_per_class:
                     # Use all available samples and repeat if necessary
                     samples = list(cls_indices)
                     if len(samples) < self.samples_per_class:
-                        # Add repeats to reach desired samples_per_class
                         additional = np.random.choice(
                             cls_indices, 
                             size=self.samples_per_class - len(samples),
@@ -403,7 +417,7 @@ class ContrastiveBatchSampler(BatchSampler):
                         ).tolist()
                         samples.extend(additional)
                 else:
-                    # Randomly sample without replacement
+                    # Randomly sample from pre-selected indices
                     samples = np.random.choice(
                         cls_indices,
                         size=self.samples_per_class,
