@@ -69,7 +69,8 @@ def main(cfg: DictConfig) -> None:
         EarlyStopping(
             monitor=cfg.training.monitor_metric,
             patience=cfg.training.early_stopping_patience,
-            mode=cfg.training.monitor_mode
+            mode=cfg.training.monitor_mode,
+            check_on_train_epoch_end=False
         ),
         LearningRateMonitor(logging_interval="epoch"),
         RichProgressBar()
