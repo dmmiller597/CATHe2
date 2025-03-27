@@ -260,10 +260,10 @@ class ContrastiveBatchSampler(BatchSampler):
     """
     Memory-efficient batch sampler for contrastive learning with class-balanced sampling.
     
-    Pre-selects a fixed number of indices per class and ensures all are used exactly once per epoch.
+    Pre-selects up to 100 indices per class (or all available if fewer) and ensures all are used exactly once per epoch.
     """
     
-    def __init__(self, labels, batch_size=1024, samples_per_class=3, preselect_size=18):
+    def __init__(self, labels, batch_size=1024, samples_per_class=3, preselect_size=100):
         """
         Initialize the contrastive batch sampler.
         
@@ -271,7 +271,7 @@ class ContrastiveBatchSampler(BatchSampler):
             labels: Array-like of integer class labels for each sample
             batch_size: Target batch size
             samples_per_class: Minimum number of samples to include from each selected class
-            preselect_size: Number of samples to pre-select per class
+            preselect_size: Maximum number of samples to pre-select per class (default: 100)
         """
         self.labels = np.asarray(labels)
         self.num_samples = len(labels)
@@ -310,7 +310,7 @@ class ContrastiveBatchSampler(BatchSampler):
         
     def __iter__(self):
         """
-        Generate batches by first ensuring all pre-selected samples are used exactly once.
+        Generate batches by ensuring all pre-selected samples are used exactly once.
         """
         # Create a flat list of all pre-selected indices and their classes
         all_indices = []
