@@ -97,6 +97,87 @@ class BatchHardMiner:
 
         return anchor_indices, positive_indices, negative_indices
 
+class SemiHardMiner:
+    """
+    Implements Semi-Hard Mining strategy for triplet selection within a batch.
+    
+    For each anchor, selects the hardest positive (farthest) and semi-hard negative
+    (further than the positive but not the absolute closest) sample within the batch.
+    """
+    def __init__(self, distance_metric_func=pairwise_distance_optimized, margin=0.5):
+        self.distance_metric = distance_metric_func
+        self.margin = margin
+
+    def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        Selects semi-hard triplets.
+        """
+        device = embeddings.device
+        batch_size = embeddings.size(0)
+
+        # Calculate pairwise distances (squared Euclidean)
+        dist_mat = self.distance_metric(embeddings, embeddings)
+
+        # Create masks for positive and negative pairs
+        labels_equal = labels.unsqueeze(0) == labels.unsqueeze(1)
+        labels_not_equal = ~labels_equal
+        identity_mask = torch.eye(batch_size, dtype=torch.bool, device=device)
+
+        # --- Find Hardest Positive ---
+        pos_dist_mat = dist_mat.clone()
+        pos_dist_mat.masked_fill_(~labels_equal | identity_mask, -torch.inf)
+        hardest_pos_dist, hardest_pos_idx = torch.max(pos_dist_mat, dim=1)
+
+        # --- Find Semi-Hard Negatives ---
+        # These are negatives that are further than the positive but not too far
+        semi_hard_mask = labels_not_equal & identity_mask.logical_not()
+        
+        # For each anchor, find negatives that are within margin of the positive
+        # but still further than the positive (semi-hard)
+        for i in range(batch_size):
+            if hardest_pos_dist[i] > -torch.inf:  # If we have a valid positive
+                # Get the positive distance for this anchor
+                pos_dist = hardest_pos_dist[i]
+                
+                # Mark negatives that are not semi-hard
+                # Semi-hard: distance > pos_dist but < pos_dist + margin
+                too_easy = dist_mat[i] <= pos_dist
+                too_hard = dist_mat[i] >= pos_dist + self.margin
+                semi_hard_mask[i] = semi_hard_mask[i] & ~too_easy & ~too_hard
+
+        # Create negative distance matrix with only semi-hard negatives
+        neg_dist_mat = dist_mat.clone()
+        neg_dist_mat.masked_fill_(~semi_hard_mask, torch.inf)
+        
+        # If no semi-hard negatives exist for an anchor, fall back to the hardest negatives
+        no_semi_hard = (neg_dist_mat == torch.inf).all(dim=1)
+        if no_semi_hard.any():
+            hard_neg_dist_mat = dist_mat.clone()
+            hard_neg_dist_mat.masked_fill_(~labels_not_equal | identity_mask, torch.inf)
+            neg_dist_mat[no_semi_hard] = hard_neg_dist_mat[no_semi_hard]
+        
+        # Get minimum distance negative (closest semi-hard or hard negative)
+        hardest_neg_dist, hardest_neg_idx = torch.min(neg_dist_mat, dim=1)
+
+        # --- Filter Valid Triplets ---
+        valid_pos_mask = hardest_pos_dist > -torch.inf
+        valid_neg_mask = hardest_neg_dist < torch.inf
+        valid_anchor_mask = valid_pos_mask & valid_neg_mask
+
+        # Get the indices for the valid triplets
+        anchor_indices = torch.where(valid_anchor_mask)[0]
+
+        if len(anchor_indices) == 0:
+            return (
+                torch.empty(0, dtype=torch.long, device=device),
+                torch.empty(0, dtype=torch.long, device=device),
+                torch.empty(0, dtype=torch.long, device=device),
+            )
+
+        positive_indices = hardest_pos_idx[anchor_indices]
+        negative_indices = hardest_neg_idx[anchor_indices]
+
+        return anchor_indices, positive_indices, negative_indices
 
 # --- Main Lightning Module ---
 
@@ -160,7 +241,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         )
 
         # Triplet miner
-        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
@@ -326,6 +407,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 # Overlap measure: percentage of intra-distances larger than smallest inter-distance
                 overlap = torch.mean((intra_dists > min_inter).float()).item()
                 self.log("val/class_overlap", overlap, sync_dist=True)
+
+                # These are the most essential for contrastive learning
+                self.log("val/distance_ratio", mean_inter / mean_intra if mean_intra > 0 else 0, sync_dist=True)
+                self.log("val/margin_buffer", (mean_inter - mean_intra - self.hparams.triplet_margin), sync_dist=True)
 
                 
                 # Embedding space quality metrics (computed on subset for efficiency)
