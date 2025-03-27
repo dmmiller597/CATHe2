@@ -191,18 +191,16 @@ class ContrastiveCATHeModel(pl.LightningModule):
     def __init__(
         self,
         input_embedding_dim: int,
-        projection_hidden_dims: List[int] = [512],
-        output_embedding_dim: int = 128,
+        projection_hidden_dims: List[int] = [1024],
+        output_embedding_dim: int = 256,
         dropout: float = 0.3,
-        learning_rate: float = 1e-4,
-        weight_decay: float = 1e-5,
+        learning_rate: float = 1e-5,
+        weight_decay: float = 1e-4,
         triplet_margin: float = 0.5,
         use_layer_norm: bool = True,
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
         knn_val_neighbors: int = 1,
-        knn_test_neighbors: int = 5,
-        knn_test_cv_folds: int = 5,
-        val_max_samples: int = 10000,
+        val_max_samples: int = 100000,
     ):
         """
         Args:
@@ -216,8 +214,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
             use_layer_norm: Whether to use Layer Normalization in the projection head.
             lr_scheduler_config: Config for LR scheduler.
             knn_val_neighbors: Number of neighbors for validation kNN.
-            knn_test_neighbors: Number of neighbors for test kNN.
-            knn_test_cv_folds: Number of CV folds for testing.
             val_max_samples: Maximum validation samples to use for kNN.
         """
         super().__init__()
