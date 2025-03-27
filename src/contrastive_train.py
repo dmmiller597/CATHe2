@@ -100,11 +100,14 @@ def main(cfg: DictConfig) -> None:
         default_root_dir=cfg.training.output_dir
     )
     
+    # Preview training data batch
+    data_module.setup("fit")
+    log.info("Previewing training data batch:")
+    data_module.preview_batch("train")
+    
     # Training
     trainer.fit(model, data_module)
     # Preview first batch from training and validation data
-    log.info("Previewing training data batch:")
-    data_module.preview_batch("train")
     # Final testing
     log.info("Starting final testing phase...")
     trainer.test(model, data_module, ckpt_path="best")
