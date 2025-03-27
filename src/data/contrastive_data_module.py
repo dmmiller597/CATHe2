@@ -255,71 +255,12 @@ class ContrastiveDataModule(pl.LightningDataModule):
         log.warning("Label decoder requested but training dataset is not loaded.")
         return None
 
-    def preview_batch(self, split: str = "train"):
-        """
-        Prints the first batch labels and a preview of the embeddings.
-        
-        Args:
-            split: The dataset split to preview ("train", "val", or "test")
-        
-        Returns:
-            Tuple of (embeddings, labels) from the first batch or None if data not available
-        """
-        if split not in self.datasets:
-            log.warning(f"Dataset for split '{split}' not found. Call setup() first.")
-            return None
-        
-        dataloader = self._get_dataloader(split, shuffle=False)
-        if not dataloader:
-            log.warning(f"Could not create dataloader for '{split}' split.")
-            return None
-            
-        # Get the first batch
-        for batch in dataloader:
-            embeddings, labels = batch
-            break
-        
-        # Print label information
-        label_decoder = self.get_label_decoder()
-        decoded_labels = [label_decoder[l.item()] for l in labels] if label_decoder else labels.tolist()
-        
-        print(f"\n{'='*50}")
-        print(f"PREVIEW OF FIRST {split.upper()} BATCH:")
-        print(f"{'='*50}")
-        
-        print(f"\nBatch size: {len(labels)}")
-        print(f"Label counts:")
-        label_counts = defaultdict(int)
-        for label in labels.tolist():
-            label_counts[label] += 1
-        
-        for label_id, count in sorted(label_counts.items()):
-            label_name = label_decoder[label_id] if label_decoder else f"Class {label_id}"
-            print(f"  {label_name}: {count} samples")
-        
-        # Print embedding information
-        print(f"\nEmbeddings shape: {embeddings.shape}")
-        print(f"Embeddings dtype: {embeddings.dtype}")
-        print(f"Embedding stats:")
-        print(f"  Mean: {embeddings.mean().item():.4f}")
-        print(f"  Std:  {embeddings.std().item():.4f}")
-        print(f"  Min:  {embeddings.min().item():.4f}")
-        print(f"  Max:  {embeddings.max().item():.4f}")
-        
-        # Print a few sample embeddings (first 3 dimensions of first 5 samples)
-        print("\nSample embeddings (first 3 dimensions of first 5 samples):")
-        for i in range(min(5, len(embeddings))):
-            print(f"  Sample {i} (label={decoded_labels[i]}): {embeddings[i, :3].tolist()}")
-        
-        print(f"\n{'='*50}\n")
-        
-        return embeddings, labels
 
 class ContrastiveBatchSampler(BatchSampler):
     """
     Memory-efficient batch sampler for contrastive learning with class-balanced sampling.
     
-    Pre-selects a fixed number of indices per class and samples from this pool to create batches.
+    Pre-selects a fixed number of indices per class and ensures all are used exactly once per epoch.
     """
     
     def __init__(self, labels, batch_size=1024, samples_per_class=3, preselect_size=18):
@@ -342,20 +283,9 @@ class ContrastiveBatchSampler(BatchSampler):
         self.unique_classes = unique_labels
         self.num_classes = len(unique_labels)
         
-        # Store class frequencies for sampling weights
-        self.class_counts = {label: count for label, count in zip(unique_labels, counts)}
-        
-        # Calculate effective batch size and classes per batch
-        self.classes_per_batch = max(1, batch_size // samples_per_class)
-        self.classes_per_batch = min(self.classes_per_batch, self.num_classes)
-        self.effective_batch_size = self.classes_per_batch * samples_per_class
-        
         # Calculate class sampling weights (inverse square root of frequency)
         weights = 1.0 / np.sqrt(counts)
         self.class_weights = weights / weights.sum()
-        
-        # Determine batches per epoch
-        self.num_batches = self._calculate_num_batches()
         
         # Pre-compute class indices (major speedup)
         self.class_indices = {}
@@ -374,62 +304,39 @@ class ContrastiveBatchSampler(BatchSampler):
                 self.preselected_indices[label] = np.random.choice(
                     indices, size=self.preselect_size, replace=False
                 )
-    
-    def _calculate_num_batches(self):
-        """Calculate optimal number of batches per epoch."""
-        # Base on dataset size and ensure all classes are represented
-        coverage_factor = min(2.0, max(1.0, np.log10(self.num_classes)))
-        samples_covered = self.num_samples * 0.7  # Aim to cover 70% of dataset each epoch
+                
+        # Calculate batch size parameters
+        self.effective_batch_size = batch_size
         
-        # Scale by dataset complexity
-        if self.num_classes > 100:
-            # For many classes, we don't need to see every sample in each epoch
-            samples_covered *= (100 / self.num_classes) ** 0.5
-        
-        return max(100, int(samples_covered / self.effective_batch_size))
-    
     def __iter__(self):
-        """Generate balanced batches using pre-selected indices."""
-        for _ in range(self.num_batches):
-            batch_indices = []
+        """
+        Generate batches by first ensuring all pre-selected samples are used exactly once.
+        """
+        # Create a flat list of all pre-selected indices and their classes
+        all_indices = []
+        for label, indices in self.preselected_indices.items():
+            for idx in indices:
+                all_indices.append((idx, label))
+        
+        # Shuffle all indices to randomize the order
+        np.random.shuffle(all_indices)
+        
+        # Create batches
+        current_batch = []
+        
+        for idx, _ in all_indices:
+            current_batch.append(idx)
             
-            # Select classes for this batch using weighted sampling
-            batch_classes = np.random.choice(
-                self.unique_classes,
-                size=self.classes_per_batch,
-                replace=False,
-                p=self.class_weights
-            )
-            
-            # For each selected class, sample instances from pre-selected indices
-            for cls in batch_classes:
-                cls_indices = self.preselected_indices[cls]
-                
-                # Handle class size appropriately
-                if len(cls_indices) <= self.samples_per_class:
-                    # Use all available samples and repeat if necessary
-                    samples = list(cls_indices)
-                    if len(samples) < self.samples_per_class:
-                        additional = np.random.choice(
-                            cls_indices, 
-                            size=self.samples_per_class - len(samples),
-                            replace=True
-                        ).tolist()
-                        samples.extend(additional)
-                else:
-                    # Randomly sample from pre-selected indices
-                    samples = np.random.choice(
-                        cls_indices,
-                        size=self.samples_per_class,
-                        replace=False
-                    ).tolist()
-                
-                batch_indices.extend(samples)
-            
-            # Shuffle indices to avoid class-based ordering
-            np.random.shuffle(batch_indices)
-            yield batch_indices
+            # When batch is full, yield it
+            if len(current_batch) >= self.effective_batch_size:
+                yield current_batch
+                current_batch = []
+        
+        # Yield the last batch if not empty
+        if current_batch:
+            yield current_batch
     
     def __len__(self):
         """Return the number of batches per epoch."""
-        return self.num_batches
+        total_samples = sum(len(indices) for indices in self.preselected_indices.values())
+        return max(1, (total_samples + self.effective_batch_size - 1) // self.effective_batch_size)
