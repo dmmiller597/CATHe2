@@ -8,11 +8,11 @@ model:
   projection_dims: [1024]  # Increase capacity for 3000 classes
   output_dim: 256  # Increase from 128 for better class separation
   dropout: 0.3
-  margin: 0.3
+  margin: 0.5
   n_neighbors: 15  # Increase for better kNN with 3000 classes
   
   # Optimization
-  learning_rate: 1e-6  # Slightly lower for stability with larger batches
+  learning_rate: 1e-5  # Slightly lower for stability with larger batches
   weight_decay: 1e-4  
 
   # Learning rate scheduler
