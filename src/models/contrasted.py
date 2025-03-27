@@ -403,14 +403,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 
                 # Distance margin (higher is better)
                 self.log("val/dist_margin", mean_inter - mean_intra, sync_dist=True)
+                self.log("val/margin_buffer", (mean_inter - mean_intra - self.hparams.triplet_margin), sync_dist=True)
                 
                 # Overlap measure: percentage of intra-distances larger than smallest inter-distance
                 overlap = torch.mean((intra_dists > min_inter).float()).item()
                 self.log("val/class_overlap", overlap, sync_dist=True)
 
-                # These are the most essential for contrastive learning
-                self.log("val/distance_ratio", mean_inter / mean_intra if mean_intra > 0 else 0, sync_dist=True)
-                self.log("val/margin_buffer", (mean_inter - mean_intra - self.hparams.triplet_margin), sync_dist=True)
 
                 
                 # Embedding space quality metrics (computed on subset for efficiency)
