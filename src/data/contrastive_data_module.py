@@ -207,7 +207,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 batch_sampler = BalancedClassSampler(
                     labels=labels,
                     samples_per_class=2,  # 2 samples per class
-                    classes_per_batch=min(64, self.datasets[split].num_classes)  # Adjust based on GPU memory
+                    classes_per_batch=min(1024, self.datasets[split].num_classes)  # Adjust based on GPU memory
                 )
                 
                 loader = DataLoader(
