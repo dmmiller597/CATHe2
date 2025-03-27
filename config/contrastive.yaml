@@ -7,39 +7,39 @@ model:
   embedding_dim: ${data.embedding_dim}
   projection_dims: [2048, 1024]  # Increase capacity for 3000 classes
   output_dim: 256  # Increase from 128 for better class separation
-  dropout: 0.3  # Good balance between regularization and capacity
+  dropout: 0.3
   margin: 2.0  # Reasonable margin for triplet loss
   n_neighbors: 15  # Increase for better kNN with 3000 classes
   
   # Optimization
   learning_rate: 5e-5  # Slightly lower for stability with larger batches
-  weight_decay: 1e-4  # Increased regularization for large dataset
+  weight_decay: 1e-4  
 
   # Learning rate scheduler
   lr_scheduler:
     monitor: "val/knn_balanced_acc"
     mode: "max"
-    factor: 0.7  # Gentler reduction (from 0.5)
-    patience: 3  # Reduce patience for faster adaptation
+    factor: 0.7
+    patience: 3
     min_lr: 1e-8
 
 training:
   # Training parameters
-  batch_size: 2048  # Increase for better triplet mining
-  max_epochs: 50  # Reduced since we have a large dataset
-  accumulate_grad_batches: 8  # Increase for effective batch size of 16K
+  batch_size: 2048  # large batch size for better triplet mining
+  max_epochs: 50  
+  accumulate_grad_batches: 8  # effective batch size of 16K
   
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
   monitor_mode: "max"
-  early_stopping_patience: 7  # Allow more exploration before stopping
-  log_every_n_steps: 100  # Increase for large dataset
+  early_stopping_patience: 10
+  log_every_n_steps: 100
   
   # Hardware configuration
-  num_workers: 16  # Increase for faster data loading
+  num_workers: 16
   accelerator:
     float32_matmul_precision: "high"
-    devices: 1  # Assuming you have multiple GPUs available
+    devices: 1
   
   # Training options
   seed: 42

@@ -327,10 +327,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 overlap = torch.mean((intra_dists > min_inter).float()).item()
                 self.log("val/class_overlap", overlap, sync_dist=True)
 
-                # Log class coverage statistics
-                classes_in_batch = len(unique_labels)
-                self.log("val/active_classes", float(classes_in_batch), sync_dist=True)
-                self.log("val/class_coverage", float(classes_in_batch) / self.hparams.num_classes, sync_dist=True)
                 
                 # Embedding space quality metrics (computed on subset for efficiency)
                 if all_embeddings.size(0) > 100:
