@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, BatchSampler
 import pytorch_lightning as pl
 from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
@@ -198,33 +198,25 @@ class ContrastiveDataModule(pl.LightningDataModule):
         prefetch = 2 if is_train else None
 
         try:
-            # Always use balanced sampling for training
+            # Use balanced class sampling for training
             if is_train:
-                # Calculate inverse frequency weights for each class
+                # Get all labels
                 labels = self.datasets[split].labels
-                class_counts = np.bincount(labels)
-                class_weights = 1.0 / np.maximum(class_counts, 1)  # Avoid division by zero
-                sample_weights = class_weights[labels]
                 
-                # Create weighted sampler
-                sampler = WeightedRandomSampler(
-                    weights=torch.from_numpy(sample_weights.astype(np.float32)),
-                    num_samples=len(sample_weights),
-                    replacement=True
+                # Create class-balanced batch sampler
+                batch_sampler = BalancedClassSampler(
+                    labels=labels,
+                    samples_per_class=2,  # 2 samples per class
+                    classes_per_batch=min(64, self.datasets[split].num_classes)  # Adjust based on GPU memory
                 )
                 
-                log.info(f"Using class-balanced sampling for training set")
-
-
                 loader = DataLoader(
                     self.datasets[split],
-                    batch_size=self.hparams.batch_size,
-                    sampler=sampler,
+                    batch_sampler=batch_sampler,
                     num_workers=self.hparams.num_workers,
                     pin_memory=self.hparams.pin_memory,
                     persistent_workers=persist and self.hparams.num_workers > 0,
                     prefetch_factor=prefetch if self.hparams.num_workers > 0 else None,
-                    drop_last=is_train
                 )
             else:
                 # Standard dataloader for validation/test
@@ -261,3 +253,55 @@ class ContrastiveDataModule(pl.LightningDataModule):
             return self.datasets["train"].label_decoder
         log.warning("Label decoder requested but training dataset is not loaded.")
         return None
+
+class BalancedClassSampler(BatchSampler):
+    """Samples N instances for each class in the dataset."""
+    
+    def __init__(self, labels, samples_per_class=2, classes_per_batch=None):
+        self.labels_list = labels
+        self.samples_per_class = samples_per_class
+        self.class_indices = self._build_class_indices()
+        self.classes_per_batch = classes_per_batch or len(self.class_indices)
+        # Limit classes per batch if needed
+        self.classes_per_batch = min(self.classes_per_batch, len(self.class_indices))
+        
+    def _build_class_indices(self):
+        indices = defaultdict(list)
+        for i, label in enumerate(self.labels_list):
+            indices[label].append(i)
+        return indices
+    
+    def __iter__(self):
+        for _ in range(len(self)):
+            # Select which classes to include in this batch
+            class_keys = list(self.class_indices.keys())
+            # If we can't fit all classes in a batch, randomly select some
+            if len(class_keys) > self.classes_per_batch:
+                class_keys = np.random.choice(class_keys, self.classes_per_batch, replace=False)
+                
+            batch_indices = []
+            
+            # For each selected class
+            for class_idx in class_keys:
+                class_samples = self.class_indices[class_idx]
+                # Handle cases where a class has fewer than requested samples
+                samples_to_take = min(self.samples_per_class, len(class_samples))
+                
+                # Select samples without replacement if possible
+                if len(class_samples) <= samples_to_take:
+                    # If we have fewer samples than needed, take all
+                    batch_indices.extend(class_samples)
+                else:
+                    # Otherwise, randomly sample without replacement
+                    batch_indices.extend(
+                        np.random.choice(class_samples, samples_to_take, replace=False)
+                    )
+            
+            np.random.shuffle(batch_indices)  # Shuffle to prevent class ordering bias
+            yield batch_indices
+    
+    def __len__(self):
+        # Depends on your desired number of batches per epoch
+        # One approach: each class should be seen roughly same number of times
+        max_samples_per_class = max(len(samples) for samples in self.class_indices.values())
+        return max(1, max_samples_per_class // self.samples_per_class)
