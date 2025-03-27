@@ -327,6 +327,37 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 overlap = torch.mean((intra_dists > min_inter).float()).item()
                 self.log("val/class_overlap", overlap, sync_dist=True)
 
+                # Log class coverage statistics
+                classes_in_batch = len(unique_labels)
+                self.log("val/active_classes", float(classes_in_batch), sync_dist=True)
+                self.log("val/class_coverage", float(classes_in_batch) / self.hparams.num_classes, sync_dist=True)
+                
+                # Embedding space quality metrics (computed on subset for efficiency)
+                if all_embeddings.size(0) > 100:
+                    # Sample random subset
+                    subset_size = min(1000, all_embeddings.size(0))
+                    subset_idx = torch.randperm(all_embeddings.size(0))[:subset_size]
+                    emb_subset = all_embeddings[subset_idx].cpu()
+                    
+                    # 1. Embedding uniformity (measures how uniform the distribution is on unit sphere)
+                    # Lower is better - points more uniformly distributed
+                    with torch.no_grad():
+                        uniformity = torch.pdist(emb_subset).pow(2).mul(-2).exp().mean().log().item()
+                    self.log("val/embedding_uniformity", uniformity, sync_dist=True)
+                    
+                # 2. Triplet quality metrics
+                if len(intra_dists) > 0 and len(inter_dists) > 0:
+                    # Triplet violation rate: % of potential triplets violating margin constraint
+                    # (intra_dist > inter_dist - margin)
+                    margin = self.hparams.triplet_margin
+                    sample_size = min(10000, len(intra_dists))
+                    intra_sample = intra_dists[torch.randperm(len(intra_dists))[:sample_size]]
+                    inter_sample = inter_dists[torch.randperm(len(inter_dists))[:sample_size]]
+                    violation_rate = torch.mean(
+                        (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0) - margin).float()
+                    ).item()
+                    self.log("val/triplet_violation_rate", violation_rate, sync_dist=True)
+
             # Get nearest neighbor
             k = self.hparams.knn_val_neighbors
             _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)
