@@ -254,6 +254,66 @@ class ContrastiveDataModule(pl.LightningDataModule):
         log.warning("Label decoder requested but training dataset is not loaded.")
         return None
 
+    def preview_batch(self, split: str = "train"):
+        """
+        Prints the first batch labels and a preview of the embeddings.
+        
+        Args:
+            split: The dataset split to preview ("train", "val", or "test")
+        
+        Returns:
+            Tuple of (embeddings, labels) from the first batch or None if data not available
+        """
+        if split not in self.datasets:
+            log.warning(f"Dataset for split '{split}' not found. Call setup() first.")
+            return None
+        
+        dataloader = self._get_dataloader(split, shuffle=False)
+        if not dataloader:
+            log.warning(f"Could not create dataloader for '{split}' split.")
+            return None
+            
+        # Get the first batch
+        for batch in dataloader:
+            embeddings, labels = batch
+            break
+        
+        # Print label information
+        label_decoder = self.get_label_decoder()
+        decoded_labels = [label_decoder[l.item()] for l in labels] if label_decoder else labels.tolist()
+        
+        print(f"\n{'='*50}")
+        print(f"PREVIEW OF FIRST {split.upper()} BATCH:")
+        print(f"{'='*50}")
+        
+        print(f"\nBatch size: {len(labels)}")
+        print(f"Label counts:")
+        label_counts = defaultdict(int)
+        for label in labels.tolist():
+            label_counts[label] += 1
+        
+        for label_id, count in sorted(label_counts.items()):
+            label_name = label_decoder[label_id] if label_decoder else f"Class {label_id}"
+            print(f"  {label_name}: {count} samples")
+        
+        # Print embedding information
+        print(f"\nEmbeddings shape: {embeddings.shape}")
+        print(f"Embeddings dtype: {embeddings.dtype}")
+        print(f"Embedding stats:")
+        print(f"  Mean: {embeddings.mean().item():.4f}")
+        print(f"  Std:  {embeddings.std().item():.4f}")
+        print(f"  Min:  {embeddings.min().item():.4f}")
+        print(f"  Max:  {embeddings.max().item():.4f}")
+        
+        # Print a few sample embeddings (first 3 dimensions of first 5 samples)
+        print("\nSample embeddings (first 3 dimensions of first 5 samples):")
+        for i in range(min(5, len(embeddings))):
+            print(f"  Sample {i} (label={decoded_labels[i]}): {embeddings[i, :3].tolist()}")
+        
+        print(f"\n{'='*50}\n")
+        
+        return embeddings, labels
+
 class ContrastiveBatchSampler(BatchSampler):
     """
     Efficient batch sampler optimized for contrastive learning with class-balanced sampling.

@@ -34,7 +34,8 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers,
     )
-    
+
+
     # Model setup
     model = ContrastiveCATHeModel(
         input_embedding_dim=cfg.data.embedding_dim,
@@ -101,7 +102,9 @@ def main(cfg: DictConfig) -> None:
     
     # Training
     trainer.fit(model, data_module)
-    
+    # Preview first batch from training and validation data
+    log.info("Previewing training data batch:")
+    data_module.preview_batch("train")
     # Final testing
     log.info("Starting final testing phase...")
     trainer.test(model, data_module, ckpt_path="best")
