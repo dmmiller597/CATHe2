@@ -1,16 +1,101 @@
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Sampler
 import pytorch_lightning as pl
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple, List, Iterator
 from pathlib import Path
 from collections import defaultdict
 import logging
+import random
 
 # Use standard logging
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+class MPerClassSampler(Sampler):
+    """
+    Samples M instances for each of P classes per batch.
+    
+    This ensures that each batch contains M examples from P different classes,
+    which is crucial for effective triplet mining in contrastive learning.
+    """
+    
+    def __init__(self, labels: np.ndarray, classes_per_batch: int = 8, samples_per_class: int = 4, 
+                 batch_size: int = None, drop_last: bool = False):
+        """
+        Initialize the MPerClassSampler.
+        
+        Args:
+            labels: Array of class labels for each sample
+            classes_per_batch: Number of classes to include in each batch (P)
+            samples_per_class: Number of samples to include for each class (M)
+            batch_size: If not None, overrides the product of classes_per_batch and samples_per_class
+            drop_last: Whether to drop the last incomplete batch
+        """
+        self.labels = np.array(labels)
+        self.classes_per_batch = classes_per_batch
+        self.samples_per_class = samples_per_class
+        self.drop_last = drop_last
+        
+        # Calculate actual batch size
+        if batch_size is not None:
+            self.batch_size = batch_size
+        else:
+            self.batch_size = classes_per_batch * samples_per_class
+            
+        # Create dictionary mapping each class to list of sample indices
+        self.label_to_indices = defaultdict(list)
+        for i, label in enumerate(self.labels):
+            self.label_to_indices[label].append(i)
+            
+        # Remove classes with fewer than samples_per_class examples
+        self.valid_classes = [c for c, indices in self.label_to_indices.items() 
+                              if len(indices) >= samples_per_class]
+        
+        if len(self.valid_classes) < classes_per_batch:
+            log.warning(f"Only {len(self.valid_classes)} classes have at least {samples_per_class} samples. "
+                       f"Reduce classes_per_batch or samples_per_class.")
+        
+        # Calculate number of batches
+        n_batches = len(self.valid_classes) // classes_per_batch
+        self.length = n_batches * classes_per_batch
+        
+        log.info(f"Created MPerClassSampler with {len(self.valid_classes)} valid classes, "
+                f"{classes_per_batch} classes per batch, {samples_per_class} samples per class")
+    
+    def __iter__(self) -> Iterator[int]:
+        """Generate batch indices for sampling."""
+        # Shuffle the classes
+        classes = self.valid_classes.copy()
+        random.shuffle(classes)
+        
+        # For each batch, select P classes and M samples from each class
+        batches = []
+        for i in range(0, len(classes), self.classes_per_batch):
+            batch_classes = classes[i:i+self.classes_per_batch]
+            
+            # Skip the last incomplete batch if drop_last is True
+            if len(batch_classes) < self.classes_per_batch and self.drop_last:
+                break
+                
+            # For each class, randomly select M samples
+            indices = []
+            for cls in batch_classes:
+                cls_indices = self.label_to_indices[cls]
+                # Sample with replacement if we don't have enough samples
+                replace = len(cls_indices) < self.samples_per_class
+                indices.extend(random.choices(cls_indices, k=self.samples_per_class))
+            
+            # Shuffle the indices within each batch
+            random.shuffle(indices)
+            batches.extend(indices)
+            
+        return iter(batches)
+    
+    def __len__(self) -> int:
+        """Return the number of batches."""
+        return self.length
 
 class EmbeddingDataset(Dataset):
     """
@@ -105,6 +190,9 @@ class ContrastiveDataModule(pl.LightningDataModule):
         num_workers: int = 4,
         pin_memory: bool = True,
         persistent_workers: bool = True,
+        sampling_strategy: str = "mperclass",  # New parameter: 'weighted' or 'mperclass'
+        classes_per_batch: int = 64,           # New parameter: P in PK sampling
+        samples_per_class: int = 4,           # New parameter: K in PK sampling
     ):
         """
         Initializes the DataModule.
@@ -121,6 +209,9 @@ class ContrastiveDataModule(pl.LightningDataModule):
             num_workers: Number of subprocesses for data loading.
             pin_memory: If True, DataLoader will copy Tensors into CUDA pinned memory before returning them.
             persistent_workers: If True, workers will not be shut down after an epoch.
+            sampling_strategy: Sampling strategy for the training set ('weighted' or 'mperclass').
+            classes_per_batch: Number of classes per batch for MPerClassSampler (P).
+            samples_per_class: Number of samples per class for MPerClassSampler (M).
         """
         super().__init__()
         self.data_dir = Path(data_dir).resolve()
@@ -134,7 +225,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
 
         # Store hyperparameters
         self.save_hyperparameters(
-            "batch_size", "num_workers", "pin_memory", "persistent_workers"
+            "batch_size", "num_workers", "pin_memory", "persistent_workers",
+            "sampling_strategy", "classes_per_batch", "samples_per_class"
         )
 
         self.datasets: Dict[str, EmbeddingDataset] = {}
@@ -198,23 +290,36 @@ class ContrastiveDataModule(pl.LightningDataModule):
         prefetch = 2 if is_train else None
 
         try:
-            # Always use balanced sampling for training
+            # Use specialized sampling for training
             if is_train:
-                # Calculate inverse frequency weights for each class
                 labels = self.datasets[split].labels
-                class_counts = np.bincount(labels)
-                class_weights = 1.0 / np.maximum(class_counts, 1)  # Avoid division by zero
-                sample_weights = class_weights[labels]
                 
-                # Create weighted sampler
-                sampler = WeightedRandomSampler(
-                    weights=torch.from_numpy(sample_weights.astype(np.float32)),
-                    num_samples=len(sample_weights),
-                    replacement=True
-                )
-                
-                log.info(f"Using class-balanced sampling for training set")
-
+                if self.hparams.sampling_strategy == "mperclass":
+                    # Use MPerClassSampler for structured batch composition
+                    sampler = MPerClassSampler(
+                        labels=labels,
+                        classes_per_batch=self.hparams.classes_per_batch,
+                        samples_per_class=self.hparams.samples_per_class,
+                        batch_size=self.hparams.batch_size,
+                        drop_last=True
+                    )
+                    log.info(f"Using MPerClassSampler with {self.hparams.classes_per_batch} classes per batch and "
+                             f"{self.hparams.samples_per_class} samples per class")
+                else:
+                    # Fall back to weighted random sampling
+                    # Calculate inverse frequency weights for each class
+                    class_counts = np.bincount(labels)
+                    class_weights = 1.0 / np.maximum(class_counts, 1)  # Avoid division by zero
+                    sample_weights = class_weights[labels]
+                    
+                    # Create weighted sampler
+                    sampler = WeightedRandomSampler(
+                        weights=torch.from_numpy(sample_weights.astype(np.float32)),
+                        num_samples=len(sample_weights),
+                        replacement=True
+                    )
+                    
+                    log.info(f"Using class-balanced sampling for training set")
 
                 loader = DataLoader(
                     self.datasets[split],
