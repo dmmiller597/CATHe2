@@ -49,7 +49,8 @@ class EmbeddingDataset(Dataset):
                 raise ValueError(f"'SF' column not found in CSV file: {labels_path}")
 
             # Store string labels and create integer encodings
-            self.sf_labels = labels_df['SF'].values
+            # Extract first number before dot from SF column
+            self.sf_labels = labels_df['SF'].str.split('.').str[0].values
             unique_sorted_labels = sorted(list(set(self.sf_labels)))
             self.label_encoder = {sf: i for i, sf in enumerate(unique_sorted_labels)}
             self.label_decoder = {i: sf for sf, i in self.label_encoder.items()}
