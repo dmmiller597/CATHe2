@@ -477,7 +477,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         """
-        Creates a simple t-SNE visualization of the embeddings colored by labels.
+        Creates a simple t-SNE visualization of the embeddings colored by labels,
+        with styling matching vis_dim_reduction.py
         
         Args:
             embeddings: Projected embeddings tensor
@@ -502,43 +503,86 @@ class ContrastiveCATHeModel(pl.LightningModule):
             tsne = TSNE(n_components=2, perplexity=30, random_state=42)
             tsne_result = tsne.fit_transform(embeddings_subset)
             
-            # Create plot
-            plt.figure(figsize=(10, 8))
+            # Set up basic plot aesthetics (copied from vis_dim_reduction.py)
+            plt.rcParams['font.family'] = 'sans-serif'
+            plt.rcParams['font.size'] = 10
+            plt.rcParams['axes.spines.top'] = False
+            plt.rcParams['axes.spines.right'] = False
+            plt.rcParams['axes.spines.left'] = True
+            plt.rcParams['axes.spines.bottom'] = True
+            plt.rcParams['axes.linewidth'] = 0.8
+            plt.rcParams['figure.facecolor'] = 'white'
+            
+            # Create figure with appropriate aspect ratio
+            plt.figure(figsize=(8, 8))
+            
+            # Setup plot area with minimal non-data ink
+            ax = plt.gca()
+            ax.grid(False)
+            ax.tick_params(axis='both', which='both', length=3, width=0.8, pad=4)
             
             # Convert labels to integers for coloring
             unique_labels = np.unique(labels_subset)
             label_to_id = {label: i for i, label in enumerate(unique_labels)}
-            color_indices = np.array([label_to_id[label] for label in labels_subset])
+            numeric_labels = np.array([label_to_id[label] for label in labels_subset])
+            n_classes = len(unique_labels)
             
-            # Plot with colors based on labels
+            # Use colorblind palette for better accessibility (as in vis_dim_reduction.py)
+            import matplotlib.colors as mcolors
+            if n_classes <= 10:
+                # Use the colorblind-friendly palette for few classes
+                colors = plt.cm.get_cmap('tab10', n_classes)
+                colors = [colors(i) for i in range(n_classes)]
+                point_colors = [colors[i] for i in numeric_labels]
+            else:
+                # For many classes, use a perceptually uniform colormap
+                colors = plt.cm.viridis(np.linspace(0, 1, n_classes))
+                point_colors = [colors[i] for i in numeric_labels]
+            
+            # Create the scatter plot
             scatter = plt.scatter(
                 tsne_result[:, 0], tsne_result[:, 1],
-                c=color_indices, 
-                cmap='viridis',
-                alpha=0.7,
-                s=10
+                c=point_colors,
+                s=10,
+                alpha=0.8,
+                linewidth=0
             )
             
-            # Add title and labels
-            plt.title(f't-SNE Visualization - Epoch {self.current_epoch}', fontsize=14)
-            plt.xlabel('t-SNE Component 1', fontsize=12)
-            plt.ylabel('t-SNE Component 2', fontsize=12)
+            # More understated title and axis labels
+            plt.title(f't-SNE Visualization - Epoch {self.current_epoch}', fontsize=14, pad=10)
+            plt.xlabel('t-SNE 1', fontsize=10, labelpad=8)
+            plt.ylabel('t-SNE 2', fontsize=10, labelpad=8)
             
-            # Add colorbar if there are many classes
-            if len(unique_labels) > 10:
-                plt.colorbar(scatter, label='Class')
+            # Add legend if not too many classes
+            if n_classes <= 10:
+                # Create simple legend with class labels
+                handles = [plt.Line2D([0], [0], marker='o', color=colors[i], 
+                                     markersize=6, label=f'Class {unique_labels[i]}')
+                          for i in range(n_classes)]
+                plt.legend(handles=handles,
+                          title="Classes",
+                          loc='best',
+                          frameon=True,
+                          fontsize=10)
             else:
-                # Add simple legend for few classes
-                legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
-                                            markerfacecolor=plt.cm.viridis(label_to_id[label]/len(unique_labels)), 
-                                            markersize=8, label=f'Class {label}')
-                                for label in unique_labels]
-                plt.legend(handles=legend_elements, loc='best')
+                # Add a colorbar for many classes
+                norm = mcolors.Normalize(vmin=0, vmax=n_classes-1)
+                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
+                sm.set_array([])
+                plt.colorbar(sm, label='Class')
             
-            # Save the figure
+            # Adjust axis limits to provide small margin around data points
+            x_min, x_max = tsne_result[:, 0].min(), tsne_result[:, 0].max()
+            y_min, y_max = tsne_result[:, 1].min(), tsne_result[:, 1].max()
+            margin = 0.05
+            plt.xlim(x_min - margin * (x_max - x_min), x_max + margin * (x_max - x_min))
+            plt.ylim(y_min - margin * (y_max - y_min), y_max + margin * (y_max - y_min))
+            
+            # Use tight layout and save
+            plt.tight_layout()
             filename = f"tsne_epoch_{self.current_epoch}.png"
             save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
-            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
             plt.close()
             
             # Log completion
