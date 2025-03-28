@@ -12,6 +12,7 @@ from torch import Tensor # Explicit type hinting
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import os
+import seaborn as sns
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -527,22 +528,14 @@ class ContrastiveCATHeModel(pl.LightningModule):
             numeric_labels = np.array([label_to_id[label] for label in labels_subset])
             n_classes = len(unique_labels)
             
-            # Use colorblind palette for better accessibility (as in vis_dim_reduction.py)
-            import matplotlib.colors as mcolors
-            if n_classes <= 10:
-                # Use the colorblind-friendly palette for few classes
-                colors = plt.cm.get_cmap('tab10', n_classes)
-                colors = [colors(i) for i in range(n_classes)]
-                point_colors = [colors[i] for i in numeric_labels]
-            else:
-                # For many classes, use a perceptually uniform colormap
-                colors = plt.cm.viridis(np.linspace(0, 1, n_classes))
-                point_colors = [colors[i] for i in numeric_labels]
+            # Use EXACTLY the same color palette as in vis_dim_reduction.py
+            color_palette = sns.color_palette("colorblind", n_colors=n_classes)
+            colors = [color_palette[i] for i in numeric_labels]
             
-            # Create the scatter plot
+            # Create the scatter plot with the exact same parameters
             scatter = plt.scatter(
                 tsne_result[:, 0], tsne_result[:, 1],
-                c=point_colors,
+                c=colors,
                 s=10,
                 alpha=0.8,
                 linewidth=0
@@ -553,10 +546,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
             plt.xlabel('t-SNE 1', fontsize=10, labelpad=8)
             plt.ylabel('t-SNE 2', fontsize=10, labelpad=8)
             
-            # Add legend if not too many classes
+            # Add legend if not too many classes, as in vis_dim_reduction.py
             if n_classes <= 10:
                 # Create simple legend with class labels
-                handles = [plt.Line2D([0], [0], marker='o', color=colors[i], 
+                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[i], 
                                      markersize=6, label=f'Class {unique_labels[i]}')
                           for i in range(n_classes)]
                 plt.legend(handles=handles,
@@ -564,12 +557,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
                           loc='best',
                           frameon=True,
                           fontsize=10)
-            else:
-                # Add a colorbar for many classes
-                norm = mcolors.Normalize(vmin=0, vmax=n_classes-1)
-                sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
-                sm.set_array([])
-                plt.colorbar(sm, label='Class')
             
             # Adjust axis limits to provide small margin around data points
             x_min, x_max = tsne_result[:, 0].min(), tsne_result[:, 0].max()
