@@ -9,6 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from torch import Tensor # Explicit type hinting
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import os
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -190,7 +193,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         self,
         input_embedding_dim: int,
         projection_hidden_dims: List[int] = [1024],
-        output_embedding_dim: int = 256,
+        output_embedding_dim: int = 128,
         dropout: float = 0.3,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
@@ -199,6 +202,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
         knn_val_neighbors: int = 1,
         val_max_samples: int = 100000,
+        # Add simple viz option
+        tsne_viz_dir: str = "results/tsne_plots",
     ):
         """
         Args:
@@ -213,6 +218,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             lr_scheduler_config: Config for LR scheduler.
             knn_val_neighbors: Number of neighbors for validation kNN.
             val_max_samples: Maximum validation samples to use for kNN.
+            tsne_viz_dir: Directory to save t-SNE visualizations
         """
         super().__init__()
         # Store hyperparameters
@@ -243,6 +249,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # Lists to store validation/test outputs
         self._val_outputs = []
         self._test_outputs = []
+
+        # Create visualization directory
+        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
 
     def _build_projection_network(
         self, input_dim: int, hidden_dims: List[int], output_dim: int,
@@ -314,7 +323,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes k-NN validation metrics."""
+        """Computes k-NN validation metrics and generates simple t-SNE visualization every 10 epochs."""
         if not self._val_outputs:
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
@@ -324,6 +333,11 @@ class ContrastiveCATHeModel(pl.LightningModule):
             # Concatenate embeddings and labels
             all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
+            
+            # Generate t-SNE visualization every 10 epochs
+            if self.current_epoch % 10 == 0:
+                self._generate_tsne_plot(all_embeddings, all_labels)
+            
             self._val_outputs.clear()  # Free memory
 
             # Sample validation data if too large
@@ -461,6 +475,78 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
 
+    def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
+        """
+        Creates a simple t-SNE visualization of the embeddings colored by labels.
+        
+        Args:
+            embeddings: Projected embeddings tensor
+            labels: Corresponding label tensor
+        """
+        try:
+            # Start timing
+            start_time = time.time()
+            log.info(f"Generating t-SNE plot for epoch {self.current_epoch}")
+            
+            # Sample for efficiency (max 1000 points)
+            max_samples = 1000
+            if len(embeddings) > max_samples:
+                indices = torch.randperm(len(embeddings))[:max_samples]
+                embeddings_subset = embeddings[indices].cpu().numpy()
+                labels_subset = labels[indices].cpu().numpy()
+            else:
+                embeddings_subset = embeddings.cpu().numpy()
+                labels_subset = labels.cpu().numpy()
+            
+            # Run t-SNE
+            tsne = TSNE(n_components=2, perplexity=30, random_state=42)
+            tsne_result = tsne.fit_transform(embeddings_subset)
+            
+            # Create plot
+            plt.figure(figsize=(10, 8))
+            
+            # Convert labels to integers for coloring
+            unique_labels = np.unique(labels_subset)
+            label_to_id = {label: i for i, label in enumerate(unique_labels)}
+            color_indices = np.array([label_to_id[label] for label in labels_subset])
+            
+            # Plot with colors based on labels
+            scatter = plt.scatter(
+                tsne_result[:, 0], tsne_result[:, 1],
+                c=color_indices, 
+                cmap='viridis',
+                alpha=0.7,
+                s=10
+            )
+            
+            # Add title and labels
+            plt.title(f't-SNE Visualization - Epoch {self.current_epoch}', fontsize=14)
+            plt.xlabel('t-SNE Component 1', fontsize=12)
+            plt.ylabel('t-SNE Component 2', fontsize=12)
+            
+            # Add colorbar if there are many classes
+            if len(unique_labels) > 10:
+                plt.colorbar(scatter, label='Class')
+            else:
+                # Add simple legend for few classes
+                legend_elements = [plt.Line2D([0], [0], marker='o', color='w', 
+                                            markerfacecolor=plt.cm.viridis(label_to_id[label]/len(unique_labels)), 
+                                            markersize=8, label=f'Class {label}')
+                                for label in unique_labels]
+                plt.legend(handles=legend_elements, loc='best')
+            
+            # Save the figure
+            filename = f"tsne_epoch_{self.current_epoch}.png"
+            save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+            plt.close()
+            
+            # Log completion
+            elapsed_time = time.time() - start_time
+            log.info(f"t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
+            
+        except Exception as e:
+            log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
         """Configures optimizer and learning rate scheduler."""
