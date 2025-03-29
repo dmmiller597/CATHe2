@@ -533,7 +533,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             tsne_result = tsne.fit_transform(embeddings_pca)
             
             # Set up minimalist plot with Tufte-inspired style
-            plt.figure(figsize=(8, 6))
+            plt.figure(figsize=(8, 8))
             
             # Set clean style
             plt.rcParams['axes.spines.top'] = False
