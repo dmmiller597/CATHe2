@@ -45,8 +45,10 @@ def main(cfg: DictConfig) -> None:
         learning_rate=cfg.model.learning_rate,
         weight_decay=cfg.model.weight_decay,
         triplet_margin=cfg.model.margin,
-        knn_val_neighbors=cfg.model.n_neighbors,  # Use 1 for faster validation
+        knn_val_neighbors=cfg.model.n_neighbors,
         val_max_samples=cfg.model.val_max_samples,
+        warmup_epochs=cfg.model.warmup_epochs,
+        warmup_start_factor=cfg.model.warmup_start_factor,
         lr_scheduler_config={
             "monitor": cfg.model.lr_scheduler.monitor,
             "mode": cfg.model.lr_scheduler.mode,
