@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import os
 import seaborn as sns
+from torch.optim.lr_scheduler import LinearLR, ReduceLROnPlateau, SequentialLR # Add imports
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -205,6 +206,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         val_max_samples: int = 100000,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
+        warmup_steps: int = 500,          # New: Number of warmup steps
+        warmup_start_factor: float = 0.1, # New: Initial LR factor (e.g., 0.1 = 10%)
     ):
         """
         Args:
@@ -220,10 +223,27 @@ class ContrastiveCATHeModel(pl.LightningModule):
             knn_val_neighbors: Number of neighbors for validation kNN.
             val_max_samples: Maximum validation samples to use for kNN.
             tsne_viz_dir: Directory to save t-SNE visualizations
+            warmup_steps: Number of optimizer steps for linear LR warmup.
+            warmup_start_factor: Initial learning rate multiplier during warmup (relative to base LR).
         """
         super().__init__()
         # Store hyperparameters
-        self.save_hyperparameters()
+        self.save_hyperparameters(
+            "input_embedding_dim",
+            "projection_hidden_dims",
+            "output_embedding_dim",
+            "dropout",
+            "learning_rate",
+            "weight_decay",
+            "triplet_margin",
+            "use_layer_norm",
+            "lr_scheduler_config",
+            "knn_val_neighbors",
+            "val_max_samples",
+            "tsne_viz_dir",
+            "warmup_steps",
+            "warmup_start_factor",
+        )
 
         # Build the projection network (MLP)
         self.projection = self._build_projection_network(
@@ -242,7 +262,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         )
 
         # Triplet miner
-        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized, margin=self.hparams.triplet_margin)
 
         # Initialize weights
         self._init_weights()
@@ -580,128 +600,63 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
-        """Configures optimizer and learning rate scheduler with warmup."""
-        # Import the WarmupLR at the top of the file
-        from torch.optim.lr_scheduler import _LRScheduler
-        from torch.optim.lr_scheduler import ReduceLROnPlateau
-        import math 
-
-        class WarmupLR(_LRScheduler):
-            def __init__(self, scheduler, init_lr=1e-3, num_warmup=1, warmup_strategy='linear'):
-                if warmup_strategy not in ['linear', 'cos', 'constant']:
-                    raise ValueError("Expect warmup_strategy to be one of ['linear', 'cos', 'constant'] but got {}".format(warmup_strategy))
-                self._scheduler = scheduler
-                self._init_lr = init_lr
-                self._num_warmup = num_warmup
-                self._step_count = 0
-                # Define the strategy to warm up learning rate 
-                self._warmup_strategy = warmup_strategy
-                if warmup_strategy == 'cos':
-                    self._warmup_func = self._warmup_cos
-                elif warmup_strategy == 'linear':
-                    self._warmup_func = self._warmup_linear
-                else:
-                    self._warmup_func = self._warmup_const
-                # save initial learning rate of each param group
-                # only useful when each param groups having different learning rate
-                self._format_param()
-
-            def __getattr__(self, name):
-                return getattr(self._scheduler, name)
-            
-            def state_dict(self):
-                """Returns the state of the scheduler as a :class:`dict`."""
-                wrapper_state_dict = {key: value for key, value in self.__dict__.items() if (key != 'optimizer' and key !='_scheduler')}
-                wrapped_state_dict = {key: value for key, value in self._scheduler.__dict__.items() if key != 'optimizer'} 
-                return {'wrapped': wrapped_state_dict, 'wrapper': wrapper_state_dict}
-            
-            def load_state_dict(self, state_dict):
-                """Loads the schedulers state."""
-                self.__dict__.update(state_dict['wrapper'])
-                self._scheduler.__dict__.update(state_dict['wrapped'])
-
-            def _format_param(self):
-                # learning rate of each param group will increase
-                # from the min_lr to initial_lr
-                for group in self._scheduler.optimizer.param_groups:
-                    group['warmup_max_lr'] = group['lr']
-                    group['warmup_initial_lr'] = min(self._init_lr, group['lr'])
-
-            def _warmup_cos(self, start, end, pct):
-                cos_out = math.cos(math.pi * pct) + 1
-                return end + (start - end)/2.0*cos_out
-            
-            def _warmup_const(self, start, end, pct):
-                return start if pct < 0.9999 else end 
-
-            def _warmup_linear(self, start, end, pct):
-                return (end - start) * pct + start 
-
-            def get_lr(self):
-                lrs = []
-                step_num = self._step_count
-                # warm up learning rate 
-                if step_num <= self._num_warmup:
-                    for group in self._scheduler.optimizer.param_groups:
-                        computed_lr = self._warmup_func(group['warmup_initial_lr'], 
-                                                        group['warmup_max_lr'],
-                                                        step_num/self._num_warmup)
-                        lrs.append(computed_lr)
-                else:
-                    lrs = self._scheduler.get_lr()
-                return lrs
-
-            def step(self, *args):
-                if self._step_count <= self._num_warmup:
-                    values = self.get_lr()
-                    for param_group, lr in zip(self._scheduler.optimizer.param_groups, values):
-                        param_group['lr'] = lr
-                    self._step_count += 1 
-                else:
-                    self._scheduler.step(*args)
-
-        # Create optimizer
+        """Configures optimizer and learning rate schedulers (warmup + plateau)."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-        
-        # If no scheduler config, just return the optimizer
+
+        # If no scheduler config provided, return only the optimizer
         if not self.hparams.lr_scheduler_config:
+            log.info("No LR scheduler configuration found. Using only optimizer.")
             return optimizer
-        
-        # Create the base scheduler (ReduceLROnPlateau)
-        reduce_on_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
+
+        # 1. Linear Warmup Scheduler
+        # total_iters is the number of steps for the warmup phase.
+        warmup_scheduler = LinearLR(
+            optimizer,
+            start_factor=self.hparams.warmup_start_factor,
+            total_iters=self.hparams.warmup_steps
+        )
+
+        # 2. Main Plateau Scheduler
+        # This scheduler will take over after the warmup phase.
+        main_scheduler = ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
-            verbose=True
+            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
-        
-        # Wrap with warmup scheduler
-        # Configure the warmup parameters
-        warmup_steps = 2000  # Number of steps for warmup
-        warmup_init_lr = self.hparams.learning_rate * 0.1  # Start at 10% of base learning rate
-        
-        # Create the wrapped scheduler with warmup
-        scheduler = WarmupLR(
-            scheduler=reduce_on_plateau,
-            init_lr=warmup_init_lr,
-            num_warmup=warmup_steps,
-            warmup_strategy='linear'  # Can be 'linear', 'cos', or 'constant'
+
+        # 3. Sequential Scheduler to chain warmup and plateau
+        # Milestones defines the step count *after* which to switch to the next scheduler.
+        # Here, switch to main_scheduler after warmup_steps optimizer steps.
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, main_scheduler],
+            milestones=[self.hparams.warmup_steps]
         )
-        
-        # Return Lightning configuration with the warmup wrapped scheduler
+
+        log.info(f"Configuring optimizer with LR={self.hparams.learning_rate}, "
+                 f"WeightDecay={self.hparams.weight_decay}.")
+        log.info(f"Using Linear Warmup for {self.hparams.warmup_steps} steps, "
+                 f"starting at factor {self.hparams.warmup_start_factor}.")
+        log.info(f"Using ReduceLROnPlateau scheduler afterwards, monitoring "
+                 f"'{self.hparams.lr_scheduler_config.get('monitor', 'val/knn_balanced_acc')}' "
+                 f"with patience={self.hparams.lr_scheduler_config.get('patience', 5)} "
+                 f"and factor={self.hparams.lr_scheduler_config.get('factor', 0.5)}.")
+
+        # Return dictionary compatible with ReduceLROnPlateau monitoring
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": scheduler,
+                "scheduler": scheduler, # The SequentialLR instance
                 "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                "interval": "step",  # Important: we need step-level scheduling for warmup
-                "frequency": 1
+                "interval": "epoch",  # ReduceLROnPlateau checks at the end of each epoch
+                "frequency": 1,
+                "strict": True,       # Ensure the monitor key exists
             }
         }
 
