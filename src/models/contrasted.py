@@ -347,8 +347,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
             
-            # Generate t-SNE visualization every 10 epochs
-            if self.current_epoch % 10 == 0:
+            # Generate t-SNE visualization every 10 epochs, but *only* if not in the sanity checking phase.
+            if not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
                 self._generate_tsne_plot(all_embeddings, all_labels)
             
             self._val_outputs.clear()  # Free memory
@@ -652,8 +652,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
             for pg in optimizer.param_groups:
                 pg['lr'] = current_lr
 
-            # Log the current learning rate
-            self.log("lr", current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
             # We don't step the ReduceLROnPlateau scheduler during warmup
             # log.debug(f"Warmup Epoch {current_epoch + 1}/{warmup_epochs}: Set LR to {current_lr:.2e}")
 
@@ -664,7 +662,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
                  for pg in optimizer.param_groups:
                      pg['lr'] = base_lr
                  log.info(f"Warmup complete. Set LR to base {base_lr:.2e}")
-                 self.log("lr", base_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
             # Step the ReduceLROnPlateau scheduler using the monitored metric
             if isinstance(scheduler, ReduceLROnPlateau):
