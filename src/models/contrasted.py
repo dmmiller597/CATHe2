@@ -581,53 +581,59 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def configure_optimizers(self):
         """Configures optimizer and learning rate scheduler with warmup."""
+        # Create optimizer
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
         
-        # No schedulers case
+        # If no scheduler config, just return the optimizer
         if not self.hparams.lr_scheduler_config:
             return optimizer
         
-        # Create main scheduler (ReduceLROnPlateau)
-        plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # Warmup configuration - simple and flexible
+        warmup_steps = 2000  # Number of steps for warmup
+        warmup_start_factor = 0.1  # Start at 10% of base learning rate
+        
+        # 1. Linear warmup scheduler
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, 
+            start_factor=warmup_start_factor,
+            end_factor=1.0, 
+            total_iters=warmup_steps
+        )
+        
+        # 2. ReduceLROnPlateau scheduler (existing)
+        reduce_on_plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
+            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
+            verbose=True
         )
         
-        # Add warmup scheduler - Using a simpler approach that works with Lightning
-        warmup_steps = 2000  # Number of warmup steps
-        warmup_start_factor = 0.1  # Start at 10% of base learning rate
-        
-        # Use LinearLR for warmup - more compatible with Lightning's structure
-        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer,
-            start_factor=warmup_start_factor,
-            end_factor=1.0,
-            total_iters=warmup_steps
-        )
-        
-        # Use Lightning's scheduling dict format with SequentialLR to combine schedulers
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[warmup_scheduler, plateau_scheduler],
-            milestones=[warmup_steps]
-        )
-        
-        # Return in Lightning's expected format
+        # Return appropriate Lightning configuration
+        # Note: With PyTorch Lightning 1.5+, interval='step' for warmup scheduler
+        # and interval='epoch' for ReduceLROnPlateau with different dictionaries
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                "interval": "step",
-                "frequency": 1
-            }
+            "lr_scheduler": [
+                {
+                    "scheduler": warmup_scheduler,
+                    "interval": "step",  # Apply per step
+                    "frequency": 1,
+                    "name": "warmup_scheduler"
+                },
+                {
+                    "scheduler": reduce_on_plateau_scheduler,
+                    "interval": "epoch",  # Apply per epoch
+                    "frequency": 1,
+                    "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
+                    "name": "plateau_scheduler"
+                }
+            ],
         }
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
