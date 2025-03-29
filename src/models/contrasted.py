@@ -582,12 +582,13 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def configure_optimizers(self):
         """
-        Configures the optimizer and learning rate scheduler, including optional linear warmup.
+        Configures the optimizer and the main ReduceLROnPlateau scheduler.
+        Warmup is handled manually in `optimizer_step`.
         """
         # 1. Create the optimizer
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams.learning_rate, # Base LR used by schedulers
+            lr=self.hparams.learning_rate, # Base LR used by main scheduler
             weight_decay=self.hparams.weight_decay
         )
 
@@ -595,43 +596,62 @@ class ContrastiveCATHeModel(pl.LightningModule):
         if not self.hparams.lr_scheduler_config:
             return optimizer # No scheduler requested
 
-        # 3. Create the main scheduler (ReduceLROnPlateau) based on config
-        main_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # 3. Create and configure the main scheduler (ReduceLROnPlateau)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
             min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
-        # Default configuration for the main scheduler
+
         lr_scheduler_config = {
-            "scheduler": main_scheduler,
+            "scheduler": scheduler,
             "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
             "interval": "epoch", # ReduceLROnPlateau checks metric typically per epoch
             "frequency": 1,
             "name": "learning_rate" # Name for logging
         }
 
-        # 4. Add linear warmup if configured
-        if self.hparams.warmup_steps > 0:
-            # Create linear warmup scheduler
-            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-                optimizer,
-                start_factor=1e-6, # Start near zero
-                end_factor=1.0,    # Ramp up to base LR
-                total_iters=self.hparams.warmup_steps # Duration of warmup
-            )
-            # Chain warmup and main scheduler
-            sequential_scheduler = torch.optim.lr_scheduler.SequentialLR(
-                optimizer,
-                schedulers=[warmup_scheduler, main_scheduler],
-                milestones=[self.hparams.warmup_steps] # Step count to switch schedulers
-            )
-            # Update the config to use the sequential scheduler
-            lr_scheduler_config["scheduler"] = sequential_scheduler
-
-        # 5. Return optimizer and scheduler configuration
+        # 4. Return optimizer and the ReduceLROnPlateau scheduler configuration
+        # Lightning will handle stepping this scheduler with the monitored metric.
         return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: torch.optim.Optimizer,
+        optimizer_idx: int = 0, # Keep default value
+        optimizer_closure: Optional[callable] = None,
+        on_tpu: bool = False,
+        using_native_amp: bool = False,
+        using_lbfgs: bool = False,
+    ) -> None:
+        """
+        Manually performs linear learning rate warmup during the initial steps,
+        then performs the standard optimizer step.
+        """
+        # Check if warmup is needed and active
+        if self.hparams.warmup_steps > 0 and self.trainer.global_step < self.hparams.warmup_steps:
+            # Calculate linear warmup learning rate
+            base_lr = self.hparams.learning_rate
+            start_factor = 1e-6 # Factor to start from (almost zero)
+            warmup_steps = self.hparams.warmup_steps
+            current_step = self.trainer.global_step
+
+            # Calculate linearly interpolated learning rate
+            lr_scale = min(1.0, float(current_step + 1) / warmup_steps) # +1 because step starts at 0
+            start_lr = base_lr * start_factor
+            current_lr = start_lr + (base_lr - start_lr) * lr_scale
+
+            # Apply the calculated LR to all parameter groups
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = current_lr
+
+        # Perform the optimizer step using the closure
+        # This handles gradient accumulation, precision plugin logic, etc.
+        optimizer.step(closure=optimizer_closure)
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
