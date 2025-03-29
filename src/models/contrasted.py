@@ -15,6 +15,7 @@ import os
 import seaborn as sns
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau # Explicit import
+from sklearn.decomposition import PCA
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -490,19 +491,19 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         """
-        Creates a simple t-SNE visualization of the embeddings colored by labels,
-        with styling matching vis_dim_reduction.py
+        Creates a simple visualization of embeddings using PCA preprocessing
+        followed by t-SNE, colored by CATH classes.
         
         Args:
             embeddings: Projected embeddings tensor
-            labels: Corresponding label tensor
+            labels: Corresponding label tensor (CATH class IDs)
         """
         try:
             # Start timing
             start_time = time.time()
-            log.info(f"Generating t-SNE plot for epoch {self.current_epoch}")
+            log.info(f"Generating PCA+t-SNE plot for epoch {self.current_epoch}")
             
-            # Sample for efficiency (max 1000 points)
+            # Sample for efficiency (max 10000 points)
             max_samples = 10000
             if len(embeddings) > max_samples:
                 indices = torch.randperm(len(embeddings))[:max_samples]
@@ -512,84 +513,77 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 embeddings_subset = embeddings.cpu().numpy()
                 labels_subset = labels.cpu().numpy()
             
-            # Run t-SNE
+            # Map CATH C-level class IDs to their descriptive names
+            cath_class_names = {
+                1: "Mainly Alpha",
+                2: "Mainly Beta",
+                3: "Alpha Beta", 
+                4: "Few Secondary Structures"
+            }
+            
+            # Log label mapping
+            unique_labels = np.unique(labels_subset)
+            log.info(f"CATH Classes found: {unique_labels}")
+            
+            # Simple PCA preprocessing
+            n_components = min(50, embeddings_subset.shape[1])
+            pca = PCA(n_components=n_components, random_state=42)
+            embeddings_pca = pca.fit_transform(embeddings_subset)
+            
+            # t-SNE on PCA results
             tsne = TSNE(n_components=2, perplexity=30, random_state=42)
-            tsne_result = tsne.fit_transform(embeddings_subset)
+            tsne_result = tsne.fit_transform(embeddings_pca)
             
-            # Set up basic plot aesthetics (copied from vis_dim_reduction.py)
-            plt.rcParams['font.family'] = 'sans-serif'
-            plt.rcParams['font.size'] = 10
-            plt.rcParams['axes.spines.top'] = False
-            plt.rcParams['axes.spines.right'] = False
-            plt.rcParams['axes.spines.left'] = True
-            plt.rcParams['axes.spines.bottom'] = True
-            plt.rcParams['axes.linewidth'] = 0.8
-            plt.rcParams['figure.facecolor'] = 'white'
-            
-            # Create figure with appropriate aspect ratio
+            # Set up basic plot
             plt.figure(figsize=(8, 8))
             
-            # Setup plot area with minimal non-data ink
-            ax = plt.gca()
-            ax.grid(False)
-            ax.tick_params(axis='both', which='both', length=3, width=0.8, pad=4)
+            # Create color mapping
+            label_to_id = {label: i for i, label in enumerate(sorted(unique_labels))}
+            color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
+            colors = [color_palette[label_to_id[label]] for label in labels_subset]
             
-            # Convert labels to integers for coloring
-            unique_labels = np.unique(labels_subset)
-            label_to_id = {label: i for i, label in enumerate(unique_labels)}
-            numeric_labels = np.array([label_to_id[label] for label in labels_subset])
-            n_classes = len(unique_labels)
-            
-            # Use EXACTLY the same color palette as in vis_dim_reduction.py
-            color_palette = sns.color_palette("colorblind", n_colors=n_classes)
-            colors = [color_palette[i] for i in numeric_labels]
-            
-            # Create the scatter plot with the exact same parameters
-            scatter = plt.scatter(
+            # Create scatter plot
+            plt.scatter(
                 tsne_result[:, 0], tsne_result[:, 1],
                 c=colors,
                 s=10,
-                alpha=0.8,
-                linewidth=0
+                alpha=0.8
             )
             
-            # More understated title and axis labels
-            plt.title(f't-SNE Visualization - Epoch {self.current_epoch}', fontsize=14, pad=10)
-            plt.xlabel('t-SNE 1', fontsize=10, labelpad=8)
-            plt.ylabel('t-SNE 2', fontsize=10, labelpad=8)
+            # Add title and labels
+            plt.title(f'CATH Classes - Epoch {self.current_epoch}', fontsize=14)
+            plt.xlabel('t-SNE 1')
+            plt.ylabel('t-SNE 2')
             
-            # Add legend if not too many classes, as in vis_dim_reduction.py
-            if n_classes <= 10:
-                # Create simple legend with class labels
-                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[i], 
-                                     markersize=6, label=f'Class {unique_labels[i]}')
-                          for i in range(n_classes)]
-                plt.legend(handles=handles,
-                          title="Classes",
-                          loc='best',
-                          frameon=True,
-                          fontsize=10)
+            # Create legend with CATH class names
+            handles = []
+            for label in sorted(unique_labels):
+                label_int = int(label)
+                cath_name = cath_class_names.get(label_int, f"Class {label_int}")
+                handles.append(plt.Line2D(
+                    [0], [0], 
+                    marker='o', 
+                    color=color_palette[label_to_id[label]],
+                    markersize=6, 
+                    label=cath_name
+                ))
             
-            # Adjust axis limits to provide small margin around data points
-            x_min, x_max = tsne_result[:, 0].min(), tsne_result[:, 0].max()
-            y_min, y_max = tsne_result[:, 1].min(), tsne_result[:, 1].max()
-            margin = 0.05
-            plt.xlim(x_min - margin * (x_max - x_min), x_max + margin * (x_max - x_min))
-            plt.ylim(y_min - margin * (y_max - y_min), y_max + margin * (y_max - y_min))
+            plt.legend(handles=handles, title="CATH Classes")
             
-            # Use tight layout and save
+            # Save the plot
             plt.tight_layout()
-            filename = f"tsne_epoch_{self.current_epoch}.png"
+            filename = f"pca_tsne_epoch_{self.current_epoch}.png"
             save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+            plt.savefig(save_path, dpi=300)
             plt.close()
             
             # Log completion
             elapsed_time = time.time() - start_time
-            log.info(f"t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
+            log.info(f"PCA+t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
             
         except Exception as e:
-            log.error(f"Error generating t-SNE plot: {e}")
+            log.error(f"Error generating PCA+t-SNE plot: {e}")
+            log.exception("Detailed traceback:")
 
     def configure_optimizers(self):
         """Configures optimizer and learning rate scheduler."""
