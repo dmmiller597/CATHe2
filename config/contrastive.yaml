@@ -16,7 +16,7 @@ model:
   weight_decay: 1e-4
   # --- Added Warmup ---
   warmup_epochs: 5       # Number of epochs for linear warmup
-  warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
+  warmup_start_factor: 0.01 # Start LR = learning_rate * warmup_start_factor
 
   # Learning rate scheduler
   lr_scheduler:
