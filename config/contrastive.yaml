@@ -12,12 +12,16 @@ model:
   n_neighbors: 1  # take closest neighbor
   val_max_samples: 50000
   # Optimization
-  learning_rate: 1e-4
+  learning_rate: 1e-4 # Target LR *after* warmup
   weight_decay: 1e-4
-  warmup_steps: 2000     # NEW: Number of steps for linear warmup (approx 1 epoch)
-  warmup_start_factor: 0.1 # NEW: Start LR at 10% of base LR
 
-  # Learning rate scheduler
+  # --- Warmup Configuration ---
+  use_warmup: true         # Enable warmup
+  warmup_steps: 2000         # Number of linear warmup steps
+  warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
+  # --- End Warmup Config ---
+
+  # Learning rate scheduler (ReduceLROnPlateau - used *after* warmup)
   lr_scheduler:
     monitor: "val/knn_balanced_acc"
     mode: "max"

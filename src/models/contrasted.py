@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import os
 import seaborn as sns
-from torch.optim.lr_scheduler import ReduceLROnPlateau # Keep this one
-from torch.optim import Optimizer # Needed for type hinting optimizer_step
+import torch.optim.lr_scheduler # Add top-level import if not already there
+from torch.optim.lr_scheduler import ReduceLROnPlateau, LinearLR, SequentialLR
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -198,17 +198,20 @@ class ContrastiveCATHeModel(pl.LightningModule):
         projection_hidden_dims: List[int] = [1024],
         output_embedding_dim: int = 128,
         dropout: float = 0.3,
-        learning_rate: float = 1e-5, # Base learning rate
+        learning_rate: float = 1e-5, 
         weight_decay: float = 1e-4,
         triplet_margin: float = 0.5,
         use_layer_norm: bool = True,
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
+        # --- Add Warmup Params ---
+        use_warmup: bool = True, # Flag to enable/disable warmup
+        warmup_steps: int = 500, # Number of linear warmup steps
+        warmup_start_factor: float = 0.1, # Start LR = learning_rate * warmup_start_factor
+        # --- End Warmup Params ---
         knn_val_neighbors: int = 1,
         val_max_samples: int = 100000,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
-        warmup_steps: int = 500,
-        warmup_start_factor: float = 0.1,
     ):
         """
         Args:
@@ -220,31 +223,17 @@ class ContrastiveCATHeModel(pl.LightningModule):
             weight_decay: Optimizer weight decay (L2 regularization).
             triplet_margin: Margin for the TripletMarginLoss.
             use_layer_norm: Whether to use Layer Normalization in the projection head.
-            lr_scheduler_config: Config for LR scheduler.
+            lr_scheduler_config: Config for ReduceLROnPlateau scheduler (used *after* warmup).
+            use_warmup: Whether to enable linear learning rate warmup.
+            warmup_steps: Number of steps for linear warmup.
+            warmup_start_factor: Initial LR multiplier for warmup (e.g., 0.1 for 10%).
             knn_val_neighbors: Number of neighbors for validation kNN.
             val_max_samples: Maximum validation samples to use for kNN.
             tsne_viz_dir: Directory to save t-SNE visualizations
-            warmup_steps: Number of optimizer steps for linear LR warmup.
-            warmup_start_factor: Initial learning rate multiplier during warmup (relative to base LR).
         """
         super().__init__()
         # Store hyperparameters
-        self.save_hyperparameters(
-            "input_embedding_dim",
-            "projection_hidden_dims",
-            "output_embedding_dim",
-            "dropout",
-            "learning_rate",
-            "weight_decay",
-            "triplet_margin",
-            "use_layer_norm",
-            "lr_scheduler_config",
-            "knn_val_neighbors",
-            "val_max_samples",
-            "tsne_viz_dir",
-            "warmup_steps",
-            "warmup_start_factor",
-        )
+        self.save_hyperparameters() # This will now also save the warmup params
 
         # Build the projection network (MLP)
         self.projection = self._build_projection_network(
@@ -263,7 +252,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         )
 
         # Triplet miner
-        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized, margin=self.hparams.triplet_margin)
+        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
@@ -601,90 +590,81 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
-        """Configures optimizer and the main ReduceLROnPlateau scheduler."""
+        """Configures optimizer and learning rate scheduler with optional warmup."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.learning_rate, # Base LR for AdamW
             weight_decay=self.hparams.weight_decay
         )
 
-        # If no scheduler config provided, return only the optimizer
-        if not self.hparams.lr_scheduler_config:
-            log.info("No LR scheduler configuration found. Using only optimizer.")
+        # If no scheduler config is provided OR warmup is disabled and no main scheduler needed
+        if not self.hparams.lr_scheduler_config and not self.hparams.use_warmup:
+            log.info("No LR scheduler or warmup configured.")
             return optimizer
 
-        # Configure ONLY the main scheduler (ReduceLROnPlateau)
-        scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode=self.hparams.lr_scheduler_config.get("mode", "max"),
-            factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
-            patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
-        )
+        schedulers = []
+        milestones = []
 
-        log.info(f"Configuring optimizer with base LR={self.hparams.learning_rate}, "
-                 f"WeightDecay={self.hparams.weight_decay}.")
-        log.info(f"Manual Linear Warmup active for {self.hparams.warmup_steps} steps, "
-                 f"starting at factor {self.hparams.warmup_start_factor}.")
-        log.info(f"Using ReduceLROnPlateau scheduler after warmup, monitoring "
-                 f"'{self.hparams.lr_scheduler_config.get('monitor', 'val/knn_balanced_acc')}' "
-                 f"with patience={self.hparams.lr_scheduler_config.get('patience', 5)} "
-                 f"and factor={self.hparams.lr_scheduler_config.get('factor', 0.5)}.")
+        # --- 1. Warmup Scheduler (Optional) ---
+        if self.hparams.use_warmup and self.hparams.warmup_steps > 0:
+            log.info(f"Configuring LinearLR warmup for {self.hparams.warmup_steps} steps, start_factor={self.hparams.warmup_start_factor}")
+            warmup_scheduler = LinearLR(
+                optimizer,
+                start_factor=self.hparams.warmup_start_factor,
+                end_factor=1.0, # End at the full LR
+                total_iters=self.hparams.warmup_steps
+            )
+            schedulers.append(warmup_scheduler)
+            milestones.append(self.hparams.warmup_steps) # Switch after warmup_steps
 
-        # Return dictionary compatible with ReduceLROnPlateau monitoring
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler, # The ReduceLROnPlateau instance
-                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                "interval": "epoch",  # ReduceLROnPlateau checks at the end of each epoch
-                "frequency": 1,
-                "strict": True,
-            }
+        # --- 2. Main Scheduler (ReduceLROnPlateau - Optional) ---
+        if self.hparams.lr_scheduler_config:
+            log.info(f"Configuring ReduceLROnPlateau scheduler with config: {self.hparams.lr_scheduler_config}")
+            main_scheduler = ReduceLROnPlateau(
+                optimizer,
+                mode=self.hparams.lr_scheduler_config.get("mode", "max"),
+                factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
+                patience=self.hparams.lr_scheduler_config.get("patience", 5),
+                min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
+                verbose=True # Log when LR changes
+            )
+            schedulers.append(main_scheduler)
+            # No milestone needed for the last scheduler in SequentialLR
+
+        # --- Combine Schedulers ---
+        if not schedulers: # Should only happen if use_warmup=False and no lr_scheduler_config
+             return optimizer
+
+        if len(schedulers) == 1:
+            # If only warmup OR only main scheduler is present
+            final_scheduler = schedulers[0]
+            interval = "step" if isinstance(final_scheduler, LinearLR) else "epoch"
+            monitor = self.hparams.lr_scheduler_config.get("monitor") if isinstance(final_scheduler, ReduceLROnPlateau) else None
+        else:
+            # If both warmup and main scheduler are present, use SequentialLR
+            log.info(f"Combining schedulers using SequentialLR with milestone at step {milestones[0]}")
+            final_scheduler = SequentialLR(
+                optimizer,
+                schedulers=schedulers,
+                milestones=milestones # Define when to switch
+            )
+            # SequentialLR requires step-based updates to handle the initial LinearLR correctly
+            interval = "step"
+            monitor = self.hparams.lr_scheduler_config.get("monitor") # Monitor still needed for ReduceLROnPlateau part
+
+
+        scheduler_config = {
+            "scheduler": final_scheduler,
+            "interval": interval,
+            "frequency": 1
         }
+        # Add monitor only if the main scheduler needs it
+        if monitor:
+             scheduler_config["monitor"] = monitor
 
-    def optimizer_step(
-        self,
-        epoch: int,
-        batch_idx: int,
-        optimizer: Optimizer,
-        optimizer_idx: int = 0, # Keep default value
-        optimizer_closure: Optional[callable] = None,
-        on_tpu: bool = False,
-        using_native_amp: bool = False,
-        using_lbfgs: bool = False,
-    ) -> None:
-        """
-        Manually implements linear learning rate warmup before calling the default
-        optimizer step behavior handled by PyTorch Lightning.
-        """
-        # Manual Warmup Phase: Adjust LR *before* the step
-        if self.trainer.global_step < self.hparams.warmup_steps:
-            lr_scale = min(1.0, float(self.trainer.global_step + 1) / float(self.hparams.warmup_steps))
-            # Ensure warmup_start_factor is applied to the base learning rate
-            start_lr = self.hparams.learning_rate * self.hparams.warmup_start_factor
-            end_lr = self.hparams.learning_rate # The base LR stored in hparams
-            # Calculate the current warmup LR
-            current_lr = start_lr + (end_lr - start_lr) * lr_scale
+        log.info(f"Final optimizer configuration: Optimizer={type(optimizer).__name__}, Scheduler={type(final_scheduler).__name__}, Interval={interval}, Monitor={monitor}")
 
-            # Apply the calculated LR to all parameter groups
-            for pg in optimizer.param_groups:
-                pg["lr"] = current_lr
-        # After warmup, the LR is controlled by ReduceLROnPlateau scheduler
-        # (which modifies optimizer.param_groups['lr'] when triggered by Lightning)
-
-        # Let the Lightning Trainer handle the optimizer step, including the closure
-        # This ensures compatibility with gradient accumulation, AMP, etc.
-        super().optimizer_step(
-            epoch=epoch,
-            batch_idx=batch_idx,
-            optimizer=optimizer,
-            optimizer_idx=optimizer_idx,
-            optimizer_closure=optimizer_closure,
-            on_tpu=on_tpu,
-            using_native_amp=using_native_amp,
-            using_lbfgs=using_lbfgs,
-        )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler_config}
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
