@@ -205,6 +205,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         val_max_samples: int = 100000,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
+        warmup_steps: int = 500,
     ):
         """
         Args:
@@ -220,9 +221,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             knn_val_neighbors: Number of neighbors for validation kNN.
             val_max_samples: Maximum validation samples to use for kNN.
             tsne_viz_dir: Directory to save t-SNE visualizations
+            warmup_steps: Number of training steps for linear learning rate warmup (0 to disable).
         """
         super().__init__()
-        # Store hyperparameters
         self.save_hyperparameters()
 
         # Build the projection network (MLP)
@@ -580,33 +581,57 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
-        """Configures optimizer and learning rate scheduler."""
+        """
+        Configures the optimizer and learning rate scheduler, including optional linear warmup.
+        """
+        # 1. Create the optimizer
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.learning_rate, # Base LR used by schedulers
             weight_decay=self.hparams.weight_decay
         )
-        
+
+        # 2. Check if scheduling is configured
         if not self.hparams.lr_scheduler_config:
-            return optimizer
-            
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            return optimizer # No scheduler requested
+
+        # 3. Create the main scheduler (ReduceLROnPlateau) based on config
+        main_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
             min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
-        
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                "interval": "epoch",
-                "frequency": 1
-            }
+        # Default configuration for the main scheduler
+        lr_scheduler_config = {
+            "scheduler": main_scheduler,
+            "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
+            "interval": "epoch", # ReduceLROnPlateau checks metric typically per epoch
+            "frequency": 1,
+            "name": "learning_rate" # Name for logging
         }
+
+        # 4. Add linear warmup if configured
+        if self.hparams.warmup_steps > 0:
+            # Create linear warmup scheduler
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=1e-6, # Start near zero
+                end_factor=1.0,    # Ramp up to base LR
+                total_iters=self.hparams.warmup_steps # Duration of warmup
+            )
+            # Chain warmup and main scheduler
+            sequential_scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, main_scheduler],
+                milestones=[self.hparams.warmup_steps] # Step count to switch schedulers
+            )
+            # Update the config to use the sequential scheduler
+            lr_scheduler_config["scheduler"] = sequential_scheduler
+
+        # 5. Return optimizer and scheduler configuration
+        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
