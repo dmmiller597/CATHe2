@@ -242,7 +242,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         )
 
         # Triplet miner
-        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
@@ -491,7 +491,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.info(f"Generating t-SNE plot for epoch {self.current_epoch}")
             
             # Sample for efficiency (max 1000 points)
-            max_samples = 1000
+            max_samples = 10000
             if len(embeddings) > max_samples:
                 indices = torch.randperm(len(embeddings))[:max_samples]
                 embeddings_subset = embeddings[indices].cpu().numpy()
