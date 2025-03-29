@@ -47,7 +47,6 @@ def main(cfg: DictConfig) -> None:
         triplet_margin=cfg.model.margin,
         knn_val_neighbors=cfg.model.n_neighbors,  # Use 1 for faster validation
         val_max_samples=cfg.model.val_max_samples,
-        warmup_steps=cfg.model.warmup_steps,
         lr_scheduler_config={
             "monitor": cfg.model.lr_scheduler.monitor,
             "mode": cfg.model.lr_scheduler.mode,
@@ -72,7 +71,7 @@ def main(cfg: DictConfig) -> None:
             patience=cfg.training.early_stopping_patience,
             mode=cfg.training.monitor_mode
         ),
-        LearningRateMonitor(logging_interval="epoch"),
+        LearningRateMonitor(logging_interval="step"),
         RichProgressBar()
     ]
     

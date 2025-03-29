@@ -205,7 +205,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
         val_max_samples: int = 100000,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
-        warmup_steps: int = 500,
     ):
         """
         Args:
@@ -221,9 +220,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             knn_val_neighbors: Number of neighbors for validation kNN.
             val_max_samples: Maximum validation samples to use for kNN.
             tsne_viz_dir: Directory to save t-SNE visualizations
-            warmup_steps: Number of training steps for linear learning rate warmup (0 to disable).
         """
         super().__init__()
+        # Store hyperparameters
         self.save_hyperparameters()
 
         # Build the projection network (MLP)
@@ -581,77 +580,47 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
-        """
-        Configures the optimizer and the main ReduceLROnPlateau scheduler.
-        Warmup is handled manually in `optimizer_step`.
-        """
-        # 1. Create the optimizer
+        """Configures optimizer and learning rate scheduler with linear warmup."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams.learning_rate, # Base LR used by main scheduler
+            lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-
-        # 2. Check if scheduling is configured
-        if not self.hparams.lr_scheduler_config:
-            return optimizer # No scheduler requested
-
-        # 3. Create and configure the main scheduler (ReduceLROnPlateau)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode=self.hparams.lr_scheduler_config.get("mode", "max"),
-            factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
-            patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
-        )
-
-        lr_scheduler_config = {
-            "scheduler": scheduler,
-            "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-            "interval": "epoch", # ReduceLROnPlateau checks metric typically per epoch
-            "frequency": 1,
-            "name": "learning_rate" # Name for logging
+        
+        # Define warmup parameters
+        warmup_steps = 1500  # Adjust based on your dataset (roughly 5-10% of an epoch)
+        warmup_start_factor = 0.01  # Start at 1% of base learning rate
+        
+        # Create scheduler dict for Lightning
+        scheduler_config = {
+            "optimizer": optimizer,
         }
-
-        # 4. Return optimizer and the ReduceLROnPlateau scheduler configuration
-        # Lightning will handle stepping this scheduler with the monitored metric.
-        return {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config}
-
-    def optimizer_step(
-        self,
-        epoch: int,
-        batch_idx: int,
-        optimizer: torch.optim.Optimizer,
-        optimizer_idx: int = 0, # Keep default value
-        optimizer_closure: Optional[callable] = None,
-        on_tpu: bool = False,
-        using_native_amp: bool = False,
-        using_lbfgs: bool = False,
-    ) -> None:
-        """
-        Manually performs linear learning rate warmup during the initial steps,
-        then performs the standard optimizer step.
-        """
-        # Check if warmup is needed and active
-        if self.hparams.warmup_steps > 0 and self.trainer.global_step < self.hparams.warmup_steps:
-            # Calculate linear warmup learning rate
-            base_lr = self.hparams.learning_rate
-            start_factor = 1e-6 # Factor to start from (almost zero)
-            warmup_steps = self.hparams.warmup_steps
-            current_step = self.trainer.global_step
-
-            # Calculate linearly interpolated learning rate
-            lr_scale = min(1.0, float(current_step + 1) / warmup_steps) # +1 because step starts at 0
-            start_lr = base_lr * start_factor
-            current_lr = start_lr + (base_lr - start_lr) * lr_scale
-
-            # Apply the calculated LR to all parameter groups
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = current_lr
-
-        # Perform the optimizer step using the closure
-        # This handles gradient accumulation, precision plugin logic, etc.
-        optimizer.step(closure=optimizer_closure)
+        
+        # If using lr_scheduler_config (ReduceLROnPlateau)
+        if self.hparams.lr_scheduler_config:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode=self.hparams.lr_scheduler_config.get("mode", "max"),
+                factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
+                patience=self.hparams.lr_scheduler_config.get("patience", 5),
+                min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
+            )
+            
+            # Add warmup to Lightning callbacks rather than lr_scheduler dict
+            # This approach is cleaner with ReduceLROnPlateau which expects epochs not steps
+            self.warmup_scheduler = GradualWarmupCallback(
+                warmup_steps=warmup_steps,
+                start_factor=warmup_start_factor
+            )
+            
+            scheduler_config["lr_scheduler"] = {
+                "scheduler": scheduler,
+                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
+                "interval": "epoch",
+                "frequency": 1
+            }
+        
+        return scheduler_config
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
@@ -664,3 +633,30 @@ class ContrastiveCATHeModel(pl.LightningModule):
             
         with torch.inference_mode():
             return self(embeddings).cpu()
+
+# Define a simple callback for warmup (add this outside the class)
+class GradualWarmupCallback(pl.Callback):
+    """Gradually increases learning rate from start_factor*base_lr to base_lr over warmup_steps."""
+    
+    def __init__(self, warmup_steps=1500, start_factor=0.01):
+        super().__init__()
+        self.warmup_steps = warmup_steps
+        self.start_factor = start_factor
+        self.current_step = 0
+    
+    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+        # Skip if warmup is complete
+        if self.current_step >= self.warmup_steps:
+            return
+        
+        # Get optimizer
+        optimizer = trainer.optimizers[0]
+        
+        # Calculate warmup factor (linear scaling from start_factor to 1.0)
+        warmup_factor = self.start_factor + (1.0 - self.start_factor) * (self.current_step / self.warmup_steps)
+        
+        # Apply warmup factor to learning rate
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = pl_module.hparams.learning_rate * warmup_factor
+        
+        self.current_step += 1
