@@ -513,9 +513,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 embeddings_subset = embeddings.cpu().numpy()
                 labels_subset = labels.cpu().numpy()
             
+            # Get unique labels
+            unique_labels = np.unique(labels_subset)
 
             
-            # Map dataset labels to CATH class names - adjusted based on log output [0, 1, 2, 3]
             cath_class_names = {
                 0: "Mainly Alpha",
                 1: "Mainly Beta",
