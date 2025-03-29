@@ -655,25 +655,36 @@ class ContrastiveCATHeModel(pl.LightningModule):
         using_lbfgs: bool = False,
     ) -> None:
         """
-        Manually implements linear learning rate warmup.
-        Called by the Trainer after `training_step` and `backward`.
+        Manually implements linear learning rate warmup before calling the default
+        optimizer step behavior handled by PyTorch Lightning.
         """
-        # Manual Warmup Phase
+        # Manual Warmup Phase: Adjust LR *before* the step
         if self.trainer.global_step < self.hparams.warmup_steps:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / float(self.hparams.warmup_steps))
+            # Ensure warmup_start_factor is applied to the base learning rate
             start_lr = self.hparams.learning_rate * self.hparams.warmup_start_factor
-            end_lr = self.hparams.learning_rate
+            end_lr = self.hparams.learning_rate # The base LR stored in hparams
             # Calculate the current warmup LR
             current_lr = start_lr + (end_lr - start_lr) * lr_scale
 
             # Apply the calculated LR to all parameter groups
             for pg in optimizer.param_groups:
                 pg["lr"] = current_lr
-        # After warmup, the LR is controlled by ReduceLROnPlateau scheduler (stepped by Lightning epoch end)
-        # or remains at the base self.hparams.learning_rate if plateau condition isn't met.
+        # After warmup, the LR is controlled by ReduceLROnPlateau scheduler
+        # (which modifies optimizer.param_groups['lr'] when triggered by Lightning)
 
-        # Standard optimizer step
-        optimizer.step(closure=optimizer_closure)
+        # Let the Lightning Trainer handle the optimizer step, including the closure
+        # This ensures compatibility with gradient accumulation, AMP, etc.
+        super().optimizer_step(
+            epoch=epoch,
+            batch_idx=batch_idx,
+            optimizer=optimizer,
+            optimizer_idx=optimizer_idx,
+            optimizer_closure=optimizer_closure,
+            on_tpu=on_tpu,
+            using_native_amp=using_native_amp,
+            using_lbfgs=using_lbfgs,
+        )
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
