@@ -491,8 +491,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         """
-        Creates a simple visualization of embeddings using PCA preprocessing
-        followed by t-SNE, colored by CATH classes.
+        Creates a minimalist visualization of embeddings using PCA preprocessing
+        followed by t-SNE, colored by CATH classes, following Tufte principles.
         
         Args:
             embeddings: Projected embeddings tensor
@@ -515,7 +515,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
             
             # Get unique labels
             unique_labels = np.unique(labels_subset)
-
             
             cath_class_names = {
                 0: "Mainly Alpha",
@@ -533,54 +532,63 @@ class ContrastiveCATHeModel(pl.LightningModule):
             tsne = TSNE(n_components=2, perplexity=30, random_state=42)
             tsne_result = tsne.fit_transform(embeddings_pca)
             
-            # Set up basic plot
-            plt.figure(figsize=(8, 8))
+            # Set up minimalist plot with Tufte-inspired style
+            plt.figure(figsize=(8, 6))
+            
+            # Set clean style
+            plt.rcParams['axes.spines.top'] = False
+            plt.rcParams['axes.spines.right'] = False
+            plt.rcParams['axes.grid'] = False
             
             # Create color mapping that maintains consistent colors per CATH class
             color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
             colors = [color_palette[int(label)] for label in labels_subset]
             
-            # Create scatter plot
+            # Create scatter plot - smaller points with higher density
             plt.scatter(
                 tsne_result[:, 0], tsne_result[:, 1],
                 c=colors,
-                s=10,
-                alpha=0.8
+                s=5,  # Smaller point size
+                alpha=0.7,  # Slightly transparent
+                linewidths=0,  # No edge lines
+                rasterized=True  # Better for export
             )
             
-            # Add title and labels
-            plt.title(f'CATH Classes - Epoch {self.current_epoch}', fontsize=14)
-            plt.xlabel('t-SNE 1')
-            plt.ylabel('t-SNE 2')
+            # Minimal labels and subtle tick marks
+            plt.title(f'CATH Classes (Epoch {self.current_epoch})', fontsize=12, pad=10)
+            plt.tick_params(axis='both', which='major', labelsize=8, length=3, width=0.5)
             
-            # Create legend with CATH class names
-            handles = []
-            for label in unique_labels:
-                label_int = int(label)
-                cath_name = cath_class_names.get(label_int, f"Class {label_int}")
-                handles.append(plt.Line2D(
-                    [0], [0], 
-                    marker='o', 
-                    color=color_palette[label_int],
-                    markersize=6, 
-                    label=cath_name
-                ))
+            # Subtle axis labels
+            plt.xlabel('t-SNE Dimension 1', fontsize=9, labelpad=7, color='#505050')
+            plt.ylabel('t-SNE Dimension 2', fontsize=9, labelpad=7, color='#505050')
             
-            plt.legend(handles=handles, title="CATH Classes")
+            # Create minimal legend with CATH class names
+            if len(unique_labels) <= 4:
+                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[i], 
+                                      markersize=5, linestyle='',
+                                      label=cath_class_names.get(unique_labels[i], f"Class {unique_labels[i]}"))
+                           for i in range(len(unique_labels))]
+                plt.legend(handles=handles,
+                          loc='best',
+                          frameon=False,  # No frame
+                          fontsize=9,
+                          handletextpad=0.5)  # Less space between marker and text
+            
+            # Tighter layout with reduced margins
+            plt.tight_layout(pad=1.2)
             
             # Save the plot
-            plt.tight_layout()
-            filename = f"pca_tsne_epoch_{self.current_epoch}.png"
+            filename = f"tsne_epoch_{self.current_epoch}.png"
             save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
-            plt.savefig(save_path, dpi=300)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', transparent=False)
             plt.close()
             
             # Log completion
             elapsed_time = time.time() - start_time
-            log.info(f"PCA+t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
+            log.info(f"t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
             
         except Exception as e:
-            log.error(f"Error generating PCA+t-SNE plot: {e}")
+            log.error(f"Error generating t-SNE plot: {e}")
             log.exception("Detailed traceback:")
 
     def configure_optimizers(self):
