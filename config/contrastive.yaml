@@ -12,11 +12,11 @@ model:
   n_neighbors: 1  # take closest neighbor
   val_max_samples: 50000
   # Optimization
-  learning_rate: 1e-5
+  learning_rate: 5e-4
   weight_decay: 1e-4
   # --- Added Warmup ---
   warmup_epochs: 5       # Number of epochs for linear warmup
-  warmup_start_factor: 0.01 # Start LR = learning_rate * warmup_start_factor
+  warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
 
   # Learning rate scheduler
   lr_scheduler:
