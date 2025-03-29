@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import os
 import seaborn as sns
-from torch.optim.lr_scheduler import LinearLR, ReduceLROnPlateau, SequentialLR # Add imports
+from torch.optim.lr_scheduler import ReduceLROnPlateau # Keep this one
+from torch.optim import Optimizer # Needed for type hinting optimizer_step
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -197,7 +198,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         projection_hidden_dims: List[int] = [1024],
         output_embedding_dim: int = 128,
         dropout: float = 0.3,
-        learning_rate: float = 1e-5,
+        learning_rate: float = 1e-5, # Base learning rate
         weight_decay: float = 1e-4,
         triplet_margin: float = 0.5,
         use_layer_norm: bool = True,
@@ -206,8 +207,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         val_max_samples: int = 100000,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
-        warmup_steps: int = 500,          # New: Number of warmup steps
-        warmup_start_factor: float = 0.1, # New: Initial LR factor (e.g., 0.1 = 10%)
+        warmup_steps: int = 500,
+        warmup_start_factor: float = 0.1,
     ):
         """
         Args:
@@ -600,7 +601,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error generating t-SNE plot: {e}")
 
     def configure_optimizers(self):
-        """Configures optimizer and learning rate schedulers (warmup + plateau)."""
+        """Configures optimizer and the main ReduceLROnPlateau scheduler."""
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
@@ -612,17 +613,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.info("No LR scheduler configuration found. Using only optimizer.")
             return optimizer
 
-        # 1. Linear Warmup Scheduler
-        # total_iters is the number of steps for the warmup phase.
-        warmup_scheduler = LinearLR(
-            optimizer,
-            start_factor=self.hparams.warmup_start_factor,
-            total_iters=self.hparams.warmup_steps
-        )
-
-        # 2. Main Plateau Scheduler
-        # This scheduler will take over after the warmup phase.
-        main_scheduler = ReduceLROnPlateau(
+        # Configure ONLY the main scheduler (ReduceLROnPlateau)
+        scheduler = ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
@@ -630,20 +622,11 @@ class ContrastiveCATHeModel(pl.LightningModule):
             min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
 
-        # 3. Sequential Scheduler to chain warmup and plateau
-        # Milestones defines the step count *after* which to switch to the next scheduler.
-        # Here, switch to main_scheduler after warmup_steps optimizer steps.
-        scheduler = SequentialLR(
-            optimizer,
-            schedulers=[warmup_scheduler, main_scheduler],
-            milestones=[self.hparams.warmup_steps]
-        )
-
-        log.info(f"Configuring optimizer with LR={self.hparams.learning_rate}, "
+        log.info(f"Configuring optimizer with base LR={self.hparams.learning_rate}, "
                  f"WeightDecay={self.hparams.weight_decay}.")
-        log.info(f"Using Linear Warmup for {self.hparams.warmup_steps} steps, "
+        log.info(f"Manual Linear Warmup active for {self.hparams.warmup_steps} steps, "
                  f"starting at factor {self.hparams.warmup_start_factor}.")
-        log.info(f"Using ReduceLROnPlateau scheduler afterwards, monitoring "
+        log.info(f"Using ReduceLROnPlateau scheduler after warmup, monitoring "
                  f"'{self.hparams.lr_scheduler_config.get('monitor', 'val/knn_balanced_acc')}' "
                  f"with patience={self.hparams.lr_scheduler_config.get('patience', 5)} "
                  f"and factor={self.hparams.lr_scheduler_config.get('factor', 0.5)}.")
@@ -652,13 +635,45 @@ class ContrastiveCATHeModel(pl.LightningModule):
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": scheduler, # The SequentialLR instance
+                "scheduler": scheduler, # The ReduceLROnPlateau instance
                 "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
                 "interval": "epoch",  # ReduceLROnPlateau checks at the end of each epoch
                 "frequency": 1,
-                "strict": True,       # Ensure the monitor key exists
+                "strict": True,
             }
         }
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Optimizer,
+        optimizer_idx: int = 0, # Keep default value
+        optimizer_closure: Optional[callable] = None,
+        on_tpu: bool = False,
+        using_native_amp: bool = False,
+        using_lbfgs: bool = False,
+    ) -> None:
+        """
+        Manually implements linear learning rate warmup.
+        Called by the Trainer after `training_step` and `backward`.
+        """
+        # Manual Warmup Phase
+        if self.trainer.global_step < self.hparams.warmup_steps:
+            lr_scale = min(1.0, float(self.trainer.global_step + 1) / float(self.hparams.warmup_steps))
+            start_lr = self.hparams.learning_rate * self.hparams.warmup_start_factor
+            end_lr = self.hparams.learning_rate
+            # Calculate the current warmup LR
+            current_lr = start_lr + (end_lr - start_lr) * lr_scale
+
+            # Apply the calculated LR to all parameter groups
+            for pg in optimizer.param_groups:
+                pg["lr"] = current_lr
+        # After warmup, the LR is controlled by ReduceLROnPlateau scheduler (stepped by Lightning epoch end)
+        # or remains at the base self.hparams.learning_rate if plateau condition isn't met.
+
+        # Standard optimizer step
+        optimizer.step(closure=optimizer_closure)
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
         """Generates embeddings for prediction."""
