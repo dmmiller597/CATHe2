@@ -513,17 +513,15 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 embeddings_subset = embeddings.cpu().numpy()
                 labels_subset = labels.cpu().numpy()
             
-            # Map CATH C-level class IDs to their descriptive names
-            cath_class_names = {
-                1: "Mainly Alpha",
-                2: "Mainly Beta",
-                3: "Alpha Beta", 
-                4: "Few Secondary Structures"
-            }
+
             
-            # Log label mapping
-            unique_labels = np.unique(labels_subset)
-            log.info(f"CATH Classes found: {unique_labels}")
+            # Map dataset labels to CATH class names - adjusted based on log output [0, 1, 2, 3]
+            cath_class_names = {
+                0: "Mainly Alpha",
+                1: "Mainly Beta",
+                2: "Alpha Beta", 
+                3: "Few Secondary Structures"
+            }
             
             # Simple PCA preprocessing
             n_components = min(50, embeddings_subset.shape[1])
@@ -537,10 +535,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             # Set up basic plot
             plt.figure(figsize=(8, 8))
             
-            # Create color mapping
-            label_to_id = {label: i for i, label in enumerate(sorted(unique_labels))}
+            # Create color mapping that maintains consistent colors per CATH class
             color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
-            colors = [color_palette[label_to_id[label]] for label in labels_subset]
+            colors = [color_palette[int(label)] for label in labels_subset]
             
             # Create scatter plot
             plt.scatter(
@@ -557,13 +554,13 @@ class ContrastiveCATHeModel(pl.LightningModule):
             
             # Create legend with CATH class names
             handles = []
-            for label in sorted(unique_labels):
+            for label in unique_labels:
                 label_int = int(label)
                 cath_name = cath_class_names.get(label_int, f"Class {label_int}")
                 handles.append(plt.Line2D(
                     [0], [0], 
                     marker='o', 
-                    color=color_palette[label_to_id[label]],
+                    color=color_palette[label_int],
                     markersize=6, 
                     label=cath_name
                 ))
