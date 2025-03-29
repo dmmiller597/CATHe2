@@ -600,39 +600,34 @@ class ContrastiveCATHeModel(pl.LightningModule):
             min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
         
-        # Add warmup scheduler
+        # Add warmup scheduler - Using a simpler approach that works with Lightning
         warmup_steps = 2000  # Number of warmup steps
+        warmup_start_factor = 0.1  # Start at 10% of base learning rate
         
-        # Linear warmup function
-        def warmup_lambda(current_step):
-            if current_step < warmup_steps:
-                # Linear warmup from 10% to 100% of base learning rate
-                return 0.1 + 0.9 * current_step / warmup_steps
-            return 1.0  # After warmup, maintain base learning rate
-        
-        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(
+        # Use LinearLR for warmup - more compatible with Lightning's structure
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
-            lr_lambda=warmup_lambda
+            start_factor=warmup_start_factor,
+            end_factor=1.0,
+            total_iters=warmup_steps
         )
         
-        # Return both schedulers to Lightning
+        # Use Lightning's scheduling dict format with SequentialLR to combine schedulers
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, plateau_scheduler],
+            milestones=[warmup_steps]
+        )
+        
+        # Return in Lightning's expected format
         return {
             "optimizer": optimizer,
-            "lr_scheduler": [
-                {
-                    "scheduler": warmup_scheduler,
-                    "interval": "step",  # Call after each step
-                    "frequency": 1,
-                    "name": "warmup"
-                },
-                {
-                    "scheduler": plateau_scheduler,
-                    "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                    "interval": "epoch",  # Call after each epoch
-                    "frequency": 1,
-                    "name": "plateau"
-                }
-            ]
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
+                "interval": "step",
+                "frequency": 1
+            }
         }
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
