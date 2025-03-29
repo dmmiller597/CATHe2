@@ -581,6 +581,85 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def configure_optimizers(self):
         """Configures optimizer and learning rate scheduler with warmup."""
+        # Import the WarmupLR at the top of the file
+        from torch.optim.lr_scheduler import _LRScheduler
+        from torch.optim.lr_scheduler import ReduceLROnPlateau
+        import math 
+
+        class WarmupLR(_LRScheduler):
+            def __init__(self, scheduler, init_lr=1e-3, num_warmup=1, warmup_strategy='linear'):
+                if warmup_strategy not in ['linear', 'cos', 'constant']:
+                    raise ValueError("Expect warmup_strategy to be one of ['linear', 'cos', 'constant'] but got {}".format(warmup_strategy))
+                self._scheduler = scheduler
+                self._init_lr = init_lr
+                self._num_warmup = num_warmup
+                self._step_count = 0
+                # Define the strategy to warm up learning rate 
+                self._warmup_strategy = warmup_strategy
+                if warmup_strategy == 'cos':
+                    self._warmup_func = self._warmup_cos
+                elif warmup_strategy == 'linear':
+                    self._warmup_func = self._warmup_linear
+                else:
+                    self._warmup_func = self._warmup_const
+                # save initial learning rate of each param group
+                # only useful when each param groups having different learning rate
+                self._format_param()
+
+            def __getattr__(self, name):
+                return getattr(self._scheduler, name)
+            
+            def state_dict(self):
+                """Returns the state of the scheduler as a :class:`dict`."""
+                wrapper_state_dict = {key: value for key, value in self.__dict__.items() if (key != 'optimizer' and key !='_scheduler')}
+                wrapped_state_dict = {key: value for key, value in self._scheduler.__dict__.items() if key != 'optimizer'} 
+                return {'wrapped': wrapped_state_dict, 'wrapper': wrapper_state_dict}
+            
+            def load_state_dict(self, state_dict):
+                """Loads the schedulers state."""
+                self.__dict__.update(state_dict['wrapper'])
+                self._scheduler.__dict__.update(state_dict['wrapped'])
+
+            def _format_param(self):
+                # learning rate of each param group will increase
+                # from the min_lr to initial_lr
+                for group in self._scheduler.optimizer.param_groups:
+                    group['warmup_max_lr'] = group['lr']
+                    group['warmup_initial_lr'] = min(self._init_lr, group['lr'])
+
+            def _warmup_cos(self, start, end, pct):
+                cos_out = math.cos(math.pi * pct) + 1
+                return end + (start - end)/2.0*cos_out
+            
+            def _warmup_const(self, start, end, pct):
+                return start if pct < 0.9999 else end 
+
+            def _warmup_linear(self, start, end, pct):
+                return (end - start) * pct + start 
+
+            def get_lr(self):
+                lrs = []
+                step_num = self._step_count
+                # warm up learning rate 
+                if step_num <= self._num_warmup:
+                    for group in self._scheduler.optimizer.param_groups:
+                        computed_lr = self._warmup_func(group['warmup_initial_lr'], 
+                                                        group['warmup_max_lr'],
+                                                        step_num/self._num_warmup)
+                        lrs.append(computed_lr)
+                else:
+                    lrs = self._scheduler.get_lr()
+                return lrs
+
+            def step(self, *args):
+                if self._step_count <= self._num_warmup:
+                    values = self.get_lr()
+                    for param_group, lr in zip(self._scheduler.optimizer.param_groups, values):
+                        param_group['lr'] = lr
+                    self._step_count += 1 
+                else:
+                    self._scheduler.step(*args)
+
         # Create optimizer
         optimizer = torch.optim.AdamW(
             self.parameters(),
@@ -592,20 +671,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         if not self.hparams.lr_scheduler_config:
             return optimizer
         
-        # Warmup configuration - simple and flexible
-        warmup_steps = 2000  # Number of steps for warmup
-        warmup_start_factor = 0.1  # Start at 10% of base learning rate
-        
-        # 1. Linear warmup scheduler
-        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, 
-            start_factor=warmup_start_factor,
-            end_factor=1.0, 
-            total_iters=warmup_steps
-        )
-        
-        # 2. ReduceLROnPlateau scheduler (existing)
-        reduce_on_plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # Create the base scheduler (ReduceLROnPlateau)
+        reduce_on_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
@@ -614,26 +681,28 @@ class ContrastiveCATHeModel(pl.LightningModule):
             verbose=True
         )
         
-        # Return appropriate Lightning configuration
-        # Note: With PyTorch Lightning 1.5+, interval='step' for warmup scheduler
-        # and interval='epoch' for ReduceLROnPlateau with different dictionaries
+        # Wrap with warmup scheduler
+        # Configure the warmup parameters
+        warmup_steps = 2000  # Number of steps for warmup
+        warmup_init_lr = self.hparams.learning_rate * 0.1  # Start at 10% of base learning rate
+        
+        # Create the wrapped scheduler with warmup
+        scheduler = WarmupLR(
+            scheduler=reduce_on_plateau,
+            init_lr=warmup_init_lr,
+            num_warmup=warmup_steps,
+            warmup_strategy='linear'  # Can be 'linear', 'cos', or 'constant'
+        )
+        
+        # Return Lightning configuration with the warmup wrapped scheduler
         return {
             "optimizer": optimizer,
-            "lr_scheduler": [
-                {
-                    "scheduler": warmup_scheduler,
-                    "interval": "step",  # Apply per step
-                    "frequency": 1,
-                    "name": "warmup_scheduler"
-                },
-                {
-                    "scheduler": reduce_on_plateau_scheduler,
-                    "interval": "epoch",  # Apply per epoch
-                    "frequency": 1,
-                    "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
-                    "name": "plateau_scheduler"
-                }
-            ],
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": self.hparams.lr_scheduler_config.get("monitor", "val/knn_balanced_acc"),
+                "interval": "step",  # Important: we need step-level scheduling for warmup
+                "frequency": 1
+            }
         }
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
