@@ -12,7 +12,7 @@ model:
   n_neighbors: 1  # take closest neighbor
   val_max_samples: 50000
   # Optimization
-  learning_rate: 5e-4
+  learning_rate: 3e-4
   weight_decay: 1e-4
   # --- Added Warmup ---
   warmup_epochs: 5       # Number of epochs for linear warmup
@@ -22,15 +22,15 @@ model:
   lr_scheduler:
     monitor: "val/knn_balanced_acc"
     mode: "max"
-    factor: 0.7
-    patience: 3
+    factor: 0.5
+    patience: 10
     min_lr: 1e-8
 
 training:
   # Training parameters
   batch_size: 1024  # large batch size for better triplet mining
   max_epochs: 50  
-  accumulate_grad_batches: 4  # effective batch size of 4K
+  accumulate_grad_batches: 1  # effective batch size of 4K
   
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
