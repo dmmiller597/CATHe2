@@ -184,6 +184,34 @@ class SemiHardMiner:
 
         return anchor_indices, positive_indices, negative_indices
 
+# --- Loss Functions ---
+
+def soft_triplet_loss(
+    anchor: Tensor, positive: Tensor, negative: Tensor,
+    distance_metric_func=pairwise_distance_optimized
+) -> Tensor:
+    """
+    Computes the soft triplet loss using the softplus function.
+
+    Loss = log(1 + exp(d(anchor, positive)^2 - d(anchor, negative)^2))
+    Aims to push d(a, p) down and d(a, n) up.
+
+    Args:
+        anchor: Embeddings for anchor samples.
+        positive: Embeddings for positive samples.
+        negative: Embeddings for negative samples.
+        distance_metric_func: Function to compute pairwise distances.
+
+    Returns:
+        The mean soft triplet loss over the batch.
+    """
+    dist_ap = distance_metric_func(anchor, positive).diag() # Get diagonal for paired distances
+    dist_an = distance_metric_func(anchor, negative).diag() # Get diagonal for paired distances
+
+    # Softplus(x) = log(1 + exp(x))
+    loss = F.softplus(dist_ap - dist_an)
+    return loss.mean()
+
 # --- Main Lightning Module ---
 
 class ContrastiveCATHeModel(pl.LightningModule):
@@ -201,7 +229,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
         dropout: float = 0.3,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
-        triplet_margin: float = 0.5,
         use_layer_norm: bool = True,
         lr_scheduler_config: Optional[Dict[str, Any]] = None,
         knn_val_neighbors: int = 1,
@@ -220,7 +247,6 @@ class ContrastiveCATHeModel(pl.LightningModule):
             dropout: Dropout probability in the projection head.
             learning_rate: Optimizer learning rate.
             weight_decay: Optimizer weight decay (L2 regularization).
-            triplet_margin: Margin for the TripletMarginLoss.
             use_layer_norm: Whether to use Layer Normalization in the projection head.
             lr_scheduler_config: Config for LR scheduler.
             knn_val_neighbors: Number of neighbors for validation kNN.
@@ -247,15 +273,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
             use_layer_norm=self.hparams.use_layer_norm
         )
 
-        # Loss function with squared Euclidean distance
-        self.loss_fn = nn.TripletMarginWithDistanceLoss(
-            distance_function=pairwise_distance_optimized,
-            margin=self.hparams.triplet_margin,
-            reduction='mean'
-        )
+        # Use the soft triplet loss function
+        self.loss_fn = soft_triplet_loss
+        # NOTE: `soft_triplet_loss` uses `pairwise_distance_optimized` by default
 
         # Triplet miner
-        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
@@ -390,7 +413,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 if embeddings_same.size(0) > 1:
                     dist_same = pairwise_distance_optimized(embeddings_same, embeddings_same)
                     dist_same = dist_same[~torch.eye(embeddings_same.size(0), dtype=bool, device=dist_same.device)]
-                    intra_dists.append(dist_same)
+                    intra_dists.append(dist_same[torch.isfinite(dist_same)])
                 
                 # Sample inter-class
                 if torch.sum(mask_diff) > 0 and embeddings_same.size(0) > 0:
@@ -401,64 +424,65 @@ class ContrastiveCATHeModel(pl.LightningModule):
                     
                     # Compute inter-class distances (distances between different classes)
                     dist_diff = pairwise_distance_optimized(embeddings_same, embeddings_diff)
-                    inter_dists.append(dist_diff)
+                    inter_dists.append(dist_diff[torch.isfinite(dist_diff)])
             
             # Calculate statistics if we have data
             if intra_dists and inter_dists:
-                intra_dists = torch.cat(intra_dists)
-                inter_dists = torch.cat(inter_dists)
-                
-                mean_intra = intra_dists.mean().item()
-                mean_inter = inter_dists.mean().item()
-                min_inter = inter_dists.min().item()
-                max_intra = intra_dists.max().item()
-                
-                # Log distance metrics
-                self.log("val/mean_intra_dist", mean_intra, sync_dist=True)
-                self.log("val/mean_inter_dist", mean_inter, sync_dist=True)
-                self.log("val/min_inter_dist", min_inter, sync_dist=True)
-                self.log("val/max_intra_dist", max_intra, sync_dist=True)
-                
-                # Discriminability ratio (higher is better)
-                if mean_intra > 0:
-                    self.log("val/inter_intra_ratio", mean_inter / mean_intra, sync_dist=True)
-                
-                # Distance margin (higher is better)
-                self.log("val/dist_margin", mean_inter - mean_intra, sync_dist=True)
-                self.log("val/margin_buffer", (mean_inter - mean_intra - self.hparams.triplet_margin), sync_dist=True)
-                
-                # Overlap measure: percentage of intra-distances larger than smallest inter-distance
-                overlap = torch.mean((intra_dists > min_inter).float()).item()
-                self.log("val/class_overlap", overlap, sync_dist=True)
+                # Concatenate non-empty tensors
+                valid_intra = [d for d in intra_dists if d.numel() > 0]
+                valid_inter = [d for d in inter_dists if d.numel() > 0]
 
+                if valid_intra and valid_inter:
+                    intra_dists = torch.cat(valid_intra)
+                    inter_dists = torch.cat(valid_inter)
+                    
+                    mean_intra = intra_dists.mean().item()
+                    mean_inter = inter_dists.mean().item()
+                    min_inter = inter_dists.min().item()
+                    max_intra = intra_dists.max().item()
+                    
+                    # Log distance metrics
+                    self.log("val/mean_intra_dist", mean_intra, sync_dist=True)
+                    self.log("val/mean_inter_dist", mean_inter, sync_dist=True)
+                    self.log("val/min_inter_dist", min_inter, sync_dist=True)
+                    self.log("val/max_intra_dist", max_intra, sync_dist=True)
+                    
+                    # Discriminability ratio (higher is better)
+                    if mean_intra > 1e-6: # Avoid division by zero
+                        self.log("val/inter_intra_ratio", mean_inter / mean_intra, sync_dist=True)
+                    
+                    # Distance margin (higher is better)
+                    self.log("val/dist_margin", mean_inter - mean_intra, sync_dist=True)
+                    
+                    # Overlap measure: percentage of intra-distances larger than smallest inter-distance
+                    overlap = torch.mean((intra_dists > min_inter).float()).item()
+                    self.log("val/class_overlap", overlap, sync_dist=True)
 
-                
-                # Embedding space quality metrics (computed on subset for efficiency)
-                if all_embeddings.size(0) > 100:
-                    # Sample random subset
-                    subset_size = min(1000, all_embeddings.size(0))
-                    subset_idx = torch.randperm(all_embeddings.size(0))[:subset_size]
-                    emb_subset = all_embeddings[subset_idx].cpu()
-                    
-                    # 1. Embedding uniformity (measures how uniform the distribution is on unit sphere)
-                    # Lower is better - points more uniformly distributed
-                    with torch.no_grad():
-                        uniformity = torch.pdist(emb_subset).pow(2).mul(-2).exp().mean().log().item()
-                    self.log("val/embedding_uniformity", uniformity, sync_dist=True)
-                    
-                # 2. Triplet quality metrics
-                if len(intra_dists) > 0 and len(inter_dists) > 0:
-                    # Triplet violation rate: % of potential triplets violating margin constraint
-                    # (intra_dist > inter_dist - margin)
-                    margin = self.hparams.triplet_margin
-                    # Use the same sample size for both to avoid dimension mismatch
-                    common_sample_size = min(10000, len(intra_dists), len(inter_dists))
-                    intra_sample = intra_dists[torch.randperm(len(intra_dists))[:common_sample_size]]
-                    inter_sample = inter_dists[torch.randperm(len(inter_dists))[:common_sample_size]]
-                    violation_rate = torch.mean(
-                        (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0) - margin).float()
-                    ).item()
-                    self.log("val/triplet_violation_rate", violation_rate, sync_dist=True)
+                    # Embedding space quality metrics (computed on subset for efficiency)
+                    if all_embeddings.size(0) > 100:
+                        # Sample random subset
+                        subset_size = min(1000, all_embeddings.size(0))
+                        subset_idx = torch.randperm(all_embeddings.size(0))[:subset_size]
+                        emb_subset = all_embeddings[subset_idx].cpu()
+                        
+                        # 1. Embedding uniformity (measures how uniform the distribution is on unit sphere)
+                        # Lower is better - points more uniformly distributed
+                        with torch.no_grad():
+                            uniformity = torch.pdist(emb_subset).pow(2).mul(-2).exp().mean().log().item()
+                        self.log("val/embedding_uniformity", uniformity, sync_dist=True)
+                        
+                    # 2. Triplet quality metrics (Adjusted for soft margin)
+                    if len(intra_dists) > 0 and len(inter_dists) > 0:
+                        # Triplet violation rate: % of potential triplets where intra_dist > inter_dist
+                        # (Simplified definition without margin)
+                        common_sample_size = min(10000, len(intra_dists), len(inter_dists))
+                        intra_sample = intra_dists[torch.randperm(len(intra_dists))[:common_sample_size]]
+                        inter_sample = inter_dists[torch.randperm(len(inter_dists))[:common_sample_size]]
+                        # Use broadcasting to compare all pairs between samples
+                        violation_rate = torch.mean(
+                            (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0)).float()
+                        ).item()
+                        self.log("val/triplet_violation_rate", violation_rate, sync_dist=True)
 
             # Get nearest neighbor
             k = self.hparams.knn_val_neighbors

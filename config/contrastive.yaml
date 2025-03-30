@@ -8,7 +8,6 @@ model:
   projection_dims: [1024]  # Increase capacity for 3000 classes
   output_dim: 128  # Increase from 128 for better class separation
   dropout: 0.3
-  margin: 0.5
   n_neighbors: 1  # take closest neighbor
   val_max_samples: 10000
   # Optimization
