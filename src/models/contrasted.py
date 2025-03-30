@@ -134,39 +134,29 @@ class SemiHardMiner:
         pos_dist_mat.masked_fill_(~labels_equal | identity_mask, -torch.inf)
         hardest_pos_dist, hardest_pos_idx = torch.max(pos_dist_mat, dim=1)
 
-        # --- Find Semi-Hard Negatives Efficiently ---
-        # Get distance threshold matrix for each anchor (based on its hardest positive)
-        # This is an efficient replacement for the loop
-        # Broadcasting hardest_pos_dist to create thresholds for each anchor
-        pos_dist_threshold = hardest_pos_dist.unsqueeze(1).expand(-1, batch_size)
-        
-        # Create masks for semi-hard negatives (between pos_dist and pos_dist + margin)
-        semi_hard_mask = (dist_mat > pos_dist_threshold) & (dist_mat < pos_dist_threshold + self.margin)
-        
-        # Only consider actual negatives (different class)
-        semi_hard_mask = semi_hard_mask & labels_not_equal
-        
-        # Don't consider self as negative
-        semi_hard_mask = semi_hard_mask & ~identity_mask
-        
-        # Create negative distance matrix with only semi-hard negatives
+        # --- Find Closest-Harder Negative ---
+
+        # 1. Get distance threshold for each anchor (based on its hardest positive)
+        pos_dist_threshold = hardest_pos_dist.unsqueeze(1).expand(-1, batch_size) # Shape: (batch_size, batch_size)
+
+        # 2. Create mask for negatives harder than the positive
+        harder_negative_mask = (dist_mat > pos_dist_threshold)
+
+        # 3. Only consider actual negatives (different class) and not self
+        harder_negative_mask = harder_negative_mask & labels_not_equal & ~identity_mask
+
+        # 4. Create negative distance matrix, invalidating non-harder negatives
         neg_dist_mat = dist_mat.clone()
-        neg_dist_mat.masked_fill_(~semi_hard_mask, torch.inf)
-        
-        # If no semi-hard negatives exist for an anchor, fall back to the hardest negatives
-        no_semi_hard = (neg_dist_mat == torch.inf).all(dim=1)
-        if no_semi_hard.any():
-            hard_neg_dist_mat = dist_mat.clone()
-            hard_neg_dist_mat.masked_fill_(~labels_not_equal | identity_mask, torch.inf)
-            # Only replace rows that don't have semi-hard negatives
-            neg_dist_mat[no_semi_hard] = hard_neg_dist_mat[no_semi_hard]
-        
-        # Get minimum distance negative (closest semi-hard or hard negative)
-        hardest_neg_dist, hardest_neg_idx = torch.min(neg_dist_mat, dim=1)
+        neg_dist_mat.masked_fill_(~harder_negative_mask, torch.inf) # Invalidate easy negatives
+
+        # 5. Get the minimum distance negative (closest one that's harder than positive)
+        # If no negative satisfies the condition for an anchor, its min distance will be inf
+        hardest_neg_dist, hardest_neg_idx = torch.min(neg_dist_mat, dim=1) 
 
         # --- Filter Valid Triplets ---
+        # Valid if a positive exists (dist > -inf) AND a harder negative exists (dist < inf)
         valid_pos_mask = hardest_pos_dist > -torch.inf
-        valid_neg_mask = hardest_neg_dist < torch.inf
+        valid_neg_mask = hardest_neg_dist < torch.inf # Check if a harder negative was found
         valid_anchor_mask = valid_pos_mask & valid_neg_mask
 
         # Get the indices for the valid triplets
@@ -278,7 +268,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # NOTE: `soft_triplet_loss` uses `pairwise_distance_optimized` by default
 
         # Triplet miner
-        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
@@ -634,8 +624,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             mode=self.hparams.lr_scheduler_config.get("mode", "max"),
             factor=self.hparams.lr_scheduler_config.get("factor", 0.5),
             patience=self.hparams.lr_scheduler_config.get("patience", 5),
-            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7),
-            verbose=False # We will log LR manually or rely on LearningRateMonitor
+            min_lr=self.hparams.lr_scheduler_config.get("min_lr", 1e-7)
         )
         log.info(f"Configured ReduceLROnPlateau scheduler with monitor '{self.hparams.lr_scheduler_config.get('monitor')}'")
         if self.hparams.warmup_epochs > 0:
