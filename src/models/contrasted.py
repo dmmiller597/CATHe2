@@ -109,9 +109,8 @@ class SemiHardMiner:
     For each anchor, selects the hardest positive (farthest) and semi-hard negative
     (further than the positive but not too far) sample using vectorized operations.
     """
-    def __init__(self, distance_metric_func=pairwise_distance_optimized, margin=0.5):
+    def __init__(self, distance_metric_func=pairwise_distance_optimized):
         self.distance_metric = distance_metric_func
-        self.margin = margin
 
     def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
