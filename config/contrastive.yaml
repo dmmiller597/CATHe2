@@ -27,9 +27,9 @@ model:
 
 training:
   # Training parameters
-  batch_size: 256  # large batch size for better triplet mining
+  batch_size: 1024  # large batch size for better triplet mining
   max_epochs: 50  
-  accumulate_grad_batches: 4  # effective batch size of 1K
+  accumulate_grad_batches: 1  # effective batch size of 4K
   
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
