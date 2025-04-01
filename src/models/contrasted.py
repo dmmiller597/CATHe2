@@ -279,7 +279,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         self._test_outputs = []
 
         # Create visualization directories
-        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True) # Keep t-SNE dir creation
+        #os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True) # Keep t-SNE dir creation
         os.makedirs(self.hparams.umap_viz_dir, exist_ok=True) # Create UMAP dir
 
     def _build_projection_network(
@@ -364,7 +364,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
 
             # Generate UMAP visualization every 10 epochs, but *only* if not in the sanity checking phase.
-            if not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
+            #if not self.trainer.sanity_checking and 
+            if self.current_epoch % 5 == 0:
                 self._generate_umap_plot(all_embeddings, all_labels) # Call the new UMAP function
 
             self._val_outputs.clear()  # Free memory
