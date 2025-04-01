@@ -10,12 +10,12 @@ import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from torch import Tensor # Explicit type hinting
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
+import umap.umap_ as umap # Import UMAP
 import os
 import seaborn as sns
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau # Explicit import
-from sklearn.decomposition import PCA
+# from sklearn.decomposition import PCA # Commented out PCA
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -227,6 +227,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         warmup_start_factor: float = 0.1,
         # Add simple viz option
         tsne_viz_dir: str = "results/tsne_plots",
+        umap_viz_dir: str = "results/umap_plots", # Added UMAP directory parameter
     ):
         """
         Args:
@@ -242,7 +243,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
             val_max_samples: Maximum validation samples to use for kNN.
             warmup_epochs: Number of epochs for linear LR warmup. 0 disables warmup.
             warmup_start_factor: Initial LR factor (lr = base_lr * factor).
-            tsne_viz_dir: Directory to save t-SNE visualizations
+            tsne_viz_dir: Directory to save t-SNE visualizations (kept for potential future use)
+            umap_viz_dir: Directory to save UMAP visualizations
         """
         super().__init__()
         # Store hyperparameters
@@ -276,8 +278,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
         self._val_outputs = []
         self._test_outputs = []
 
-        # Create visualization directory
-        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
+        # Create visualization directories
+        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True) # Keep t-SNE dir creation
+        os.makedirs(self.hparams.umap_viz_dir, exist_ok=True) # Create UMAP dir
 
     def _build_projection_network(
         self, input_dim: int, hidden_dims: List[int], output_dim: int,
@@ -349,7 +352,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes k-NN validation metrics and generates simple t-SNE visualization every 10 epochs."""
+        """Computes k-NN validation metrics and generates UMAP visualization every 10 epochs."""
         if not self._val_outputs:
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
@@ -359,11 +362,11 @@ class ContrastiveCATHeModel(pl.LightningModule):
             # Concatenate embeddings and labels
             all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
-            
-            # Generate t-SNE visualization every 10 epochs, but *only* if not in the sanity checking phase.
+
+            # Generate UMAP visualization every 10 epochs, but *only* if not in the sanity checking phase.
             if not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
-                self._generate_tsne_plot(all_embeddings, all_labels)
-            
+                self._generate_umap_plot(all_embeddings, all_labels) # Call the new UMAP function
+
             self._val_outputs.clear()  # Free memory
 
             # Sample validation data if too large
@@ -502,11 +505,11 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
 
-    def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
+    def _generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         """
-        Creates a minimalist visualization of embeddings using PCA preprocessing
-        followed by t-SNE, colored by CATH classes, following Tufte principles.
-        
+        Creates a minimalist visualization of embeddings using UMAP,
+        colored by CATH classes, following Tufte principles.
+
         Args:
             embeddings: Projected embeddings tensor
             labels: Corresponding label tensor (CATH class IDs)
@@ -514,8 +517,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         try:
             # Start timing
             start_time = time.time()
-            log.info(f"Generating PCA+t-SNE plot for epoch {self.current_epoch}")
-            
+            log.info(f"Generating UMAP plot for epoch {self.current_epoch}")
+
             # Sample for efficiency (max 10000 points)
             max_samples = 10000
             if len(embeddings) > max_samples:
@@ -525,83 +528,87 @@ class ContrastiveCATHeModel(pl.LightningModule):
             else:
                 embeddings_subset = embeddings.cpu().numpy()
                 labels_subset = labels.cpu().numpy()
-            
+
             # Get unique labels
             unique_labels = np.unique(labels_subset)
-            
+
             cath_class_names = {
                 0: "Mainly Alpha",
                 1: "Mainly Beta",
-                2: "Alpha Beta", 
+                2: "Alpha Beta",
                 3: "Few Secondary Structures"
             }
-            
-            # Simple PCA preprocessing
-            n_components = min(50, embeddings_subset.shape[1])
-            pca = PCA(n_components=n_components, random_state=42)
-            embeddings_pca = pca.fit_transform(embeddings_subset)
-            
-            # t-SNE on PCA results
-            tsne = TSNE(n_components=2, perplexity=30, random_state=42)
-            tsne_result = tsne.fit_transform(embeddings_pca)
-            
+
+            # --- UMAP ---
+            reducer = umap.UMAP(
+                n_neighbors=15, # Default, balances local/global structure
+                min_dist=0.1,  # Default, controls tightness of clusters
+                n_components=2,
+                metric='euclidean', # Use Euclidean distance
+                random_state=42,
+                # Consider low_memory=True for very large datasets if memory is an issue
+            )
+            umap_result = reducer.fit_transform(embeddings_subset)
+
             # Set up minimalist plot with Tufte-inspired style
             plt.figure(figsize=(8, 8))
-            
+
             # Set clean style
             plt.rcParams['axes.spines.top'] = False
             plt.rcParams['axes.spines.right'] = False
             plt.rcParams['axes.grid'] = False
-            
+
             # Create color mapping that maintains consistent colors per CATH class
             color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
-            colors = [color_palette[int(label)] for label in labels_subset]
-            
+            # Handle cases where labels might not start from 0 or be consecutive
+            label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
+            colors = [color_palette[label_to_color_idx[int(label)]] for label in labels_subset]
+
             # Create scatter plot - smaller points with higher density
             plt.scatter(
-                tsne_result[:, 0], tsne_result[:, 1],
+                umap_result[:, 0], umap_result[:, 1],
                 c=colors,
                 s=5,  # Smaller point size
                 alpha=0.7,  # Slightly transparent
                 linewidths=0,  # No edge lines
                 rasterized=True  # Better for export
             )
-            
+
             # Minimal labels and subtle tick marks
-            plt.title(f'CATH Classes (Epoch {self.current_epoch})', fontsize=12, pad=10)
+            plt.title(f'CATH Classes (Epoch {self.current_epoch}) - UMAP', fontsize=12, pad=10)
             plt.tick_params(axis='both', which='major', labelsize=8, length=3, width=0.5)
-            
+
             # Subtle axis labels
-            plt.xlabel('t-SNE Dimension 1', fontsize=9, labelpad=7, color='#505050')
-            plt.ylabel('t-SNE Dimension 2', fontsize=9, labelpad=7, color='#505050')
-            
+            plt.xlabel('UMAP Dimension 1', fontsize=9, labelpad=7, color='#505050')
+            plt.ylabel('UMAP Dimension 2', fontsize=9, labelpad=7, color='#505050')
+
             # Create minimal legend with CATH class names
-            if len(unique_labels) <= 4:
-                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[i], 
+            if len(unique_labels) <= 4: # Only show legend if few classes
+                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[label_to_color_idx[label]],
                                       markersize=5, linestyle='',
-                                      label=cath_class_names.get(unique_labels[i], f"Class {unique_labels[i]}"))
-                           for i in range(len(unique_labels))]
+                                      label=cath_class_names.get(label, f"Class {label}"))
+                           for label in unique_labels]
                 plt.legend(handles=handles,
                           loc='best',
                           frameon=False,  # No frame
                           fontsize=9,
                           handletextpad=0.5)  # Less space between marker and text
-            
+
             # Tighter layout with reduced margins
             plt.tight_layout(pad=1.2)
-            
+
             # Save the plot
-            filename = f"tsne_epoch_{self.current_epoch}.png"
-            save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
+            filename = f"umap_epoch_{self.current_epoch}.png"
+            save_path = os.path.join(self.hparams.umap_viz_dir, filename)
             plt.savefig(save_path, dpi=300, bbox_inches='tight', transparent=False)
             plt.close()
-            
+
             # Log completion
             elapsed_time = time.time() - start_time
-            log.info(f"t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
-            
+            log.info(f"UMAP plot saved to {save_path} (took {elapsed_time:.2f}s)")
+
         except Exception as e:
-            log.error(f"Error generating t-SNE plot: {e}")
+            log.error(f"Error generating UMAP plot: {e}")
             log.exception("Detailed traceback:")
 
     def configure_optimizers(self):
