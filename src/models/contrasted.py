@@ -269,7 +269,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # NOTE: `soft_triplet_loss` uses `pairwise_distance_optimized` by default
 
         # Triplet miner
-        self.miner = SemiHardMiner(distance_metric_func=pairwise_distance_optimized)
+        self.miner = BatchHardMiner(distance_metric_func=pairwise_distance_optimized)
 
         # Initialize weights
         self._init_weights()
