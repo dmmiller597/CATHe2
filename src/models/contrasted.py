@@ -228,7 +228,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
         # --- Visualization Params ---
-        visualization_method: str = "umap", # "umap" or "tsne"
+        visualization_method: str = "tsne", # "umap" or "tsne"
         tsne_viz_dir: str = "results/tsne_plots",
         umap_viz_dir: str = "results/umap_plots",
     ):
