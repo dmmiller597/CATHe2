@@ -364,8 +364,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
 
             # Generate UMAP visualization every 10 epochs, but *only* if not in the sanity checking phase.
-            #if not self.trainer.sanity_checking and 
-            if self.current_epoch % 5 == 0:
+            if not self.trainer.sanity_checking and self.current_epoch % 5 == 0:
                 self._generate_umap_plot(all_embeddings, all_labels) # Call the new UMAP function
 
             self._val_outputs.clear()  # Free memory
