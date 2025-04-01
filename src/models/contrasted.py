@@ -1,5 +1,6 @@
 import logging
 import time
+import warnings # Import the warnings module
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -10,12 +11,13 @@ import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 from torch import Tensor # Explicit type hinting
 import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE # Uncommented t-SNE
 import umap.umap_ as umap # Import UMAP
 import os
 import seaborn as sns
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau # Explicit import
-# from sklearn.decomposition import PCA # Commented out PCA
+from sklearn.decomposition import PCA # Uncommented PCA
 
 # Configure logging
 log = logging.getLogger(__name__)
@@ -225,9 +227,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # --- Added Warmup Params ---
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
-        # Add simple viz option
+        # --- Visualization Params ---
+        visualization_method: str = "umap", # "umap" or "tsne"
         tsne_viz_dir: str = "results/tsne_plots",
-        umap_viz_dir: str = "results/umap_plots", # Added UMAP directory parameter
+        umap_viz_dir: str = "results/umap_plots",
     ):
         """
         Args:
@@ -243,8 +246,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
             val_max_samples: Maximum validation samples to use for kNN.
             warmup_epochs: Number of epochs for linear LR warmup. 0 disables warmup.
             warmup_start_factor: Initial LR factor (lr = base_lr * factor).
-            tsne_viz_dir: Directory to save t-SNE visualizations (kept for potential future use)
-            umap_viz_dir: Directory to save UMAP visualizations
+            visualization_method: Method for dimensionality reduction ('umap' or 'tsne').
+            tsne_viz_dir: Directory to save t-SNE visualizations.
+            umap_viz_dir: Directory to save UMAP visualizations.
         """
         super().__init__()
         # Store hyperparameters
@@ -254,6 +258,9 @@ class ContrastiveCATHeModel(pl.LightningModule):
              raise ValueError("warmup_start_factor must be > 0 and <= 1.0")
         if self.hparams.warmup_epochs < 0:
              raise ValueError("warmup_epochs cannot be negative.")
+        # Validate visualization method
+        if self.hparams.visualization_method not in ["umap", "tsne"]:
+             raise ValueError(f"Invalid visualization_method: {self.hparams.visualization_method}. Choose 'umap' or 'tsne'.")
 
         # Build the projection network (MLP)
         self.projection = self._build_projection_network(
@@ -279,8 +286,8 @@ class ContrastiveCATHeModel(pl.LightningModule):
         self._test_outputs = []
 
         # Create visualization directories
-        #os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True) # Keep t-SNE dir creation
-        os.makedirs(self.hparams.umap_viz_dir, exist_ok=True) # Create UMAP dir
+        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
+        os.makedirs(self.hparams.umap_viz_dir, exist_ok=True)
 
     def _build_projection_network(
         self, input_dim: int, hidden_dims: List[int], output_dim: int,
@@ -352,7 +359,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         })
 
     def on_validation_epoch_end(self) -> None:
-        """Computes k-NN validation metrics and generates UMAP visualization every 10 epochs."""
+        """Computes k-NN validation metrics and generates visualization every 10 epochs based on config."""
         if not self._val_outputs:
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
@@ -363,9 +370,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
             all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
             all_labels = torch.cat([x["labels"] for x in self._val_outputs])
 
-            # Generate UMAP visualization every 10 epochs, but *only* if not in the sanity checking phase.
-            if not self.trainer.sanity_checking and self.current_epoch % 1 == 0:
-                self._generate_umap_plot(all_embeddings, all_labels) # Call the new UMAP function
+            # Generate visualization every 10 epochs, but *only* if not in the sanity checking phase.
+            if not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
+                if self.hparams.visualization_method == "umap":
+                    self._generate_umap_plot(all_embeddings, all_labels) # Call UMAP function
+                elif self.hparams.visualization_method == "tsne":
+                    self._generate_tsne_plot(all_embeddings, all_labels) # Call t-SNE function
 
             self._val_outputs.clear()  # Free memory
 
@@ -504,6 +514,120 @@ class ContrastiveCATHeModel(pl.LightningModule):
             log.error(f"Error in validation metrics: {e}")
             self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
             self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
+
+    def _generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
+        """
+        Creates a minimalist visualization of embeddings using PCA preprocessing
+        followed by t-SNE, colored by CATH classes, following Tufte principles.
+
+        Args:
+            embeddings: Projected embeddings tensor
+            labels: Corresponding label tensor (CATH class IDs)
+        """
+        try:
+            # Start timing
+            start_time = time.time()
+            log.info(f"Generating PCA+t-SNE plot for epoch {self.current_epoch}")
+
+            # Sample for efficiency (max 10000 points)
+            max_samples = 10000
+            if len(embeddings) > max_samples:
+                indices = torch.randperm(len(embeddings))[:max_samples]
+                embeddings_subset = embeddings[indices].cpu().numpy()
+                labels_subset = labels[indices].cpu().numpy()
+            else:
+                embeddings_subset = embeddings.cpu().numpy()
+                labels_subset = labels.cpu().numpy()
+
+            # Get unique labels
+            unique_labels = np.unique(labels_subset)
+
+            cath_class_names = {
+                0: "Mainly Alpha",
+                1: "Mainly Beta",
+                2: "Alpha Beta",
+                3: "Few Secondary Structures"
+            }
+
+            # --- PCA Preprocessing ---
+            n_components_pca = min(50, embeddings_subset.shape[1]) # Limit PCA components
+            log.debug(f"Running PCA with n_components={n_components_pca}")
+            pca = PCA(n_components=n_components_pca, random_state=42)
+            with warnings.catch_warnings(): # Suppress potential future warnings
+                 warnings.simplefilter("ignore", category=FutureWarning)
+                 embeddings_pca = pca.fit_transform(embeddings_subset)
+            log.debug("PCA completed.")
+
+            # --- t-SNE on PCA results ---
+            log.debug("Running t-SNE...")
+            tsne = TSNE(n_components=2, perplexity=30, random_state=42, n_jobs=1) # n_jobs=1 for reproducibility with random_state
+            with warnings.catch_warnings(): # Suppress potential future warnings
+                 warnings.simplefilter("ignore", category=UserWarning) # e.g., for n_jobs override
+                 warnings.simplefilter("ignore", category=FutureWarning)
+                 tsne_result = tsne.fit_transform(embeddings_pca)
+            log.debug("t-SNE completed.")
+
+            # Set up minimalist plot with Tufte-inspired style
+            plt.figure(figsize=(8, 8))
+
+            # Set clean style
+            plt.rcParams['axes.spines.top'] = False
+            plt.rcParams['axes.spines.right'] = False
+            plt.rcParams['axes.grid'] = False
+
+            # Create color mapping that maintains consistent colors per CATH class
+            color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
+            # Handle cases where labels might not start from 0 or be consecutive
+            label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
+            colors = [color_palette[label_to_color_idx[int(label)]] for label in labels_subset]
+
+
+            # Create scatter plot - smaller points with higher density
+            plt.scatter(
+                tsne_result[:, 0], tsne_result[:, 1],
+                c=colors,
+                s=5,  # Smaller point size
+                alpha=0.7,  # Slightly transparent
+                linewidths=0,  # No edge lines
+                rasterized=True  # Better for export
+            )
+
+            # Minimal labels and subtle tick marks
+            plt.title(f'CATH Classes (Epoch {self.current_epoch}) - PCA+tSNE', fontsize=12, pad=10) # Adjusted title
+            plt.tick_params(axis='both', which='major', labelsize=8, length=3, width=0.5)
+
+            # Subtle axis labels
+            plt.xlabel('t-SNE Dimension 1 (via PCA)', fontsize=9, labelpad=7, color='#505050')
+            plt.ylabel('t-SNE Dimension 2 (via PCA)', fontsize=9, labelpad=7, color='#505050')
+
+            # Create minimal legend with CATH class names
+            if len(unique_labels) <= 4:
+                handles = [plt.Line2D([0], [0], marker='o', color=color_palette[label_to_color_idx[label]],
+                                      markersize=5, linestyle='',
+                                      label=cath_class_names.get(label, f"Class {label}"))
+                           for label in unique_labels]
+                plt.legend(handles=handles,
+                          loc='best',
+                          frameon=False,  # No frame
+                          fontsize=9,
+                          handletextpad=0.5)  # Less space between marker and text
+
+            # Tighter layout with reduced margins
+            plt.tight_layout(pad=1.2)
+
+            # Save the plot
+            filename = f"tsne_pca_epoch_{self.current_epoch}.png"
+            save_path = os.path.join(self.hparams.tsne_viz_dir, filename)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', transparent=False)
+            plt.close()
+
+            # Log completion
+            elapsed_time = time.time() - start_time
+            log.info(f"PCA+t-SNE plot saved to {save_path} (took {elapsed_time:.2f}s)")
+
+        except Exception as e:
+            log.error(f"Error generating PCA+t-SNE plot: {e}")
+            log.exception("Detailed traceback:")
 
     def _generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         """
