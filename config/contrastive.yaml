@@ -16,6 +16,10 @@ model:
   # --- Added Warmup ---
   warmup_epochs: 5       # Number of epochs for linear warmup
   warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
+  # --- Added Visualization ---
+  visualization_method: "tsne" # "umap" or "tsne"
+  tsne_viz_dir: "results/tsne_plots"
+  umap_viz_dir: "results/umap_plots"
 
   # Learning rate scheduler
   lr_scheduler:

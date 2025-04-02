@@ -48,6 +48,9 @@ def main(cfg: DictConfig) -> None:
         val_max_samples=cfg.model.val_max_samples,
         warmup_epochs=cfg.model.warmup_epochs,
         warmup_start_factor=cfg.model.warmup_start_factor,
+        visualization_method=cfg.model.visualization_method,
+        tsne_viz_dir=cfg.model.tsne_viz_dir,
+        umap_viz_dir=cfg.model.umap_viz_dir,
         lr_scheduler_config={
             "monitor": cfg.model.lr_scheduler.monitor,
             "mode": cfg.model.lr_scheduler.mode,
