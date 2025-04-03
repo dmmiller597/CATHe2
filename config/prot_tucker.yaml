@@ -1,8 +1,8 @@
 # Hydra configuration for training ProtTuckerLightning model
 
-# Removed potentially confusing defaults - data section below is complete
-# defaults:
-#  - data: protT5
+Removed potentially confusing defaults - data section below is complete
+defaults:
+ - data: protT5
 
 # Basic setup
 hydra:
@@ -10,19 +10,6 @@ hydra:
     dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_${hydra.job.name}
   job:
     name: prot_tucker_train # Default job name
-
-# Data Module Configuration (using ContrastiveDataModule)
-data:
-  _target_: src.data.contrastive_data_module.ContrastiveDataModule
-  data_dir: ${oc.env:DATA_DIR, data/} # Default to ./data/, can be overridden by env var DATA_DIR
-  train_embeddings: cath_protT5_train_embeddings.npz # Needs to exist in data_dir
-  train_labels: cath_protT5_train_labels.csv       # Needs to exist in data_dir
-  val_embeddings: cath_protT5_val_embeddings.npz     # Needs to exist in data_dir
-  val_labels: cath_protT5_val_labels.csv         # Needs to exist in data_dir
-  test_embeddings: cath_protT5_test_embeddings.npz   # Optional: Needs to exist in data_dir if testing
-  test_labels: cath_protT5_test_labels.csv       # Optional: Needs to exist in data_dir if testing
-  # batch_size: ${training.batch_size} # Inherited from training section if needed by datamodule directly
-  # num_workers: ${training.num_workers} # Inherited from training section if needed by datamodule directly
 
 # Model Configuration (ProtTuckerLightning)
 model:
