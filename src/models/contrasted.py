@@ -13,7 +13,7 @@ from torch import Tensor # Explicit type hinting
 import os
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau # Explicit import
-from ..plotting import generate_tsne_plot, generate_umap_plot
+from plotting import generate_tsne_plot, generate_umap_plot
 
 # Configure logging
 log = logging.getLogger(__name__)
