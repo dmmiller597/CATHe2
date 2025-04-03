@@ -1,0 +1,103 @@
+# Hydra configuration for training ProtTuckerLightning model
+
+# Removed potentially confusing defaults - data section below is complete
+# defaults:
+#  - data: protT5
+
+# Basic setup
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_${hydra.job.name}
+  job:
+    name: prot_tucker_train # Default job name
+
+# Data Module Configuration (using ContrastiveDataModule)
+data:
+  _target_: src.data.contrastive_data_module.ContrastiveDataModule
+  data_dir: ${oc.env:DATA_DIR, data/} # Default to ./data/, can be overridden by env var DATA_DIR
+  train_embeddings: cath_protT5_train_embeddings.npz # Needs to exist in data_dir
+  train_labels: cath_protT5_train_labels.csv       # Needs to exist in data_dir
+  val_embeddings: cath_protT5_val_embeddings.npz     # Needs to exist in data_dir
+  val_labels: cath_protT5_val_labels.csv         # Needs to exist in data_dir
+  test_embeddings: cath_protT5_test_embeddings.npz   # Optional: Needs to exist in data_dir if testing
+  test_labels: cath_protT5_test_labels.csv       # Optional: Needs to exist in data_dir if testing
+  # batch_size: ${training.batch_size} # Inherited from training section if needed by datamodule directly
+  # num_workers: ${training.num_workers} # Inherited from training section if needed by datamodule directly
+
+# Model Configuration (ProtTuckerLightning)
+model:
+  _target_: src.models.prot_tucker_lightning.ProtTuckerLightning
+  input_embedding_dim: 1024 # Must match the dimension in your .npz files
+  projection_hidden_dims: [256] # Hidden layers before output
+  output_embedding_dim: 128     # Final embedding dimension
+  learning_rate: 1e-4
+  weight_decay: 1e-5
+  triplet_margin: 0.5           # Margin for MarginRankingLoss, use null (or ~) for SoftMarginLoss
+  use_batch_hard: true          # Recommended for this setup
+  knn_eval_neighbors: 10        # K for validation/test k-NN accuracy
+  optimizer_config:             # Optional: AdamW specific params
+    betas: [0.9, 0.999]
+  scheduler_config:             # Optional: ReduceLROnPlateau params
+    monitor: val/knn_balanced_acc # Metric to monitor for LR reduction
+    mode: max                   # 'max' because higher accuracy is better
+    factor: 0.2                 # Factor by which LR is reduced
+    patience: 15                # Epochs with no improvement before reducing LR
+    min_lr: 1e-7                # Lower bound on the learning rate
+
+# Training Configuration (PyTorch Lightning Trainer + General Settings)
+training:
+  seed: 42
+  batch_size: 256               # Number of samples per batch passed to DataLoader
+  num_workers: 8                # Dataloader workers (adjust based on CPU cores)
+  max_epochs: 200
+  log_dir: logs/                # Directory for logs (Wandb etc.)
+  checkpoint_dir: checkpoints/  # Directory for model checkpoints
+  output_dir: outputs/          # Hydra output directory (used if hydra.run.dir isn't set above)
+  monitor_metric: val/knn_balanced_acc # Metric to monitor for checkpointing and early stopping
+  monitor_mode: max             # 'max' because higher accuracy is better
+  early_stopping_patience: 50   # Epochs with no improvement before stopping
+  gradient_clip_val: 1.0        # Optional gradient clipping
+  accumulate_grad_batches: 1    # Gradient accumulation steps
+  precision: '16-mixed'         # Use '32-true' or '16-mixed' for mixed precision
+  log_every_n_steps: 50         # How often to log within an epoch
+  accelerator:                  # Configuration for the accelerator (e.g., GPU)
+    # _target_: pytorch_lightning.accelerators.cuda.CUDAAccelerator # Target usually inferred by Trainer based on 'accelerator' string
+    devices: 1 # Or "auto" or specific GPUs [0, 1]
+    # float32_matmul_precision: 'medium' # Or 'high' - uncomment for torch >= 1.12
+
+# Logger Configuration (Wandb)
+logger:
+  _target_: pytorch_lightning.loggers.WandbLogger
+  project: "CATHe-ProtTucker" # Your Wandb project name
+  save_dir: ${training.log_dir}
+  log_model: true # Log model checkpoints to Wandb
+  # name: Optional run name (defaults to Wandb generated name)
+  # id: Optional run ID to resume
+
+# Callbacks Configuration
+callbacks:
+  model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ${training.checkpoint_dir}/${hydra:job.name} # Simpler path, filename includes metric
+    filename: '{epoch:02d}-{${training.monitor_metric}:.4f}' # Filename with metric
+    monitor: ${training.monitor_metric}
+    mode: ${training.monitor_mode}
+    save_last: true
+    save_top_k: 3
+    auto_insert_metric_name: false # Filename pattern handles it
+
+  early_stopping:
+    _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: ${training.monitor_metric}
+    patience: ${training.early_stopping_patience}
+    mode: ${training.monitor_mode}
+    verbose: true
+
+  learning_rate_monitor:
+    _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+  rich_progress_bar:
+    _target_: pytorch_lightning.callbacks.RichProgressBar # Completed definition
+    # Optional theme settings can go here if needed
+    # theme: ... 
