@@ -9,7 +9,7 @@ model:
   output_dim: 128  # Increase from 128 for better class separation
   dropout: 0.3
   n_neighbors: 1  # take closest neighbor
-  val_max_samples: 10000
+  val_max_samples: 100000 # Increased from 10k
   # Optimization
   learning_rate: 3e-4
   weight_decay: 1e-4
@@ -26,33 +26,34 @@ model:
     monitor: "val/knn_balanced_acc"
     mode: "max"
     factor: 0.5
-    patience: 15
+    patience: 15 # Reduced patience slightly
     min_lr: 1e-8
 
 training:
   # Training parameters
   batch_size: 1024  # large batch size for better triplet mining
-  max_epochs: 100 
-  accumulate_grad_batches: 1  # effective batch size of 4K
-  
+  max_epochs: 100
+  accumulate_grad_batches: 1
+  cath_levels: [0, 1, 2, 3] # <--- ADD THIS LINE (0=C, 1=A, 2=T, 3=H)
+
   # Monitoring
   monitor_metric: "val/knn_balanced_acc"
   monitor_mode: "max"
-  early_stopping_patience: 20
+  early_stopping_patience: 20 # Keep original patience
   log_every_n_steps: 100
-  
+
   # Hardware configuration
   num_workers: 16
   accelerator:
     float32_matmul_precision: "high"
     devices: 1
-  
+
   # Training options
   seed: 42
   gradient_clip_val: 1.0
   precision: "16-mixed"
 
-  # Output paths
-  output_dir: "outputs_contrastive"
-  checkpoint_dir: "${training.output_dir}/checkpoints"
-  log_dir: "${training.output_dir}/logs" 
+  # Output paths - These will be dynamically modified per level
+  output_dir: "outputs_contrastive_hierarchical" # Base output directory
+  # checkpoint_dir: "${training.output_dir}/checkpoints" # Will be set in code
+  # log_dir: "${training.output_dir}/logs" # Will be set in code 
