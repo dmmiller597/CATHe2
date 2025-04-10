@@ -9,7 +9,7 @@ model:
   output_dim: 128  # Increase from 128 for better class separation
   dropout: 0.3
   n_neighbors: 1  # take closest neighbor
-  val_max_samples: 100000 # Increased from 10k
+  val_max_samples: 10000 # Increased from 10k
   # Optimization
   learning_rate: 3e-4
   weight_decay: 1e-4
