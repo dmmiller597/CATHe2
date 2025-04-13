@@ -131,7 +131,8 @@ def main(cfg: DictConfig) -> None:
             monitor=cfg.training.monitor_metric,
             patience=cfg.training.early_stopping_patience,
             mode=cfg.training.monitor_mode,
-            verbose=True # Log when stopping
+            verbose=True, # Log when stopping
+            check_on_train_epoch_end=False # Explicitly check after validation epoch
         )
         # Standard callbacks
         lr_monitor = LearningRateMonitor(logging_interval="epoch")
