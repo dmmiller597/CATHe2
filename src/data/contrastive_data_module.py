@@ -262,57 +262,60 @@ class CATHeDataModule(pl.LightningDataModule):
     def _get_dataloader(self, split: str) -> Optional[DataLoader]:
         """Helper function to create a DataLoader for a specific split."""
         if split not in self.datasets:
-            # This might happen if e.g. test files aren't provided but test_dataloader is called
-            if split == 'test':
+            log.error(f"Dataset for split '{split}' not found. Setup may be needed.")
+            if split == 'test' and not (self.test_embeddings_path and self.test_labels_path):
                  log.warning(f"Test dataset not loaded (likely missing files). Cannot create test dataloader.")
                  return None
-            log.error(f"Dataset for split '{split}' not found. Was setup called correctly for the current stage?")
             return None
 
         dataset = self.datasets[split]
         is_train = (split == "train")
 
-        batch_size = self.hparams.batch_size
-        num_workers = self.hparams.num_workers
-        pin_memory = self.hparams.pin_memory
-        persistent_workers = (self.hparams.persistent_workers and is_train and num_workers > 0)
-        drop_last = is_train
-        shuffle = not is_train
-
+        # Define parameters based on the split
         sampler = None
+        shuffle = False # Default: No shuffle (for val/test)
+        drop_last = False # Default: Keep last batch (for val/test)
+        # Disable persistent workers by default, enable only for train if configured
+        persistent_workers = False
+
         if is_train:
+            # --- Training Setup ---
             if self._train_sampler_weights is None:
                 log.error("Training sampler weights not computed. Call setup('fit') first.")
-                # Attempt to compute weights on the fly if dataset exists
-                if "train" in self.datasets:
+                # Attempt recovery (optional, could just return None)
+                try:
                     log.warning("Attempting to compute sampler weights on the fly...")
                     labels = self.datasets["train"].labels
-                    num_classes = self.datasets["train"].num_classes # Use num_classes from dataset
+                    num_classes = self.datasets["train"].num_classes
                     class_counts = np.bincount(labels, minlength=num_classes)
                     class_weights = 1.0 / (class_counts + 1e-6)
                     self._train_sampler_weights = torch.from_numpy(class_weights[labels]).double()
-                else:
-                    return None # Cannot proceed
+                except Exception as e:
+                     log.error(f"Failed to compute sampler weights on the fly: {e}")
+                     return None # Cannot proceed without weights
 
             sampler = WeightedRandomSampler(
                 weights=self._train_sampler_weights,
                 num_samples=len(dataset),
                 replacement=True
             )
-            shuffle = False
+            shuffle = False  # Sampler handles shuffling, so DataLoader shuffle must be False
+            drop_last = True # Drop last incomplete batch for training consistency
+            persistent_workers = (self.hparams.persistent_workers and self.hparams.num_workers > 0)
+        # else: For val/test, the defaults (sampler=None, shuffle=False, drop_last=False, persistent_workers=False) are used.
 
+        # Create the DataLoader
         try:
             loader = DataLoader(
                 dataset=dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                sampler=sampler,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
+                batch_size=self.hparams.batch_size,
+                shuffle=shuffle,             # Explicitly False for val/test
+                sampler=sampler,             # Explicitly None for val/test
+                num_workers=self.hparams.num_workers,
+                pin_memory=self.hparams.pin_memory,
                 persistent_workers=persistent_workers,
                 drop_last=drop_last,
             )
-            # log.debug(f"Created DataLoader for split '{split}' with batch_size={batch_size}, num_workers={num_workers}")
             return loader
         except Exception as e:
             log.error(f"Failed to create DataLoader for split '{split}': {e}", exc_info=True)
