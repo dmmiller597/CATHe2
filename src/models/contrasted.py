@@ -354,36 +354,52 @@ class ContrastiveCATHeModel(pl.LightningModule):
             "labels": labels.detach()
         })
 
-    def on_validation_epoch_end(self) -> None:
-        """Computes k-NN validation metrics and generates visualization every 10 epochs based on config."""
-        if not self._val_outputs:
-            self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
-            return
+    def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str):
+        """Common logic for validation_epoch_end and test_epoch_end."""
+        if not outputs:
+            log.warning(f"No outputs collected for stage '{stage}'. Skipping metrics calculation.") # Added warning
+            self.log(f"{stage}/knn_acc", 0.0, prog_bar=True, sync_dist=True)
+            self.log(f"{stage}/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
+            return {} # Return empty dict for consistency
+
+        all_embeddings = None
+        all_labels = None
+        metrics = {} # Dictionary to store computed metrics
 
         try:
             # Concatenate embeddings and labels
-            all_embeddings = torch.cat([x["embeddings"] for x in self._val_outputs])
-            all_labels = torch.cat([x["labels"] for x in self._val_outputs])
+            all_embeddings = torch.cat([x["embeddings"] for x in outputs])
+            all_labels = torch.cat([x["labels"] for x in outputs])
 
-            # Generate visualization every 10 epochs, but *only* if not in the sanity checking phase.
-            if not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
-                if self.hparams.visualization_method == "umap":
-                    generate_umap_plot(self, all_embeddings, all_labels) # Call UMAP function
-                elif self.hparams.visualization_method == "tsne":
-                    generate_tsne_plot(self, all_embeddings, all_labels) # Call t-SNE function
+            # --- Optional Visualization (only during validation, not testing) ---
+            if stage == "val":
+                # Generate visualization every 10 epochs, but *only* if not in the sanity checking phase.
+                # And only if the trainer is available (might not be during pure inference)
+                if hasattr(self, 'trainer') and not self.trainer.sanity_checking and self.current_epoch % 10 == 0:
+                    log.info(f"Generating {self.hparams.visualization_method} plot for epoch {self.current_epoch}, stage {stage}...")
+                    if self.hparams.visualization_method == "umap":
+                        generate_umap_plot(self, all_embeddings, all_labels) # Call UMAP function
+                    elif self.hparams.visualization_method == "tsne":
+                        generate_tsne_plot(self, all_embeddings, all_labels) # Call t-SNE function
+                elif stage == "val" and self.current_epoch % 10 != 0:
+                     log.debug(f"Skipping visualization for epoch {self.current_epoch} (not a multiple of 10).")
 
-            self._val_outputs.clear()  # Free memory
 
-            # Sample validation data if too large
+            # Sample data if too large (use val_max_samples for both stages for simplicity)
             num_samples = all_embeddings.size(0)
-            if num_samples > self.hparams.val_max_samples:
-                indices = torch.randperm(num_samples, device=self.device)[:self.hparams.val_max_samples]
+            max_samples = self.hparams.val_max_samples # Reuse validation setting
+            if num_samples > max_samples:
+                log.info(f"Sampling {max_samples} / {num_samples} embeddings for {stage} metrics calculation.")
+                indices = torch.randperm(num_samples, device=self.device)[:max_samples]
                 all_embeddings = all_embeddings[indices]
                 all_labels = all_labels[indices]
+            else:
+                log.info(f"Using all {num_samples} embeddings for {stage} metrics calculation.")
+
 
             # Compute pairwise distances
-            dist_matrix = pairwise_distance_optimized(all_embeddings, all_embeddings)
+            # Ensure embeddings are on the correct device before distance calculation
+            dist_matrix = pairwise_distance_optimized(all_embeddings.to(self.device), all_embeddings.to(self.device))
             dist_matrix.fill_diagonal_(float('inf'))  # Exclude self
 
             # --- Add distance statistics ---
@@ -391,39 +407,59 @@ class ContrastiveCATHeModel(pl.LightningModule):
             unique_labels = torch.unique(all_labels)
             intra_dists = []
             inter_dists = []
-            
+
             # Sample subset for efficiency if needed
             max_pairs_per_class = 1000  # Limit computation for large datasets
-            
-            for label in unique_labels:
+
+            log.debug(f"Calculating distance metrics for {len(unique_labels)} unique labels in stage '{stage}'...")
+            for label_idx, label in enumerate(unique_labels):
+                # Ensure masks use labels on the same device as embeddings
                 mask_same = all_labels == label
                 mask_diff = all_labels != label
-                
-                # Get embeddings for this class
+
                 embeddings_same = all_embeddings[mask_same]
-                
+                num_same = embeddings_same.size(0)
+
                 # Sample if too large
-                if embeddings_same.size(0) > max_pairs_per_class:
-                    idx = torch.randperm(embeddings_same.size(0))[:max_pairs_per_class]
-                    embeddings_same = embeddings_same[idx]
-                    
-                # Compute intra-class distances (distances within the same class)
-                if embeddings_same.size(0) > 1:
-                    dist_same = pairwise_distance_optimized(embeddings_same, embeddings_same)
-                    dist_same = dist_same[~torch.eye(embeddings_same.size(0), dtype=bool, device=dist_same.device)]
-                    intra_dists.append(dist_same[torch.isfinite(dist_same)])
-                
+                if num_same > max_pairs_per_class:
+                    idx = torch.randperm(num_same)[:max_pairs_per_class]
+                    embeddings_same_sampled = embeddings_same[idx]
+                else:
+                    embeddings_same_sampled = embeddings_same
+
+                # Compute intra-class distances
+                if num_same > 1:
+                    # Ensure embeddings are on the correct device
+                    dist_same = pairwise_distance_optimized(embeddings_same_sampled.to(self.device), embeddings_same_sampled.to(self.device))
+                    # Create eye mask on the correct device
+                    eye_mask = torch.eye(embeddings_same_sampled.size(0), dtype=torch.bool, device=dist_same.device)
+                    # Filter out diagonal and collect valid distances
+                    valid_dist_same = dist_same[~eye_mask]
+                    intra_dists.append(valid_dist_same[torch.isfinite(valid_dist_same)])
+
+
                 # Sample inter-class
-                if torch.sum(mask_diff) > 0 and embeddings_same.size(0) > 0:
+                num_diff = torch.sum(mask_diff).item()
+                if num_diff > 0 and num_same > 0:
                     embeddings_diff = all_embeddings[mask_diff]
+
                     if embeddings_diff.size(0) > max_pairs_per_class:
                         idx = torch.randperm(embeddings_diff.size(0))[:max_pairs_per_class]
-                        embeddings_diff = embeddings_diff[idx]
-                    
-                    # Compute inter-class distances (distances between different classes)
-                    dist_diff = pairwise_distance_optimized(embeddings_same, embeddings_diff)
-                    inter_dists.append(dist_diff[torch.isfinite(dist_diff)])
-            
+                        embeddings_diff_sampled = embeddings_diff[idx]
+                    else:
+                         embeddings_diff_sampled = embeddings_diff
+
+                    # Compute inter-class distances
+                    # Ensure embeddings are on the correct device
+                    dist_diff = pairwise_distance_optimized(embeddings_same_sampled.to(self.device), embeddings_diff_sampled.to(self.device))
+                    inter_dists.append(dist_diff[torch.isfinite(dist_diff)].flatten()) # Flatten potential matrix
+
+                # Log progress periodically if many labels
+                if (label_idx + 1) % 100 == 0:
+                     log.debug(f"  Processed distances for {label_idx + 1}/{len(unique_labels)} labels...")
+
+
+            log.debug("Finished calculating raw distances. Aggregating stats...")
             # Calculate statistics if we have data
             if intra_dists and inter_dists:
                 # Concatenate non-empty tensors
@@ -431,61 +467,74 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 valid_inter = [d for d in inter_dists if d.numel() > 0]
 
                 if valid_intra and valid_inter:
-                    intra_dists = torch.cat(valid_intra)
-                    inter_dists = torch.cat(valid_inter)
-                    
-                    mean_intra = intra_dists.mean().item()
-                    mean_inter = inter_dists.mean().item()
-                    min_inter = inter_dists.min().item()
-                    max_intra = intra_dists.max().item()
-                    
-                    # Log distance metrics
-                    self.log("val/mean_intra_dist", mean_intra, sync_dist=True)
-                    self.log("val/mean_inter_dist", mean_inter, sync_dist=True)
-                    self.log("val/min_inter_dist", min_inter, sync_dist=True)
-                    self.log("val/max_intra_dist", max_intra, sync_dist=True)
-                    
+                    intra_dists_tensor = torch.cat(valid_intra)
+                    inter_dists_tensor = torch.cat(valid_inter)
+
+                    metrics[f"{stage}/mean_intra_dist"] = intra_dists_tensor.mean().item()
+                    metrics[f"{stage}/mean_inter_dist"] = inter_dists_tensor.mean().item()
+                    metrics[f"{stage}/min_inter_dist"] = inter_dists_tensor.min().item()
+                    metrics[f"{stage}/max_intra_dist"] = intra_dists_tensor.max().item()
+
                     # Discriminability ratio (higher is better)
-                    if mean_intra > 1e-6: # Avoid division by zero
-                        self.log("val/inter_intra_ratio", mean_inter / mean_intra, sync_dist=True)
-                    
+                    if metrics[f"{stage}/mean_intra_dist"] > 1e-6: # Avoid division by zero
+                        metrics[f"{stage}/inter_intra_ratio"] = metrics[f"{stage}/mean_inter_dist"] / metrics[f"{stage}/mean_intra_dist"]
+
                     # Distance margin (higher is better)
-                    self.log("val/dist_margin", mean_inter - mean_intra, sync_dist=True)
-                    
+                    metrics[f"{stage}/dist_margin"] = metrics[f"{stage}/mean_inter_dist"] - metrics[f"{stage}/mean_intra_dist"]
+
                     # Overlap measure: percentage of intra-distances larger than smallest inter-distance
-                    overlap = torch.mean((intra_dists > min_inter).float()).item()
-                    self.log("val/class_overlap", overlap, sync_dist=True)
+                    overlap = torch.mean((intra_dists_tensor > metrics[f"{stage}/min_inter_dist"]).float()).item()
+                    metrics[f"{stage}/class_overlap"] = overlap
+
+                    log.debug("Calculated basic distance stats.")
 
                     # Embedding space quality metrics (computed on subset for efficiency)
                     if all_embeddings.size(0) > 100:
-                        # Sample random subset
-                        subset_size = min(1000, all_embeddings.size(0))
-                        subset_idx = torch.randperm(all_embeddings.size(0))[:subset_size]
-                        emb_subset = all_embeddings[subset_idx].cpu()
-                        
-                        # 1. Embedding uniformity (measures how uniform the distribution is on unit sphere)
-                        # Lower is better - points more uniformly distributed
-                        with torch.no_grad():
-                            uniformity = torch.pdist(emb_subset).pow(2).mul(-2).exp().mean().log().item()
-                        self.log("val/embedding_uniformity", uniformity, sync_dist=True)
-                        
+                         log.debug("Calculating embedding uniformity...")
+                         # Sample random subset
+                         subset_size = min(1000, all_embeddings.size(0))
+                         subset_idx = torch.randperm(all_embeddings.size(0))[:subset_size]
+                         emb_subset = all_embeddings[subset_idx].cpu() # Move to CPU for pdist
+
+                         # 1. Embedding uniformity
+                         with torch.no_grad():
+                              pdist_sq = torch.pdist(emb_subset).pow(2)
+                              # Add epsilon to avoid log(0) if distances are identical
+                              uniformity = pdist_sq.mul(-2).exp().mean().add(1e-8).log().item()
+                         metrics[f"{stage}/embedding_uniformity"] = uniformity
+                         log.debug(f"  Uniformity: {uniformity:.4f}")
+
+
                     # 2. Triplet quality metrics (Adjusted for soft margin)
-                    if len(intra_dists) > 0 and len(inter_dists) > 0:
-                        # Triplet violation rate: % of potential triplets where intra_dist > inter_dist
-                        # (Simplified definition without margin)
-                        common_sample_size = min(10000, len(intra_dists), len(inter_dists))
-                        intra_sample = intra_dists[torch.randperm(len(intra_dists))[:common_sample_size]]
-                        inter_sample = inter_dists[torch.randperm(len(inter_dists))[:common_sample_size]]
+                    if intra_dists_tensor.numel() > 0 and inter_dists_tensor.numel() > 0:
+                        log.debug("Calculating triplet violation rate...")
+                        common_sample_size = min(10000, intra_dists_tensor.numel(), inter_dists_tensor.numel())
+                        intra_sample = intra_dists_tensor[torch.randperm(intra_dists_tensor.numel())[:common_sample_size]]
+                        inter_sample = inter_dists_tensor[torch.randperm(inter_dists_tensor.numel())[:common_sample_size]]
+
                         # Use broadcasting to compare all pairs between samples
+                        # Move samples to the same device for comparison
                         violation_rate = torch.mean(
-                            (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0)).float()
+                            (intra_sample.unsqueeze(1).to(self.device) > inter_sample.unsqueeze(0).to(self.device)).float()
                         ).item()
-                        self.log("val/triplet_violation_rate", violation_rate, sync_dist=True)
+                        metrics[f"{stage}/triplet_violation_rate"] = violation_rate
+                        log.debug(f"  Violation Rate: {violation_rate:.4f}")
+
+                else:
+                    log.warning(f"Could not compute detailed distance metrics for stage '{stage}' due to missing valid intra or inter distances.")
+            else:
+                 log.warning(f"Could not compute any distance metrics for stage '{stage}' (no intra/inter distances found).")
+
 
             # Get nearest neighbor
-            k = self.hparams.knn_val_neighbors
-            _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)
-            neighbor_labels = all_labels[indices]
+            log.debug("Calculating k-NN metrics...")
+            k = self.hparams.knn_val_neighbors # Use same k for test
+            # Ensure dist_matrix is on CPU if labels are on CPU, or move labels to GPU
+            # Assuming dist_matrix is on GPU from pairwise_distance
+            _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False) # indices are on GPU
+
+            # Ensure neighbor_labels are computed correctly based on device of all_labels
+            neighbor_labels = all_labels.to(indices.device)[indices] # Fetch labels using GPU indices
 
             # For k=1, just use the nearest neighbor's label
             if k == 1:
@@ -502,15 +551,71 @@ class ContrastiveCATHeModel(pl.LightningModule):
             accuracy = accuracy_score(y_true, y_pred)
             balanced_accuracy = balanced_accuracy_score(y_true, y_pred)
 
-            # Log metrics
-            self.log("val/knn_acc", accuracy, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_acc", balanced_accuracy, prog_bar=True, sync_dist=True)
-            
-        except Exception as e:
-            log.error(f"Error in validation metrics: {e}")
-            self.log("val/knn_acc", 0.0, prog_bar=True, sync_dist=True)
-            self.log("val/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
+            # Store metrics
+            metrics[f"{stage}/knn_acc"] = accuracy
+            metrics[f"{stage}/knn_balanced_acc"] = balanced_accuracy
+            log.info(f"Stage '{stage}' Metrics: kNN Acc={accuracy:.4f}, Balanced Acc={balanced_accuracy:.4f}")
 
+
+        except Exception as e:
+            log.error(f"Error calculating metrics for stage '{stage}': {e}", exc_info=True) # Log traceback
+            # Log default values if error occurs
+            metrics[f"{stage}/knn_acc"] = 0.0
+            metrics[f"{stage}/knn_balanced_acc"] = 0.0
+            # Log other potential metrics as 0 too, or handle as needed
+            metrics[f"{stage}/mean_intra_dist"] = 0.0
+            metrics[f"{stage}/mean_inter_dist"] = 0.0
+            # ... add others if needed
+
+
+        finally:
+            # --- Logging ---
+            # Log all computed metrics (using dictionary allows flexibility)
+            # Ensure prog_bar is only True for the main metrics if desired
+            self.log(f"{stage}/knn_acc", metrics.get(f"{stage}/knn_acc", 0.0), prog_bar=True, sync_dist=True)
+            self.log(f"{stage}/knn_balanced_acc", metrics.get(f"{stage}/knn_balanced_acc", 0.0), prog_bar=True, sync_dist=True)
+
+            # Log other metrics without prog_bar
+            for key, value in metrics.items():
+                if key not in [f"{stage}/knn_acc", f"{stage}/knn_balanced_acc"]:
+                     self.log(key, value, prog_bar=False, sync_dist=True)
+
+            outputs.clear()  # Free memory
+            log.debug(f"Cleared outputs list for stage '{stage}'.")
+            # Ensure embeddings are cleared if they were potentially large
+            del all_embeddings
+            del all_labels
+            del dist_matrix # Explicitly delete large tensors
+            if 'intra_dists_tensor' in locals(): del intra_dists_tensor
+            if 'inter_dists_tensor' in locals(): del inter_dists_tensor
+
+
+        return metrics # Return the computed metrics
+
+    def on_validation_epoch_end(self) -> None:
+        """Computes k-NN validation metrics and generates visualization every 10 epochs based on config."""
+        # Simply call the shared logic
+        metrics = self._shared_epoch_end(self._val_outputs, "val")
+        # self._val_outputs is cleared within _shared_epoch_end
+
+    # --- Testing ---
+    def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
+        """Stores projected test embeddings for epoch-end evaluation."""
+        embeddings, labels = batch
+        with torch.inference_mode():
+            projected_embeddings = self(embeddings)
+
+        # Append to the dedicated test outputs list
+        self._test_outputs.append({
+            "embeddings": projected_embeddings.detach().cpu(), 
+            "labels": labels.detach().cpu() 
+        })
+
+    def on_test_epoch_end(self) -> None:
+        """Computes k-NN test metrics."""
+        # Call the shared logic with test outputs and stage
+        metrics = self._shared_epoch_end(self._test_outputs, "test")
+        # self._test_outputs is cleared within _shared_epoch_end
 
     def configure_optimizers(self):
         """Configures optimizer and learning rate scheduler."""
