@@ -601,6 +601,10 @@ class ContrastiveCATHeModel(pl.LightningModule):
         metrics = self._shared_epoch_end(self._val_outputs, "val")
         # self._val_outputs is cleared within _shared_epoch_end
 
+        # Explicitly log the computed metrics for callbacks
+        if metrics: # Ensure metrics dictionary is not empty
+            self.log_dict(metrics, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+
     # --- Testing ---
     def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
         """Stores projected test embeddings for epoch-end evaluation."""
