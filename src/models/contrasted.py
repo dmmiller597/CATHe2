@@ -362,14 +362,23 @@ class ContrastiveCATHeModel(pl.LightningModule):
             self.log(f"{stage}/knn_balanced_acc", 0.0, prog_bar=True, sync_dist=True)
             return {} # Return empty dict for consistency
 
+        # Initialize variables that might be deleted in finally block
         all_embeddings = None
         all_labels = None
+        dist_matrix = None
+        intra_dists_tensor = None
+        inter_dists_tensor = None
         metrics = {} # Dictionary to store computed metrics
 
         try:
-            # Concatenate embeddings and labels
+            # Concatenate embeddings and labels (currently on CPU for test stage)
             all_embeddings = torch.cat([x["embeddings"] for x in outputs])
             all_labels = torch.cat([x["labels"] for x in outputs])
+
+            # --- Move concatenated tensors to the primary device ---
+            all_embeddings = all_embeddings.to(self.device)
+            all_labels = all_labels.to(self.device)
+            log.debug(f"Moved concatenated tensors to {self.device} for stage '{stage}'.")
 
             # --- Optional Visualization (only during validation, not testing) ---
             if stage == "val":
@@ -399,7 +408,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
             # Compute pairwise distances
             # Ensure embeddings are on the correct device before distance calculation
-            dist_matrix = pairwise_distance_optimized(all_embeddings.to(self.device), all_embeddings.to(self.device))
+            dist_matrix = pairwise_distance_optimized(all_embeddings, all_embeddings)
             dist_matrix.fill_diagonal_(float('inf'))  # Exclude self
 
             # --- Add distance statistics ---
@@ -515,7 +524,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
                         # Use broadcasting to compare all pairs between samples
                         # Move samples to the same device for comparison
                         violation_rate = torch.mean(
-                            (intra_sample.unsqueeze(1).to(self.device) > inter_sample.unsqueeze(0).to(self.device)).float()
+                            (intra_sample.unsqueeze(1) > inter_sample.unsqueeze(0)).float()
                         ).item()
                         metrics[f"{stage}/triplet_violation_rate"] = violation_rate
                         log.debug(f"  Violation Rate: {violation_rate:.4f}")
@@ -529,12 +538,12 @@ class ContrastiveCATHeModel(pl.LightningModule):
             # Get nearest neighbor
             log.debug("Calculating k-NN metrics...")
             k = self.hparams.knn_val_neighbors # Use same k for test
-            # Ensure dist_matrix is on CPU if labels are on CPU, or move labels to GPU
-            # Assuming dist_matrix is on GPU from pairwise_distance
-            _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False) # indices are on GPU
+            # Ensure dist_matrix is on self.device, indices will also be on self.device
+            _, indices = torch.topk(dist_matrix, k=k, dim=1, largest=False)
 
             # Ensure neighbor_labels are computed correctly based on device of all_labels
-            neighbor_labels = all_labels.to(indices.device)[indices] # Fetch labels using GPU indices
+            # -> Both all_labels and indices are on self.device
+            neighbor_labels = all_labels[indices] # Fetch labels using GPU indices
 
             # For k=1, just use the nearest neighbor's label
             if k == 1:
@@ -569,25 +578,19 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
 
         finally:
-            # --- Logging ---
-            # Log all computed metrics (using dictionary allows flexibility)
-            # Ensure prog_bar is only True for the main metrics if desired
-            self.log(f"{stage}/knn_acc", metrics.get(f"{stage}/knn_acc", 0.0), prog_bar=True, sync_dist=True)
-            self.log(f"{stage}/knn_balanced_acc", metrics.get(f"{stage}/knn_balanced_acc", 0.0), prog_bar=True, sync_dist=True)
-
-            # Log other metrics without prog_bar
-            for key, value in metrics.items():
-                if key not in [f"{stage}/knn_acc", f"{stage}/knn_balanced_acc"]:
-                     self.log(key, value, prog_bar=False, sync_dist=True)
-
-            outputs.clear()  # Free memory
-            log.debug(f"Cleared outputs list for stage '{stage}'.")
-            # Ensure embeddings are cleared if they were potentially large
-            del all_embeddings
-            del all_labels
-            del dist_matrix # Explicitly delete large tensors
-            if 'intra_dists_tensor' in locals(): del intra_dists_tensor
-            if 'inter_dists_tensor' in locals(): del inter_dists_tensor
+            # Explicitly delete large tensors, checking if they exist first
+            if all_embeddings is not None:
+                 del all_embeddings
+            if all_labels is not None:
+                 del all_labels
+            if dist_matrix is not None:
+                 del dist_matrix
+            if intra_dists_tensor is not None:
+                 del intra_dists_tensor
+            if inter_dists_tensor is not None:
+                 del inter_dists_tensor
+            # Clear outputs again just in case an error happened before the clear() in try block
+            outputs.clear()
 
 
         return metrics # Return the computed metrics
@@ -603,12 +606,13 @@ class ContrastiveCATHeModel(pl.LightningModule):
         """Stores projected test embeddings for epoch-end evaluation."""
         embeddings, labels = batch
         with torch.inference_mode():
-            projected_embeddings = self(embeddings)
+            # Project on the current device (GPU)
+            projected_embeddings = self(embeddings) # self() handles moving input batch if needed
 
-        # Append to the dedicated test outputs list
+        # Append to the dedicated test outputs list, moving to CPU for storage
         self._test_outputs.append({
-            "embeddings": projected_embeddings.detach().cpu(), 
-            "labels": labels.detach().cpu() 
+            "embeddings": projected_embeddings.detach().cpu(),
+            "labels": labels.detach().cpu() # Assuming labels were already on CPU or need moving
         })
 
     def on_test_epoch_end(self) -> None:
