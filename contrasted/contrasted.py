@@ -570,13 +570,14 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
     def lr_scheduler_step(self, scheduler: _LRScheduler, metric: Optional[torch.Tensor] = None):
         """
-        Manually handles LR scheduling step to implement linear warmup
-        followed by ReduceLROnPlateau.
+        Steps the learning rate scheduler.
+        Handles warmup logic separately before potentially stepping the main scheduler.
+        Relies on LearningRateMonitor callback for LR logging.
         """
-        if not self.trainer or not self.trainer.optimizers:
-            log.warning("lr_scheduler_step called but trainer.optimizers is not available.")
-            return # Cannot proceed without optimizer
-
+        # Use the trainer's optimizer reference
+        if not self.trainer.optimizers:
+            log.warning("lr_scheduler_step called before optimizer is set.")
+            return
         optimizer = self.trainer.optimizers[0]
         current_epoch = self.current_epoch
         warmup_epochs = self.hparams.warmup_epochs
@@ -591,7 +592,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
             for pg in optimizer.param_groups:
                 pg['lr'] = current_lr
 
-            self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+            # self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # REMOVED
             # log.debug(f"Warmup Epoch {current_epoch + 1}/{warmup_epochs}: Set LR to {current_lr:.2e}")
 
         # --- Post-Warmup Phase ---
@@ -600,7 +601,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
                  for pg in optimizer.param_groups:
                      pg['lr'] = base_lr
                  log.info(f"Warmup complete. Set LR to base {base_lr:.2e}")
-                 self.log('lr', base_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # Log base LR
+                 # self.log('lr', base_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # REMOVED
 
             # Step the ReduceLROnPlateau scheduler using the monitored metric
             if isinstance(scheduler, ReduceLROnPlateau):
@@ -610,15 +611,15 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 else:
                     scheduler.step(metric) # Step with the metric
                     current_lr = optimizer.param_groups[0]['lr'] # Get potentially updated LR
-                    self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                    # self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # REMOVED
                     # log.debug(f"Epoch {current_epoch + 1}: Stepped ReduceLROnPlateau. Current LR: {current_lr:.2e}")
             else:
                 # Fallback for other schedulers if configured differently (unlikely with current setup)
                 log.warning(f"Scheduler is not ReduceLROnPlateau ({type(scheduler)}). Attempting standard step().")
                 try:
                     scheduler.step() # Assumes schedulers without metric argument in step
-                    current_lr = optimizer.param_groups[0]['lr']
-                    self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # Log LR
+                    # current_lr = optimizer.param_groups[0]['lr'] # No need to get LR if not logging
+                    # self.log('lr', current_lr, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True) # REMOVED
                 except TypeError:
                      log.error(f"Scheduler {type(scheduler)} requires a metric for step(), but none provided in standard step.")
 
