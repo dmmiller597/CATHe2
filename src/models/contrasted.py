@@ -13,8 +13,8 @@ from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau, _LRScheduler
 
 # --- Custom Imports ---
-from .plotting import generate_tsne_plot, generate_umap_plot
-from .utils.distances import pairwise_distance_optimized
+from ..plotting import generate_tsne_plot, generate_umap_plot
+from ..distances import pairwise_distance_optimized
 from ..losses import soft_triplet_loss
 from ..mining import BatchHardMiner, SemiHardMiner
 
