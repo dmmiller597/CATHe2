@@ -116,7 +116,7 @@ class EmbeddingDataset(Dataset):
         return embedding, label
 
 
-class CATHeDataModule(pl.LightningDataModule):
+class ContrastiveDataModule(pl.LightningDataModule):
     """
     PyTorch Lightning DataModule for CATH embedding datasets, configurable for CATH hierarchy level.
     """

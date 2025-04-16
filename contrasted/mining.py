@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
-from .distances import pairwise_distance_optimized
+from distances import pairwise_distance_optimized
 
 class BatchHardMiner:
     """

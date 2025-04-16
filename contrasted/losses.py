@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-from .distances import pairwise_distance_optimized
+from distances import pairwise_distance_optimized
 
 def soft_triplet_loss(
     anchor: Tensor, positive: Tensor, negative: Tensor,
