@@ -2,7 +2,6 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
-# Assuming distances.py is in the same directory or accessible via python path
 from .distances import pairwise_distance_optimized
 
 class BatchHardMiner:
