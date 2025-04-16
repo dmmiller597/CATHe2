@@ -44,7 +44,7 @@ def main(cfg: DictConfig) -> None:
         log.info(f"Output directory for level {level_name}: {level_output_dir}")
 
         # --- Data Setup for Current Level ---
-        data_module = CATHeDataModule(
+        data_module = ContrastiveDataModule(
             data_dir=Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir,
             train_embeddings_file=cfg.data.train_embeddings,
             train_labels_file=cfg.data.train_labels,
