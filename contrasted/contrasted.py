@@ -9,7 +9,7 @@ import lightning as L
 from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import OneCycleLR
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
 
 from utils import get_logger
 from distances import pairwise_distance
@@ -212,6 +212,10 @@ def compute_centroid_metrics(
         y_pred = pred.cpu().numpy()
         metrics[f"{stage}/centroid_acc"] = accuracy_score(y_true, y_pred)
         metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+        # compute additional classification metrics
+        metrics[f"{stage}/centroid_precision"] = precision_score(y_true, y_pred, average='macro', zero_division=0)
+        metrics[f"{stage}/centroid_recall"] = recall_score(y_true, y_pred, average='macro', zero_division=0)
+        metrics[f"{stage}/centroid_f1_macro"] = f1_score(y_true, y_pred, average='macro', zero_division=0)
     except Exception:
         metrics[f"{stage}/centroid_acc"] = 0.0
         metrics[f"{stage}/centroid_balanced_acc"] = 0.0
