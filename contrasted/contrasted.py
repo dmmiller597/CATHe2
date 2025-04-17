@@ -1,4 +1,4 @@
-import logging
+from utils import get_logger
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -18,12 +18,7 @@ from distances import pairwise_distance_optimized
 from losses import soft_triplet_loss
 from mining import BatchHardMiner, SemiHardMiner
 
-# Configure logging
-log = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s][%(name)s][%(levelname)s] - %(message)s",
-)
+log = get_logger(__name__)
 
 # --- Main Lightning Module ---
 

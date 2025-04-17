@@ -2,10 +2,9 @@
 import torch
 from torch import Tensor
 
-def pairwise_distance_optimized(x: Tensor, y: Tensor) -> Tensor:
+def pairwise_distance(x: Tensor, y: Tensor) -> Tensor:
     """
     Computes the pairwise squared Euclidean distance between two sets of vectors
-    in an optimized manner.
 
     Uses the formula: d(x, y)^2 = ||x||^2 - 2 * x^T * y + ||y||^2
 

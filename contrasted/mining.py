@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
-from distances import pairwise_distance_optimized
+from distances import pairwise_distance
 
 class BatchHardMiner:
     """
@@ -11,7 +11,7 @@ class BatchHardMiner:
     For each anchor, selects the hardest positive (farthest) and hardest negative
     (closest) sample within the batch based on squared Euclidean distance.
     """
-    def __init__(self, distance_metric_func=pairwise_distance_optimized):
+    def __init__(self, distance_metric_func=pairwise_distance):
         self.distance_metric = distance_metric_func
 
     def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
@@ -80,7 +80,7 @@ class SemiHardMiner:
     For each anchor, selects the hardest positive (farthest) and semi-hard negative
     (further than the positive but not too far) sample using vectorized operations.
     """
-    def __init__(self, distance_metric_func=pairwise_distance_optimized):
+    def __init__(self, distance_metric_func=pairwise_distance):
         self.distance_metric = distance_metric_func
 
     def __call__(self, embeddings: Tensor, labels: Tensor) -> Tuple[Tensor, Tensor, Tensor]:

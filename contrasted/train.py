@@ -5,19 +5,14 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, Learning
 from pytorch_lightning.loggers import WandbLogger
 import torch
 from pathlib import Path
-import os # Import os
+import os
 
-from utils import get_logger, set_seed
+from utils import get_logger, set_seed, configure_logging
 from data import ContrastiveDataModule, CATH_LEVEL_NAMES
 from contrasted import ContrastiveCATHeModel
 
-# Set the CUBLAS workspace configuration
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8' # or ':16:8'
-
-# Example of enabling deterministic algorithms (if you haven't already)
-torch.use_deterministic_algorithms(True)
-
-log = get_logger()
+configure_logging()
+log = get_logger(__name__)
 
 @hydra.main(config_path="../config", config_name="contrastive", version_base="1.2")
 def main(cfg: DictConfig) -> None:

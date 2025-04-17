@@ -3,11 +3,11 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-from distances import pairwise_distance_optimized
+from distances import pairwise_distance
 
 def soft_triplet_loss(
     anchor: Tensor, positive: Tensor, negative: Tensor,
-    distance_metric_func=pairwise_distance_optimized
+    distance_metric_func=pairwise_distance
 ) -> Tensor:
     """
     Computes the soft triplet loss using the softplus function.
