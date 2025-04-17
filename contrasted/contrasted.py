@@ -14,10 +14,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau, _LRScheduler
 
 
 from plotting import generate_tsne_plot, generate_umap_plot
-from distances import pairwise_distance_optimized
+from distances import pairwise_distance
 from losses import soft_triplet_loss
 from mining import BatchHardMiner, SemiHardMiner
-
+from utils import get_logger
 log = get_logger(__name__)
 
 # --- Main Lightning Module ---
@@ -99,7 +99,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
         # NOTE: `soft_triplet_loss` uses `pairwise_distance_optimized` by default
 
         # Select and initialize the triplet miner based on config
-        distance_func = pairwise_distance_optimized # Use imported function
+        distance_func = pairwise_distance # Use imported function
         if self.hparams.miner_type == "batch_hard":
             self.miner = BatchHardMiner(distance_metric_func=distance_func)
             log.info("Using Batch Hard Miner.")
@@ -249,7 +249,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
                 # Compute intra-class distances
                 if num_same > 1:
-                    dist_same = pairwise_distance_optimized(embeddings_same_sampled, embeddings_same_sampled)
+                    dist_same = pairwise_distance(embeddings_same_sampled, embeddings_same_sampled)
                     eye_mask = torch.eye(embeddings_same_sampled.size(0), dtype=torch.bool, device=dist_same.device)
                     valid_dist_same = dist_same[~eye_mask]
                     intra_dists.append(valid_dist_same[torch.isfinite(valid_dist_same)])
@@ -265,7 +265,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
                     else:
                          embeddings_diff_sampled = embeddings_diff
 
-                    dist_diff = pairwise_distance_optimized(embeddings_same_sampled, embeddings_diff_sampled)
+                    dist_diff = pairwise_distance(embeddings_same_sampled, embeddings_diff_sampled)
                     inter_dists.append(dist_diff[torch.isfinite(dist_diff)].flatten())
 
                 if (label_idx + 1) % 100 == 0:
@@ -450,7 +450,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
                 log.info(f"Using all {num_samples} embeddings for {stage} metrics calculation.")
 
             # --- Compute Pairwise Distances ---
-            dist_matrix = pairwise_distance_optimized(all_embeddings, all_embeddings)
+            dist_matrix = pairwise_distance(all_embeddings, all_embeddings)
             dist_matrix.fill_diagonal_(float('inf')) # Exclude self-distance
 
             # --- Compute Distance-Based Metrics ---
