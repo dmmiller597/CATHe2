@@ -154,29 +154,41 @@ def compute_distance_metrics(
     return metrics
 
 
-def compute_knn_metrics(
-    dist_matrix: Tensor,
+def compute_knn_streaming(
+    embeddings: Tensor,
     labels: Tensor,
     k: int,
     stage: str,
 ) -> Dict[str, float]:
-    """Computes k-NN accuracy metrics."""
-    metrics: Dict[str, float] = {}
-    try:
-        _, idx = torch.topk(dist_matrix, k=k, largest=False, dim=1)
-        neigh = labels[idx]
+    """Compute k-NN metrics in a memory-efficient streamed manner."""
+    # move everything to CPU
+    embs_cpu = embeddings.cpu().float()
+    labs_cpu = labels.cpu()
+    N = embs_cpu.size(0)
+    preds = torch.empty(N, dtype=labs_cpu.dtype)
+    # choose a safe chunk size for 48GB A40; fallback to 1024
+    chunk_size = 1024  
+    for start in range(0, N, chunk_size):
+        end = min(start + chunk_size, N)
+        block = embs_cpu[start:end]  # (chunk, dim)
+        # compute distances block → all points
+        d = torch.cdist(block, embs_cpu)
+        # mask self-distances
+        idxs = torch.arange(end - start)
+        d[idxs, start + idxs] = float('inf')
         if k == 1:
-            pred = neigh.squeeze(1)
+            nearest = torch.argmin(d, dim=1)
+            preds[start:end] = labs_cpu[nearest]
         else:
-            pred, _ = torch.mode(neigh, dim=1)
-        y_true = labels.cpu().numpy()
-        y_pred = pred.cpu().numpy()
-        metrics[f"{stage}/knn_acc"] = accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/knn_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-    except Exception:
-        metrics[f"{stage}/knn_acc"] = 0.0
-        metrics[f"{stage}/knn_balanced_acc"] = 0.0
-    return metrics
+            topk = d.topk(k, dim=1, largest=False)
+            neigh = labs_cpu[topk.indices]
+            preds[start:end] = torch.mode(neigh, dim=1).values
+    y_true = labs_cpu.numpy()
+    y_pred = preds.numpy()
+    return {
+        f"{stage}/knn_acc": accuracy_score(y_true, y_pred),
+        f"{stage}/knn_balanced_acc": balanced_accuracy_score(y_true, y_pred),
+    }
 
 
 def compute_centroid_metrics(
@@ -340,19 +352,14 @@ class ContrastiveCATHeModel(L.LightningModule):
             # default metrics
             metrics[f"{stage}/knn_acc"] = 0.0
             metrics[f"{stage}/knn_balanced_acc"] = 0.0
-            metrics[f"{stage}/mean_intra_dist"] = float('nan')
-            metrics[f"{stage}/mean_inter_dist"] = float('nan')
-            metrics[f"{stage}/embedding_uniformity"] = float('nan')
-            metrics[f"{stage}/triplet_violation_rate"] = float('nan')
+            metrics[f"{stage}/centroid_acc"] = 0.0
+            metrics[f"{stage}/centroid_balanced_acc"] = 0.0
             outputs.clear()
             return metrics
         try:
-            # move embeddings and labels to CPU to reduce GPU memory use
-            embs = torch.cat([o['embeddings'] for o in outputs]).cpu()
-            labs = torch.cat([o['labels'] for o in outputs]).cpu()
-            # clear GPU cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            device = self.device
+            embs = torch.cat([o['embeddings'].to(device) for o in outputs])
+            labs = torch.cat([o['labels'].to(device) for o in outputs])
             # optional visualization
             if (
                 stage == 'val'
@@ -366,27 +373,16 @@ class ContrastiveCATHeModel(L.LightningModule):
                     generate_umap_plot(self, embs, labs)
                 else:
                     generate_tsne_plot(self, embs, labs)
-            # sampling
-            max_samp = self.hparams.val_max_samples
-            if embs.size(0) > max_samp:
-                # perform sampling on CPU
-                idx = torch.randperm(embs.size(0))[:max_samp]
-                embs, labs = embs[idx], labs[idx]
-            # distances and metrics
-            dist = pairwise_distance(embs, embs)
-            dist.fill_diagonal_(float('inf'))
-            metrics = compute_distance_metrics(embs, labs, stage)
-            metrics.update(compute_knn_metrics(dist, labs, self.hparams.knn_val_neighbors, stage))
+            # k-NN via streaming and centroid metrics (memory-efficient)
+            metrics = self.compute_knn_streaming(embs, labs, self.hparams.knn_val_neighbors, stage)
             metrics.update(compute_centroid_metrics(embs, labs, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
             metrics.setdefault(f"{stage}/knn_acc", 0.0)
             metrics.setdefault(f"{stage}/knn_balanced_acc", 0.0)
-            metrics.setdefault(f"{stage}/mean_intra_dist", float('nan'))
-            metrics.setdefault(f"{stage}/mean_inter_dist", float('nan'))
-            metrics.setdefault(f"{stage}/embedding_uniformity", float('nan'))
-            metrics.setdefault(f"{stage}/triplet_violation_rate", float('nan'))
+            metrics.setdefault(f"{stage}/centroid_acc", 0.0)
+            metrics.setdefault(f"{stage}/centroid_balanced_acc", 0.0)
         finally:
             outputs.clear()
         return metrics
