@@ -13,8 +13,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 from utils import get_logger
 from distances import pairwise_distance
-from losses import soft_triplet_loss
-from mining import BatchHardMiner, SemiHardMiner
+from losses import SupConLoss
 from plotting import generate_tsne_plot, generate_umap_plot
 
 # Module-level logger
@@ -200,7 +199,7 @@ class ContrastiveCATHeModel(L.LightningModule):
         visualization_method: str = "tsne",
         tsne_viz_dir: str = "results/tsne_plots",
         umap_viz_dir: str = "results/umap_plots",
-        miner_type: str = "batch_hard",
+        temperature: float = 0.07,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -211,8 +210,6 @@ class ContrastiveCATHeModel(L.LightningModule):
             raise ValueError("warmup_epochs cannot be negative.")
         if self.hparams.visualization_method not in ("umap", "tsne"):
             raise ValueError("visualization_method must be 'umap' or 'tsne'.")
-        if self.hparams.miner_type not in ("batch_hard", "semi_hard"):
-            raise ValueError("miner_type must be 'batch_hard' or 'semi_hard'.")
 
         # Model components
         self.projection = build_projection_network(
@@ -224,12 +221,8 @@ class ContrastiveCATHeModel(L.LightningModule):
         )
         init_weights(self)
 
-        self.loss_fn = soft_triplet_loss
-        dist_fn = pairwise_distance
-        if self.hparams.miner_type == "batch_hard":
-            self.miner = BatchHardMiner(distance_metric_func=dist_fn)
-        else:
-            self.miner = SemiHardMiner(distance_metric_func=dist_fn)
+        # Supervised contrastive loss
+        self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
 
         # Buffers for metrics
         self._val_outputs: List[Dict[str, Tensor]] = []
@@ -246,12 +239,11 @@ class ContrastiveCATHeModel(L.LightningModule):
     def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
         emb, labels = batch
         proj = self(emb)
-        a, p, n = self.miner(proj, labels)
-        if len(a) > 0:
-            loss = self.loss_fn(proj[a], proj[p], proj[n])
-        else:
-            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        loss = self.loss_fn(proj, labels)
+        self.log(
+            'train/loss', loss,
+            on_step=True, on_epoch=True, prog_bar=False, sync_dist=True
+        )
         return loss
 
     def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:

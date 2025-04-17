@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -41,4 +42,30 @@ def soft_triplet_loss(
 
     # Softplus(x) = log(1 + exp(x))
     loss = F.softplus(dist_ap - dist_an)
-    return loss.mean() 
+    return loss.mean()
+
+class SupConLoss(nn.Module):
+    """
+    Supervised Contrastive Loss (Khosla et al.).
+    Pulls each example toward all same‐class embeddings, pushes away from others.
+    """
+    def __init__(self, temperature: float = 0.07):
+        super().__init__()
+        if temperature <= 0:
+            raise ValueError("temperature must be > 0.")
+        self.temperature = temperature
+
+    def forward(self, embeddings: Tensor, labels: Tensor) -> Tensor:
+        # embeddings: (N, D), expected L2‐normalized
+        sim = torch.div(embeddings @ embeddings.T, self.temperature)
+        # mask positives (exclude self)
+        mask = torch.eq(labels.unsqueeze(0), labels.unsqueeze(1)).float()
+        mask.fill_diagonal_(0)
+
+        exp_sim = sim.exp()
+        denom = exp_sim.sum(dim=1, keepdim=True)
+        pos_exp = (exp_sim * mask).sum(dim=1)
+
+        # prevent log(0)
+        loss = -torch.log(torch.clamp(pos_exp / denom.squeeze(1), min=1e-12))
+        return loss.mean() 
