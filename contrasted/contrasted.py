@@ -277,6 +277,13 @@ class ContrastiveCATHeModel(L.LightningModule):
         emb, labels = batch
         with torch.inference_mode():
             proj = self(emb)
+            # compute validation loss
+            loss = self.loss_fn(proj, labels)
+        # log validation loss
+        self.log(
+            'val/loss', loss,
+            on_step=False, on_epoch=True, prog_bar=True, sync_dist=True
+        )
         self._val_outputs.append({"embeddings": proj.detach(), "labels": labels.detach()})
 
     def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
