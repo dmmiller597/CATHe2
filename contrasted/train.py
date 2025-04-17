@@ -51,9 +51,9 @@ def main(cfg: DictConfig) -> None:
             train_labels_file=cfg.data.train_labels,
             val_embeddings_file=cfg.data.val_embeddings,
             val_labels_file=cfg.data.val_labels,
-            test_embeddings_file=getattr(cfg.data, "test_embeddings", None), # Use getattr for safety
+            test_embeddings_file=getattr(cfg.data, "test_embeddings", None),
             test_labels_file=getattr(cfg.data, "test_labels", None),
-            cath_level=cath_level, # Pass the current level
+            cath_level=cath_level,
             batch_size=cfg.training.batch_size,
             num_workers=cfg.training.num_workers,
         )
