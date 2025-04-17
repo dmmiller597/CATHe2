@@ -1,8 +1,8 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor, RichProgressBar
-from pytorch_lightning.loggers import WandbLogger
+import lightning as L
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor, RichProgressBar
+from lightning.pytorch.loggers import WandbLogger
 import torch
 from pathlib import Path
 import os
@@ -163,7 +163,7 @@ def main(cfg: DictConfig) -> None:
 
         # --- Trainer for Current Level ---
         # Create a new trainer for each level to reset optimizer state, epoch count, etc.
-        trainer = pl.Trainer(
+        trainer = L.Trainer(
             accelerator='auto',
             devices=cfg.training.accelerator.devices,
             max_epochs=cfg.training.max_epochs,

@@ -1,7 +1,7 @@
 import logging
 import os
 import torch
-import pytorch_lightning as pl
+import lightning as L
 from rich.logging import RichHandler
 from typing import Optional
 
@@ -22,7 +22,7 @@ def configure_logging(level: int = logging.INFO, name: Optional[str] = None) -> 
 
 def set_seed(seed: int, workers: bool = True, deterministic: bool = True) -> None:
     """Set random seed for reproducibility and enforce deterministic behavior."""
-    pl.seed_everything(seed, workers=workers)
+    L.seed_everything(seed, workers=workers)
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False

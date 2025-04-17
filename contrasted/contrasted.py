@@ -2,7 +2,7 @@ from utils import get_logger
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import pytorch_lightning as pl
+import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,7 +22,7 @@ log = get_logger(__name__)
 
 # --- Main Lightning Module ---
 
-class ContrastiveCATHeModel(pl.LightningModule):
+class ContrastiveCATHeModel(L.LightningModule):
     """
     PyTorch Lightning module for CATH superfamily contrastive learning.
 
@@ -96,7 +96,7 @@ class ContrastiveCATHeModel(pl.LightningModule):
 
         # Use the imported soft triplet loss function
         self.loss_fn = soft_triplet_loss
-        # NOTE: `soft_triplet_loss` uses `pairwise_distance_optimized` by default
+        # NOTE: `soft_triplet_loss` uses `pairwise_distance` by default
 
         # Select and initialize the triplet miner based on config
         distance_func = pairwise_distance # Use imported function

@@ -4,7 +4,7 @@ import torch
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-import pytorch_lightning as pl
+import lightning as L
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from utils import get_logger
@@ -68,7 +68,7 @@ class EmbeddingDataset(Dataset):
         return emb, lbl
 
 
-class ContrastiveDataModule(pl.LightningDataModule):
+class ContrastiveDataModule(L.LightningDataModule):
     """LightningDataModule for CATH embeddings with weighted sampling."""
 
     def __init__(
