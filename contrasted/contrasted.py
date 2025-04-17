@@ -347,9 +347,12 @@ class ContrastiveCATHeModel(L.LightningModule):
             outputs.clear()
             return metrics
         try:
-            device = self.device
-            embs = torch.cat([o['embeddings'].to(device) for o in outputs])
-            labs = torch.cat([o['labels'].to(device) for o in outputs])
+            # move embeddings and labels to CPU to reduce GPU memory use
+            embs = torch.cat([o['embeddings'] for o in outputs]).cpu()
+            labs = torch.cat([o['labels'] for o in outputs]).cpu()
+            # clear GPU cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             # optional visualization
             if (
                 stage == 'val'
@@ -358,6 +361,7 @@ class ContrastiveCATHeModel(L.LightningModule):
                 and self.current_epoch > 0
                 and self.current_epoch % 10 == 0
             ):
+                log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs.size(0)})")
                 if self.hparams.visualization_method == 'umap':
                     generate_umap_plot(self, embs, labs)
                 else:
@@ -365,7 +369,8 @@ class ContrastiveCATHeModel(L.LightningModule):
             # sampling
             max_samp = self.hparams.val_max_samples
             if embs.size(0) > max_samp:
-                idx = torch.randperm(embs.size(0), device=device)[:max_samp]
+                # perform sampling on CPU
+                idx = torch.randperm(embs.size(0))[:max_samp]
                 embs, labs = embs[idx], labs[idx]
             # distances and metrics
             dist = pairwise_distance(embs, embs)
