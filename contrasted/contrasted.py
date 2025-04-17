@@ -378,7 +378,7 @@ class ContrastiveCATHeModel(L.LightningModule):
                 else:
                     generate_tsne_plot(self, embs, labs)
             # k-NN via streaming and centroid metrics (memory-efficient)
-            metrics = self.compute_knn_streaming(embs, labs, self.hparams.knn_val_neighbors, stage)
+            metrics = compute_knn_streaming(embs, labs, self.hparams.knn_val_neighbors, stage)
             metrics.update(compute_centroid_metrics(embs, labs, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
