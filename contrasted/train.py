@@ -78,16 +78,9 @@ def main(cfg: DictConfig) -> None:
                 # Pass level-specific vis dirs
                 tsne_viz_dir=str(level_output_dir / "tsne_plots"),
                 umap_viz_dir=str(level_output_dir / "umap_plots"),
-                lr_scheduler_config={ # Pass the scheduler config dict
-                    "monitor": cfg.model.lr_scheduler.monitor,
-                    "mode": cfg.model.lr_scheduler.mode,
-                    "factor": cfg.model.lr_scheduler.factor,
-                    "patience": cfg.model.lr_scheduler.patience,
-                    "min_lr": cfg.model.lr_scheduler.min_lr
-                },
-                 # Pass num_classes and decoder for potential internal use/logging
-                 # num_classes=data_module.get_num_classes(), # Optional: if model uses it
-                 # label_decoder=data_module.get_label_decoder() # Optional: if model uses it
+                # Pass num_classes and decoder for potential internal use/logging
+                # num_classes=data_module.get_num_classes(), # Optional: if model uses it
+                # label_decoder=data_module.get_label_decoder() # Optional: if model uses it
             )
         else:
             log.info(f"Loading model from previous level's best checkpoint: {last_best_checkpoint_path}")
@@ -102,16 +95,9 @@ def main(cfg: DictConfig) -> None:
                 learning_rate=cfg.model.learning_rate, # Reset LR for the new phase? Or let scheduler continue? Resetting is safer.
                 tsne_viz_dir=str(level_output_dir / "tsne_plots"),
                 umap_viz_dir=str(level_output_dir / "umap_plots"),
-                lr_scheduler_config={ # Ensure scheduler config is passed again
-                     "monitor": cfg.model.lr_scheduler.monitor,
-                     "mode": cfg.model.lr_scheduler.mode,
-                     "factor": cfg.model.lr_scheduler.factor,
-                     "patience": cfg.model.lr_scheduler.patience,
-                     "min_lr": cfg.model.lr_scheduler.min_lr
-                 },
-                 # Optional: Update other potentially changed hparams if needed
-                 # num_classes=data_module.get_num_classes(),
-                 # label_decoder=data_module.get_label_decoder()
+                # Optional: Update other potentially changed hparams if needed
+                # num_classes=data_module.get_num_classes(),
+                # label_decoder=data_module.get_label_decoder()
             )
             log.info("Model loaded successfully.")
 

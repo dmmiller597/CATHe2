@@ -21,14 +21,6 @@ model:
   tsne_viz_dir: "results/tsne_plots"
   umap_viz_dir: "results/umap_plots"
 
-  # Learning rate scheduler
-  lr_scheduler:
-    monitor: "val/knn_balanced_acc"
-    mode: "max"
-    factor: 0.5
-    patience: 10 # Reduced patience slightly
-    min_lr: 1e-8
-
 training:
   # Training parameters
   batch_size: 1024  # large batch size for better triplet mining

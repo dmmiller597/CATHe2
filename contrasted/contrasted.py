@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import lightning as L
 from torch import Tensor
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau, _LRScheduler
+from torch.optim.lr_scheduler import OneCycleLR
 from sklearn.metrics import accuracy_score, balanced_accuracy_score
 
 from utils import get_logger
@@ -286,56 +286,25 @@ class ContrastiveCATHeModel(L.LightningModule):
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
         )
-        if not self.hparams.lr_scheduler_config:
-            return optimizer
-        sched_conf = self.hparams.lr_scheduler_config
-        scheduler = ReduceLROnPlateau(
+        # OneCycleLR scheduler for warm-up and annealing per batch
+        train_loader = self.trainer.datamodule.train_dataloader()
+        steps_per_epoch = len(train_loader)
+        scheduler = OneCycleLR(
             optimizer,
-            mode=sched_conf.get('mode', 'max'),
-            factor=sched_conf.get('factor', 0.5),
-            patience=sched_conf.get('patience', 5),
-            min_lr=sched_conf.get('min_lr', 1e-7),
-            verbose=True,
+            max_lr=self.hparams.learning_rate,
+            epochs=self.trainer.max_epochs,
+            steps_per_epoch=steps_per_epoch,
+            pct_start=self.hparams.warmup_epochs / float(self.trainer.max_epochs),
+            anneal_strategy="linear",
         )
         return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': sched_conf.get('monitor', 'val/knn_balanced_acc'),
-                'interval': 'epoch',
-                'frequency': 1,
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
             },
         }
-
-    def lr_scheduler_step(
-        self, scheduler: _LRScheduler, metric: Optional[torch.Tensor] = None
-    ) -> None:
-        """
-        Custom LR scheduler step to handle warmup and ReduceLROnPlateau stepping.
-        """
-        # Warmup phase
-        opt = self.trainer.optimizers[0]
-        epoch = self.current_epoch
-        warmup = self.hparams.warmup_epochs
-        base_lr = self.hparams.learning_rate
-        start_factor = self.hparams.warmup_start_factor
-        if warmup > 0 and epoch < warmup:
-            lr_scale = start_factor + (1.0 - start_factor) * (epoch + 1) / float(warmup)
-            for pg in opt.param_groups:
-                pg['lr'] = base_lr * lr_scale
-        else:
-            if warmup > 0 and epoch == warmup:
-                for pg in opt.param_groups:
-                    pg['lr'] = base_lr
-            # Step scheduler
-            if isinstance(scheduler, ReduceLROnPlateau):
-                if metric is not None:
-                    scheduler.step(metric)
-            else:
-                try:
-                    scheduler.step()
-                except TypeError:
-                    log.error(f"Scheduler {type(scheduler)} step requires metric.")
 
     def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str) -> Dict[str, float]:
         """Common logic for validation and test epoch ends with error handling."""
