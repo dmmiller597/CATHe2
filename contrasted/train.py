@@ -71,7 +71,6 @@ def main(cfg: DictConfig) -> None:
                 learning_rate=cfg.model.learning_rate,
                 weight_decay=cfg.model.weight_decay,
                 knn_val_neighbors=cfg.model.n_neighbors,
-                val_max_samples=cfg.model.val_max_samples,
                 warmup_epochs=cfg.model.warmup_epochs,
                 warmup_start_factor=cfg.model.warmup_start_factor,
                 visualization_method=cfg.model.visualization_method,
