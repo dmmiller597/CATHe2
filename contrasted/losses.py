@@ -56,16 +56,28 @@ class SupConLoss(nn.Module):
         self.temperature = temperature
 
     def forward(self, embeddings: Tensor, labels: Tensor) -> Tensor:
-        # embeddings: (N, D), expected L2‐normalized
-        sim = torch.div(embeddings @ embeddings.T, self.temperature)
-        # mask positives (exclude self)
-        mask = torch.eq(labels.unsqueeze(0), labels.unsqueeze(1)).float()
-        mask.fill_diagonal_(0)
+        # Compute scaled dot‐product similarities
+        sim = torch.matmul(embeddings, embeddings.T) / self.temperature
 
-        exp_sim = sim.exp()
-        denom = exp_sim.sum(dim=1, keepdim=True)
-        pos_exp = (exp_sim * mask).sum(dim=1)
+        # Numerical stability: subtract max on each row
+        logits_max, _ = torch.max(sim, dim=1, keepdim=True)
+        logits = sim - logits_max.detach()
 
-        # prevent log(0)
-        loss = -torch.log(torch.clamp(pos_exp / denom.squeeze(1), min=1e-12))
-        return loss.mean() 
+        # Positive‐pair mask and removal of self‐contrast
+        mask = torch.eq(labels.unsqueeze(0), labels.unsqueeze(1)).float().to(embeddings.device)
+        logits_mask = torch.ones_like(mask) - torch.eye(mask.size(0), device=mask.device)
+        mask = mask * logits_mask
+
+        # Exponentiate logits, excluding self‐contrast
+        exp_logits = torch.exp(logits) * logits_mask
+
+        # log‐prob for each pair: log( exp_logits / sum_exp_logits )
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True).clamp(min=1e-12))
+
+        # For each anchor, average over its positive neighbours
+        denom_pos = mask.sum(1).clamp(min=1e-12)
+        mean_log_prob_pos = (mask * log_prob).sum(1) / denom_pos
+
+        # Final loss
+        loss = -mean_log_prob_pos.mean()
+        return loss 
