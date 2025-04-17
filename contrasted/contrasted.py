@@ -179,6 +179,33 @@ def compute_knn_metrics(
     return metrics
 
 
+def compute_centroid_metrics(
+    embeddings: Tensor,
+    labels: Tensor,
+    stage: str,
+) -> Dict[str, float]:
+    """Computes nearest-centroid classification accuracy metrics."""
+    metrics: Dict[str, float] = {}
+    try:
+        # compute unique class centroids
+        classes = torch.unique(labels)
+        centroids = torch.stack([embeddings[labels == c].mean(dim=0) for c in classes])
+        # compute distances from embeddings to centroids
+        dist_to_centroids = pairwise_distance(embeddings, centroids)
+        # assign each embedding to nearest centroid
+        idx = torch.argmin(dist_to_centroids, dim=1)
+        pred = classes[idx]
+        # compute metrics
+        y_true = labels.cpu().numpy()
+        y_pred = pred.cpu().numpy()
+        metrics[f"{stage}/centroid_acc"] = accuracy_score(y_true, y_pred)
+        metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+    except Exception:
+        metrics[f"{stage}/centroid_acc"] = 0.0
+        metrics[f"{stage}/centroid_balanced_acc"] = 0.0
+    return metrics
+
+
 class ContrastiveCATHeModel(L.LightningModule):
     """Lightning module for CATH superfamily contrastive learning."""
 
@@ -338,6 +365,7 @@ class ContrastiveCATHeModel(L.LightningModule):
             dist.fill_diagonal_(float('inf'))
             metrics = compute_distance_metrics(embs, labs, stage)
             metrics.update(compute_knn_metrics(dist, labs, self.hparams.knn_val_neighbors, stage))
+            metrics.update(compute_centroid_metrics(embs, labs, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
