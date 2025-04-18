@@ -22,7 +22,6 @@ def create_level_dirs(base_output_dir: Path, cath_level: int, level_suffix: str)
     subdirs = {
         "root": "",
         "ckpt": "checkpoints",
-        "logs": "logs",
         "tsne": "tsne_plots",
         "umap": "umap_plots",
     }
@@ -123,7 +122,6 @@ def build_logger(cfg: DictConfig, log_dir: Path, cath_level: int, level_suffix: 
     wandb_logger = WandbLogger(
         project="CATHe-Contrastive-Hierarchical",
         name=level_suffix,
-        save_dir=str(log_dir),
         log_model=False,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
@@ -150,7 +148,7 @@ def train_one_level(
     dm = build_datamodule(cfg, cath_level)
     model = build_model(cfg, dirs, last_ckpt)
     callbacks = build_callbacks(cfg, dirs["ckpt"], level_suffix)
-    logger = build_logger(cfg, dirs["logs"], cath_level, level_suffix)
+    logger = build_logger(cfg, cath_level, level_suffix)
 
     trainer = L.Trainer(
         accelerator="auto",
