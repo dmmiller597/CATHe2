@@ -47,9 +47,9 @@ def setup_callbacks(cfg: DictConfig, ckpt_dir: Path) -> list:
         RichProgressBar()
     ]
 
-def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger, default_root_dir: Path, callbacks: list) -> pl.Trainer:
+def setup_trainer(cfg: DictConfig, wandb_logger: WandbLogger, default_root_dir: Path, callbacks: list) -> L.Trainer:
     """Simplified trainer with automatic resource management"""
-    return pl.Trainer(
+    return L.Trainer(
         accelerator='auto',
         devices=cfg.training.accelerator.devices,
         max_epochs=cfg.training.max_epochs,
