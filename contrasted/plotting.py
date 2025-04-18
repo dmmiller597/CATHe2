@@ -27,18 +27,16 @@ def generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         start_time = time.time()
         log.info(f"Generating PCA+t-SNE plot for epoch {self.current_epoch}")
 
+        # Set deterministic sampling seed for reproducibility across plots
+        torch.manual_seed(self.hparams.seed)
+
         # Sample for efficiency (max 10000 points)
         max_samples = 10000
-        if len(embeddings) > max_samples:
-            indices = torch.randperm(len(embeddings))[:max_samples]
-            embeddings_subset = embeddings[indices].cpu().numpy()
-            labels_subset = labels[indices].cpu().numpy()
-        else:
-            embeddings_subset = embeddings.cpu().numpy()
-            labels_subset = labels.cpu().numpy()
+        indices = torch.randperm(len(embeddings))[:max_samples]
+        emb_subset, lbl_subset = embeddings[indices], labels[indices]
 
         # Get unique labels
-        unique_labels = np.unique(labels_subset)
+        unique_labels = np.unique(lbl_subset)
 
         cath_class_names = {
             0: "Mainly Alpha",
@@ -48,12 +46,12 @@ def generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         }
 
         # --- PCA Preprocessing ---
-        n_components_pca = min(50, embeddings_subset.shape[1]) # Limit PCA components
+        n_components_pca = min(50, emb_subset.shape[1]) # Limit PCA components
         log.debug(f"Running PCA with n_components={n_components_pca}")
         pca = PCA(n_components=n_components_pca, random_state=42)
         with warnings.catch_warnings(): # Suppress potential future warnings
                 warnings.simplefilter("ignore", category=FutureWarning)
-                embeddings_pca = pca.fit_transform(embeddings_subset)
+                embeddings_pca = pca.fit_transform(emb_subset)
         log.debug("PCA completed.")
 
         # --- t-SNE on PCA results ---
@@ -77,7 +75,7 @@ def generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
         # Handle cases where labels might not start from 0 or be consecutive
         label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
-        colors = [color_palette[label_to_color_idx[int(label)]] for label in labels_subset]
+        colors = [color_palette[label_to_color_idx[int(label)]] for label in lbl_subset]
 
 
         # Create scatter plot - smaller points with higher density
@@ -141,18 +139,16 @@ def generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         start_time = time.time()
         log.info(f"Generating UMAP plot for epoch {self.current_epoch}")
 
+        # Set deterministic sampling seed for reproducibility across plots
+        torch.manual_seed(self.hparams.seed)
+
         # Sample for efficiency (max 10000 points)
         max_samples = 10000
-        if len(embeddings) > max_samples:
-            indices = torch.randperm(len(embeddings))[:max_samples]
-            embeddings_subset = embeddings[indices].cpu().numpy()
-            labels_subset = labels[indices].cpu().numpy()
-        else:
-            embeddings_subset = embeddings.cpu().numpy()
-            labels_subset = labels.cpu().numpy()
+        indices = torch.randperm(len(embeddings))[:max_samples]
+        emb_subset, lbl_subset = embeddings[indices], labels[indices]
 
         # Get unique labels
-        unique_labels = np.unique(labels_subset)
+        unique_labels = np.unique(lbl_subset)
 
         cath_class_names = {
             0: "Mainly Alpha",
@@ -170,7 +166,7 @@ def generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
             random_state=42,
             # Consider low_memory=True for very large datasets if memory is an issue
         )
-        umap_result = reducer.fit_transform(embeddings_subset)
+        umap_result = reducer.fit_transform(emb_subset)
 
         # Set up minimalist plot with Tufte-inspired style
         plt.figure(figsize=(8, 8))
@@ -184,7 +180,7 @@ def generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         color_palette = sns.color_palette("colorblind", n_colors=len(unique_labels))
         # Handle cases where labels might not start from 0 or be consecutive
         label_to_color_idx = {label: i for i, label in enumerate(unique_labels)}
-        colors = [color_palette[label_to_color_idx[int(label)]] for label in labels_subset]
+        colors = [color_palette[label_to_color_idx[int(label)]] for label in lbl_subset]
 
         # Create scatter plot - smaller points with higher density
         plt.scatter(
