@@ -188,7 +188,7 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg.training.seed)
     torch.set_float32_matmul_precision(cfg.training.accelerator.float32_matmul_precision)
 
-    base_output_dir = Path(cfg.training.output_dir)
+    base_output_dir = Path(hydra.utils.get_original_cwd()) / cfg.training.output_dir
     log.info(f"Base output directory: {base_output_dir}")
 
     last_ckpt: str | None = None
