@@ -28,6 +28,7 @@ parameters:
 
 # Command to launch training at level 3 only
 command:
+  - TMPDIR=/tmp
   - ${env}
   - python
   - ${program}
