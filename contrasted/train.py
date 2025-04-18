@@ -106,7 +106,7 @@ def build_callbacks(cfg: DictConfig, ckpt_dir: Path, level_suffix: str) -> list:
     return [checkpoint_cb, early_stop_cb, lr_monitor, progress_bar]
 
 
-def build_logger(cfg: DictConfig, log_dir: Path, level_suffix: str) -> WandbLogger:
+def build_logger(cfg: DictConfig, log_dir: Path, cath_level: int, level_suffix: str) -> WandbLogger:
     """
     Configure and return a WandbLogger for this training level.
     """
@@ -118,7 +118,7 @@ def build_logger(cfg: DictConfig, log_dir: Path, level_suffix: str) -> WandbLogg
         config=OmegaConf.to_container(cfg, resolve=True),
     )
     wandb_logger.experiment.config.update({
-        "current_cath_level": level_suffix.split("_")[1],
+        "current_cath_level": cath_level,
         "current_cath_level_name": level_suffix,
     })
     return wandb_logger
@@ -140,7 +140,7 @@ def train_one_level(
     dm = build_datamodule(cfg, cath_level)
     model = build_model(cfg, dirs, last_ckpt)
     callbacks = build_callbacks(cfg, dirs["ckpt"], level_suffix)
-    logger = build_logger(cfg, dirs["logs"], level_suffix)
+    logger = build_logger(cfg, dirs["logs"], cath_level, level_suffix)
 
     trainer = L.Trainer(
         accelerator="auto",
