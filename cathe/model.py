@@ -110,9 +110,9 @@ class CATHeClassifier(L.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Move tensors to CPU and store as numpy arrays to save memory
-        preds_cpu = preds.detach().cpu().numpy()
-        y_cpu = y.detach().cpu().numpy()
+        # Move tensors to CPU to save memory and store as tensors
+        preds_cpu = preds.detach().cpu()
+        y_cpu = y.detach().cpu()
         loss_cpu = loss.detach().cpu()
         
         # Update loss metric
@@ -126,9 +126,9 @@ class CATHeClassifier(L.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Move tensors to CPU and store as numpy arrays
-        preds_cpu = preds.detach().cpu().numpy()
-        y_cpu = y.detach().cpu().numpy()
+        # Move tensors to CPU to save memory and store as tensors
+        preds_cpu = preds.detach().cpu()
+        y_cpu = y.detach().cpu()
         
         # Store for end-of-epoch calculation
         self.test_preds.append(preds_cpu)
@@ -142,28 +142,39 @@ class CATHeClassifier(L.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         val_loss = self.val_loss.compute()
-        
+
         # Concatenate all predictions and targets
-        all_preds = np.concatenate(self.val_preds)
-        all_targets = np.concatenate(self.val_targets)
-        
+        all_preds = torch.cat(self.val_preds).numpy()
+        all_targets = torch.cat(self.val_targets).numpy()
+
         # Calculate accuracy manually (memory efficient)
         accuracy = np.mean(all_preds == all_targets)
-        
+
         # Calculate balanced accuracy manually
         balanced_acc = balanced_accuracy_score(all_targets, all_preds)
-        
-        # Log metrics
-        self.log_dict(
-            {
-                "val/loss": val_loss,
-                "val/acc": accuracy,
-                "val/balanced_acc": balanced_acc
-            },
-            prog_bar=True,
-            sync_dist=True
-        )
-        
+
+        # Calculate additional metrics
+        try:
+            f1 = f1_score(all_targets, all_preds, average='macro')
+        except Exception as e:
+            self.print(f"Val F1 calculation failed: {e}")
+            f1 = 0.0
+
+        try:
+            mcc = matthews_corrcoef(all_targets, all_preds)
+        except Exception as e:
+            self.print(f"Val MCC calculation failed: {e}")
+            mcc = 0.0
+
+        metrics = {
+            "val/loss": val_loss,
+            "val/acc": accuracy,
+            "val/balanced_acc": balanced_acc,
+            "val/f1": f1,
+            "val/mcc": mcc
+        }
+        self.log_dict(metrics, prog_bar=True, sync_dist=True)
+
         # Reset storage
         self.val_loss.reset()
         self.val_preds = []
@@ -171,8 +182,8 @@ class CATHeClassifier(L.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         # Concatenate all predictions and targets
-        all_preds = np.concatenate(self.test_preds)
-        all_targets = np.concatenate(self.test_targets)
+        all_preds = torch.cat(self.test_preds).numpy()
+        all_targets = torch.cat(self.test_targets).numpy()
         
         # Calculate metrics manually (memory efficient)
         metrics = {
@@ -224,3 +235,14 @@ class CATHeClassifier(L.LightningModule):
                 "frequency": 1
             }
         }
+
+    def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+        """Inference step for predictions."""
+        if isinstance(batch, (list, tuple)):
+            x = batch[0]
+        else:
+            x = batch
+        x = x.to(self.device)
+        with torch.no_grad():
+            logits = self(x)
+        return logits.cpu()
