@@ -24,7 +24,6 @@ def create_level_dirs(base_output_dir: Path, cath_level: int, level_suffix: str)
         "ckpt": "checkpoints",
         "tsne": "tsne_plots",
         "umap": "umap_plots",
-        "wandb": "wandb",
     }
     # build full paths using a dict comprehension
     dirs = {key: (level_dir / sub if sub else level_dir) for key, sub in subdirs.items()}
@@ -114,7 +113,7 @@ def build_callbacks(cfg: DictConfig, ckpt_dir: Path, level_suffix: str) -> list:
     return [checkpoint_cb, early_stop_cb, lr_monitor, progress_bar]
 
 
-def build_logger(cfg: DictConfig, dirs: dict[str, Path], cath_level: int, level_suffix: str) -> WandbLogger:
+def build_logger(cfg: DictConfig, cath_level: int, level_suffix: str) -> WandbLogger:
     """
     Configure and return a WandbLogger for this training level.
     """
@@ -124,7 +123,6 @@ def build_logger(cfg: DictConfig, dirs: dict[str, Path], cath_level: int, level_
         name=level_suffix,
         log_model=False,
         config=OmegaConf.to_container(cfg, resolve=True),
-        save_dir=str(dirs["wandb"]),
     )
     wandb_logger.experiment.config.update({
         "current_cath_level": cath_level,
@@ -149,7 +147,7 @@ def train_one_level(
     dm = build_datamodule(cfg, cath_level)
     model = build_model(cfg, dirs, last_ckpt)
     callbacks = build_callbacks(cfg, dirs["ckpt"], level_suffix)
-    logger = build_logger(cfg, dirs, cath_level, level_suffix)
+    logger = build_logger(cfg, cath_level, level_suffix)
 
     trainer = L.Trainer(
         accelerator="auto",
