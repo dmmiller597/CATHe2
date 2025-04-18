@@ -49,148 +49,6 @@ def init_weights(module: nn.Module) -> None:
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-
-def compute_intra_inter_distances(
-    embeddings: Tensor,
-    labels: Tensor,
-    max_per_class: int = 1000,
-) -> Tuple[List[Tensor], List[Tensor]]:
-    """Computes lists of intra-class and inter-class pairwise distances."""
-    device = embeddings.device
-    intra_list: List[Tensor] = []
-    inter_list: List[Tensor] = []
-    unique = torch.unique(labels)
-    for lbl in unique:
-        same = labels == lbl
-        diff = ~same
-        emb_same = embeddings[same]
-        emb_diff = embeddings[diff]
-        if emb_same.size(0) > max_per_class:
-            idx = torch.randperm(emb_same.size(0), device=device)[:max_per_class]
-            emb_same = emb_same[idx]
-        if emb_same.size(0) > 1:
-            d_same = pairwise_distance(emb_same, emb_same)
-            eye = torch.eye(d_same.size(0), dtype=torch.bool, device=device)
-            intra_list.append(d_same[~eye])
-        if emb_diff.size(0) > max_per_class:
-            idx = torch.randperm(emb_diff.size(0), device=device)[:max_per_class]
-            emb_diff = emb_diff[idx]
-        if emb_same.size(0) > 0 and emb_diff.size(0) > 0:
-            d_diff = pairwise_distance(emb_same, emb_diff)
-            inter_list.append(d_diff.flatten())
-    return intra_list, inter_list
-
-
-def compute_uniformity(emb_subset: Tensor) -> float:
-    """Computes embedding uniformity metric."""
-    try:
-        pd_sq = torch.pdist(emb_subset).pow(2)
-        return pd_sq.mul(-2).exp().mean().add(1e-8).log().item()
-    except RuntimeError:
-        # fallback to CPU
-        cpu = emb_subset.cpu()
-        pd_sq = torch.pdist(cpu).pow(2)
-        return pd_sq.mul(-2).exp().mean().add(1e-8).log().item()
-    except Exception:
-        return float("nan")
-
-
-def compute_triplet_violation(
-    intra: Tensor,
-    inter: Tensor,
-    sample_size: int = 10000,
-) -> float:
-    """Estimates triplet violation rate."""
-    if intra.numel() == 0 or inter.numel() == 0:
-        return float("nan")
-    dev = intra.device
-    n = min(sample_size, intra.numel(), inter.numel())
-    i_s = intra[torch.randperm(intra.numel(), device=dev)[:n]]
-    e_s = inter[torch.randperm(inter.numel(), device=dev)[:n]]
-    return torch.mean((i_s.unsqueeze(1) > e_s.unsqueeze(0)).float()).item()
-
-
-def compute_distance_metrics(
-    embeddings: Tensor,
-    labels: Tensor,
-    stage: str,
-) -> Dict[str, float]:
-    """Aggregates distance-based embedding metrics."""
-    metrics: Dict[str, float] = {}
-    intra_list, inter_list = compute_intra_inter_distances(embeddings, labels)
-    if intra_list and inter_list:
-        intra_all = torch.cat(intra_list)
-        inter_all = torch.cat(inter_list)
-        metrics[f"{stage}/mean_intra_dist"] = intra_all.mean().item()
-        metrics[f"{stage}/mean_inter_dist"] = inter_all.mean().item()
-        metrics[f"{stage}/min_inter_dist"] = inter_all.min().item()
-        metrics[f"{stage}/max_intra_dist"] = intra_all.max().item()
-        if metrics[f"{stage}/mean_intra_dist"] > 0:
-            metrics[f"{stage}/inter_intra_ratio"] = (
-                metrics[f"{stage}/mean_inter_dist"]
-                / metrics[f"{stage}/mean_intra_dist"]
-            )
-        metrics[f"{stage}/dist_margin"] = (
-            metrics[f"{stage}/mean_inter_dist"] - metrics[f"{stage}/mean_intra_dist"]
-        )
-        metrics[f"{stage}/class_overlap"] = float(
-            torch.mean((intra_all > metrics[f"{stage}/min_inter_dist"]).float())
-        )
-        # uniformity
-        if embeddings.size(0) > 100:
-            idx = torch.randperm(embeddings.size(0), device=embeddings.device)[:1000]
-            metrics[f"{stage}/embedding_uniformity"] = compute_uniformity(
-                embeddings[idx]
-            )
-        else:
-            metrics[f"{stage}/embedding_uniformity"] = float("nan")
-        # triplet violation
-        metrics[f"{stage}/triplet_violation_rate"] = compute_triplet_violation(
-            intra_all, inter_all
-        )
-    else:
-        for key in ["mean_intra_dist", "mean_inter_dist", "embedding_uniformity", "triplet_violation_rate"]:
-            metrics[f"{stage}/{key}"] = float("nan")
-    return metrics
-
-
-def compute_knn_streaming(
-    embeddings: Tensor,
-    labels: Tensor,
-    k: int,
-    stage: str,
-) -> Dict[str, float]:
-    """Compute k-NN metrics in a memory-efficient streamed manner."""
-    # move everything to CPU
-    embs_cpu = embeddings.cpu().float()
-    labs_cpu = labels.cpu()
-    N = embs_cpu.size(0)
-    preds = torch.empty(N, dtype=labs_cpu.dtype)
-    # choose a safe chunk size for 48GB A40; fallback to 1024
-    chunk_size = 1024  
-    for start in range(0, N, chunk_size):
-        end = min(start + chunk_size, N)
-        block = embs_cpu[start:end]  # (chunk, dim)
-        # compute distances block → all points
-        d = torch.cdist(block, embs_cpu)
-        # mask self-distances
-        idxs = torch.arange(end - start)
-        d[idxs, start + idxs] = float('inf')
-        if k == 1:
-            nearest = torch.argmin(d, dim=1)
-            preds[start:end] = labs_cpu[nearest]
-        else:
-            topk = d.topk(k, dim=1, largest=False)
-            neigh = labs_cpu[topk.indices]
-            preds[start:end] = torch.mode(neigh, dim=1).values
-    y_true = labs_cpu.numpy()
-    y_pred = preds.numpy()
-    return {
-        f"{stage}/knn_acc": accuracy_score(y_true, y_pred),
-        f"{stage}/knn_balanced_acc": balanced_accuracy_score(y_true, y_pred),
-    }
-
-
 def compute_centroid_metrics(
     embeddings: Tensor,
     labels: Tensor,
@@ -219,6 +77,9 @@ def compute_centroid_metrics(
     except Exception:
         metrics[f"{stage}/centroid_acc"] = 0.0
         metrics[f"{stage}/centroid_balanced_acc"] = 0.0
+        metrics[f"{stage}/centroid_precision"] = 0.0
+        metrics[f"{stage}/centroid_recall"] = 0.0
+        metrics[f"{stage}/centroid_f1_macro"] = 0.0
     return metrics
 
 
@@ -234,9 +95,6 @@ class ContrastiveCATHeModel(L.LightningModule):
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
         use_layer_norm: bool = True,
-        lr_scheduler_config: Optional[Dict[str, Any]] = None,
-        knn_val_neighbors: int = 1,
-        val_max_samples: int = 100000,
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
         visualization_method: str = "tsne",
@@ -354,10 +212,11 @@ class ContrastiveCATHeModel(L.LightningModule):
         if not outputs:
             log.warning(f"No outputs for stage={stage}.")
             # default metrics
-            metrics[f"{stage}/knn_acc"] = 0.0
-            metrics[f"{stage}/knn_balanced_acc"] = 0.0
             metrics[f"{stage}/centroid_acc"] = 0.0
             metrics[f"{stage}/centroid_balanced_acc"] = 0.0
+            metrics[f"{stage}/centroid_precision"] = 0.0
+            metrics[f"{stage}/centroid_recall"] = 0.0
+            metrics[f"{stage}/centroid_f1_macro"] = 0.0
             outputs.clear()
             return metrics
         try:
@@ -377,16 +236,16 @@ class ContrastiveCATHeModel(L.LightningModule):
                     generate_umap_plot(self, embs, labs)
                 else:
                     generate_tsne_plot(self, embs, labs)
-            # k-NN via streaming and centroid metrics (memory-efficient)
-            metrics = compute_knn_streaming(embs, labs, self.hparams.knn_val_neighbors, stage)
+            # troid metrics (memory-efficient)
             metrics.update(compute_centroid_metrics(embs, labs, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
-            metrics.setdefault(f"{stage}/knn_acc", 0.0)
-            metrics.setdefault(f"{stage}/knn_balanced_acc", 0.0)
             metrics.setdefault(f"{stage}/centroid_acc", 0.0)
             metrics.setdefault(f"{stage}/centroid_balanced_acc", 0.0)
+            metrics.setdefault(f"{stage}/centroid_precision", 0.0)
+            metrics.setdefault(f"{stage}/centroid_recall", 0.0)
+            metrics.setdefault(f"{stage}/centroid_f1_macro", 0.0)
         finally:
             outputs.clear()
         return metrics
