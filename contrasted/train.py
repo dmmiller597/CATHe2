@@ -69,6 +69,7 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path], last_ckpt: str | None) -
             warmup_epochs=cfg.model.warmup_epochs,
             warmup_start_factor=cfg.model.warmup_start_factor,
             visualization_method=cfg.model.visualization_method,
+            enable_visualization=cfg.model.enable_visualization,
             seed=cfg.training.seed,
             **vis_args,
         )
@@ -79,6 +80,7 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path], last_ckpt: str | None) -
             strict=False,
             learning_rate=cfg.model.learning_rate,
             seed=cfg.training.seed,
+            enable_visualization=cfg.model.enable_visualization,
             **vis_args,
         )
 

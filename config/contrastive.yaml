@@ -17,7 +17,7 @@ model:
   warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
   # --- Added Visualization ---
   visualization_method: "tsne" # "umap" or "tsne"
-  enable_visualization: true   # set to false to disable UMAP/TSNE plotting
+  enable_visualization: true
   tsne_viz_dir: "results/tsne_plots"
   umap_viz_dir: "results/umap_plots"
 

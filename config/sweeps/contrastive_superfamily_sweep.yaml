@@ -1,3 +1,5 @@
+# run with: wandb sweep config/sweeps/contrastive_superfamily_sweep.yaml
+# wandb agent <SWEEP_ID>
 program: contrasted/train.py
 method: bayes
 project: CATHe-Contrastive-Hierarchical
