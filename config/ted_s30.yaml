@@ -39,7 +39,6 @@ training:
   precision: "16-mixed"
 
   # Output paths
-  output_dir: "outputs"
-  checkpoint_dir: "${training.output_dir}/checkpoints"
-  log_dir: "${training.output_dir}/logs"
+  output_dir: "outputs_cathe"
+
   

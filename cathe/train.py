@@ -22,10 +22,11 @@ def create_output_dirs(cfg: DictConfig) -> dict[str, Path]:
     Create root and checkpoint directories as specified in cfg and return their paths.
     """
     root = Path(cfg.training.output_dir)
-    ckpt = Path(cfg.training.checkpoint_dir)
-    for p in (root, ckpt):
+    ckpt = root / "checkpoints"
+    wandb = root / "wandb"
+    for p in (root, ckpt, wandb):
         p.mkdir(parents=True, exist_ok=True)
-    return {"root": root, "ckpt": ckpt}
+    return {"root": root, "ckpt": ckpt, "wandb": wandb}
 
 def setup_callbacks(cfg: DictConfig, ckpt_dir: Path) -> list:
     """Essential callbacks with dynamic metric handling"""
@@ -85,12 +86,13 @@ def build_model(cfg: DictConfig, num_classes: int) -> CATHeClassifier:
         weight_decay=cfg.model.weight_decay,
     )
 
-def build_logger(cfg: DictConfig) -> WandbLogger:
+def build_logger(cfg: DictConfig, wandb_dir: Path) -> WandbLogger:
     """Configure and return a WandbLogger."""
     wandb_logger = WandbLogger(
         project="CATHe",
         log_model=True,
-        config=OmegaConf.to_container(cfg, resolve=True)
+        config=OmegaConf.to_container(cfg, resolve=True),
+        save_dir=str(wandb_dir)
     )
     return wandb_logger
 
@@ -110,7 +112,7 @@ def main(cfg: DictConfig) -> None:
 
     # Callbacks and logger
     callbacks = setup_callbacks(cfg, dirs["ckpt"])
-    wandb_logger = build_logger(cfg)
+    wandb_logger = build_logger(cfg, dirs["wandb"])
 
     # Trainer setup and execution
     trainer = setup_trainer(cfg, wandb_logger, dirs["root"], callbacks)
