@@ -21,7 +21,7 @@ def create_output_dirs(cfg: DictConfig) -> dict[str, Path]:
     """
     Create root and checkpoint directories as specified in cfg and return their paths.
     """
-    root = Path(cfg.training.output_dir)
+    root = Path(hydra.utils.get_original_cwd()) / cfg.training.output_dir
     ckpt = root / "checkpoints"
     wandb = root / "wandb"
     for p in (root, ckpt, wandb):
