@@ -117,6 +117,8 @@ class CATHeDataModule(L.LightningDataModule):
                 beta=self.sampling_beta
             )
             
+            # Log class distribution statistics
+            class_counts = torch.bincount(self.datasets["train"].labels)
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
