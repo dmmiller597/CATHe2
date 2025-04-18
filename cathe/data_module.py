@@ -87,15 +87,22 @@ class CATHeDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.sampling_beta = sampling_beta
         self.datasets: Dict[str, CATHeDataset] = {}
-
-    def balanced_class_sampler(self, labels, beta):
-        print(f"Using sampling_beta: {beta}")
-        class_counts = torch.bincount(labels)
-        print(f"Class counts: {class_counts}")
-        # Log min/max/mean of calculated weights
-        weights = (1.0 - beta) + beta * (1.0 / class_counts[labels])
-        print(f"Weight stats: min={weights.min()}, max={weights.max()}, mean={weights.mean()}")
-        return WeightedRandomSampler(weights, len(weights))
+        # Infer number of classes and initialize train sampler immediately
+        train_labels_path = self.data_dir / self.train_labels
+        try:
+            df = pd.read_csv(train_labels_path)
+            codes = pd.Categorical(df['SF']).codes
+            self.num_classes = int(df['SF'].nunique())
+            # compute inverse-frequency weights
+            counts = np.bincount(codes)
+            weights = (1.0 - self.sampling_beta) + self.sampling_beta * (1.0 / counts[codes])
+            sampler_weights = torch.tensor(weights, dtype=torch.double)
+            self.train_sampler = WeightedRandomSampler(sampler_weights, len(sampler_weights))
+            log.info(f"Initialized {self.num_classes} classes and sampler from {train_labels_path}")
+        except Exception as e:
+            log.warning(f"Failed to infer num_classes or sampler: {e}")
+            self.num_classes = None
+            self.train_sampler = None
 
     def setup(self, stage: Optional[str] = None):
         """Set up datasets for each stage of training."""
@@ -108,15 +115,7 @@ class CATHeDataModule(L.LightningDataModule):
                 self.data_dir / self.val_embeddings,
                 self.data_dir / self.val_labels
             )
-            # Store number of classes for model configuration
-            self.num_classes = len(pd.read_csv(self.data_dir / self.train_labels)['SF'].unique())
-            
-            # Create balanced class sampler for training
-            self.train_sampler = self.balanced_class_sampler(
-                self.datasets["train"].labels,
-                beta=self.sampling_beta
-            )
-            
+            # num_classes and train_sampler are already initialized in __init__
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
