@@ -16,13 +16,19 @@ def create_level_dirs(base_output_dir: Path, cath_level: int, level_suffix: str)
     """
     Create directories for a given CATH level and return their paths.
     """
-    dirs = {
-        "root": base_output_dir / f"level_{cath_level}_{level_suffix}",
-        "ckpt": base_output_dir / f"level_{cath_level}_{level_suffix}" / "checkpoints",
-        "logs": base_output_dir / f"level_{cath_level}_{level_suffix}" / "logs",
-        "tsne": base_output_dir / f"level_{cath_level}_{level_suffix}" / "tsne_plots",
-        "umap": base_output_dir / f"level_{cath_level}_{level_suffix}" / "umap_plots",
+    # define the root directory for this level
+    level_dir = base_output_dir / f"level_{cath_level}_{level_suffix}"
+    # mapping of directory keys to subfolder names (empty for root)
+    subdirs = {
+        "root": "",
+        "ckpt": "checkpoints",
+        "logs": "logs",
+        "tsne": "tsne_plots",
+        "umap": "umap_plots",
     }
+    # build full paths using a dict comprehension
+    dirs = {key: (level_dir / sub if sub else level_dir) for key, sub in subdirs.items()}
+    # create all directories
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
     return dirs
