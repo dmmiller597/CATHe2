@@ -117,14 +117,6 @@ class CATHeDataModule(L.LightningDataModule):
                 beta=self.sampling_beta
             )
             
-            # Log class distribution statistics
-            class_counts = torch.bincount(self.datasets["train"].labels)
-            log.info(f"Training set class statistics:")
-            log.info(f"  - Total classes: {len(class_counts)}")
-            log.info(f"  - Min class size: {class_counts.min().item()}")
-            log.info(f"  - Median class size: {torch.median(class_counts.float()).item():.1f}")
-            log.info(f"  - Mean class size: {class_counts.float().mean().item():.1f}")
-            log.info(f"  - Max class size: {class_counts.max().item()}")
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
