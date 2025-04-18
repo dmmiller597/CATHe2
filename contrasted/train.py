@@ -148,7 +148,7 @@ def train_one_level(
     dm = build_datamodule(cfg, cath_level)
     model = build_model(cfg, dirs, last_ckpt)
     callbacks = build_callbacks(cfg, dirs["ckpt"], level_suffix)
-    logger = build_logger(cfg, cath_level, level_suffix)
+    logger = build_logger(cfg, dirs["root"], cath_level, level_suffix)
 
     trainer = L.Trainer(
         accelerator="auto",
