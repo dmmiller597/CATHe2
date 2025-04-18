@@ -103,6 +103,7 @@ class ContrastiveCATHeModel(L.LightningModule):
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
         visualization_method: str = "tsne",
+        enable_visualization: bool = True,
         tsne_viz_dir: str = "results/tsne_plots",
         umap_viz_dir: str = "results/umap_plots",
         temperature: float = 0.07,
@@ -115,7 +116,7 @@ class ContrastiveCATHeModel(L.LightningModule):
             raise ValueError("warmup_start_factor must be > 0 and <= 1.0")
         if self.hparams.warmup_epochs < 0:
             raise ValueError("warmup_epochs cannot be negative.")
-        if self.hparams.visualization_method not in ("umap", "tsne"):
+        if self.hparams.enable_visualization and self.hparams.visualization_method not in ("umap", "tsne"):
             raise ValueError("visualization_method must be 'umap' or 'tsne'.")
 
         # Model components
@@ -135,9 +136,10 @@ class ContrastiveCATHeModel(L.LightningModule):
         self._val_outputs: List[Dict[str, Tensor]] = []
         self._test_outputs: List[Dict[str, Tensor]] = []
 
-        # Ensure viz dirs exist
-        os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
-        os.makedirs(self.hparams.umap_viz_dir, exist_ok=True)
+        # Ensure viz dirs exist if enabled
+        if self.hparams.enable_visualization:
+            os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
+            os.makedirs(self.hparams.umap_viz_dir, exist_ok=True)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.projection(x)
@@ -236,6 +238,7 @@ class ContrastiveCATHeModel(L.LightningModule):
                 and not self.trainer.sanity_checking
                 and self.current_epoch > 0
                 and self.current_epoch % 10 == 0
+                and self.hparams.enable_visualization
             ):
 
                 log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs_cpu.size(0)})")

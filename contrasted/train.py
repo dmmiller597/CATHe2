@@ -115,7 +115,7 @@ def build_logger(cfg: DictConfig, log_dir: Path, cath_level: int, level_suffix: 
     wandb_logger = WandbLogger(
         project="CATHe-Contrastive-Hierarchical",
         name=level_suffix,
-        save_dir="/tmp/wandb",
+        save_dir=str(log_dir),
         log_model=False,
         config=OmegaConf.to_container(cfg, resolve=True),
     )

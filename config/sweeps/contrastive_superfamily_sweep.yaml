@@ -24,6 +24,9 @@ parameters:
   model.output_dim:
     values: [128, 256, 512]
 
+  model.enable_visualization:
+    value: false
+
 # Command to launch training at level 3 only
 command:
   - ${env}
