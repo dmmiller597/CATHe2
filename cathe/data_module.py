@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import lightning as L
 from typing import Optional, Dict, Any, Tuple
@@ -13,12 +14,13 @@ log = get_logger()
 class CATHeDataset(Dataset):
     """Dataset class for CATH superfamily classification."""
     
-    def __init__(self, embeddings_path: Path, labels_path: Path):
+    def __init__(self, embeddings_path: Path, labels_path: Path, label_encoder: LabelEncoder = None):
         """Initialize dataset with protein embeddings and their corresponding labels.
         
         Args:
             embeddings_path: Path to NPZ file containing ProtT5 embeddings
             labels_path: Path to CSV file containing SF labels
+            label_encoder: LabelEncoder for consistent label indexing
         """
         try:
             data = np.load(embeddings_path)
@@ -30,7 +32,10 @@ class CATHeDataset(Dataset):
             else:
                 self.embeddings = data['embeddings']
                 print("using embeddings key for TED dataset")
-            codes = pd.Categorical(labels_df['SF']).codes
+            if label_encoder is not None:
+                codes = label_encoder.transform(labels_df['SF'])
+            else:
+                codes = pd.Categorical(labels_df['SF']).codes
             self.labels = torch.tensor(codes, dtype=torch.long)
         except Exception as e:
             log.error(f"Error loading data: {e}")
@@ -91,8 +96,10 @@ class CATHeDataModule(L.LightningDataModule):
         train_labels_path = self.data_dir / self.train_labels
         try:
             df = pd.read_csv(train_labels_path)
-            codes = pd.Categorical(df['SF']).codes
-            self.num_classes = int(df['SF'].nunique())
+            # Fit a single LabelEncoder on training labels for consistent mapping
+            self.label_encoder = LabelEncoder().fit(df['SF'])
+            codes = self.label_encoder.transform(df['SF'])
+            self.num_classes = len(self.label_encoder.classes_)
             # compute inverse-frequency weights
             counts = np.bincount(codes)
             weights = (1.0 - self.sampling_beta) + self.sampling_beta * (1.0 / counts[codes])
@@ -109,18 +116,21 @@ class CATHeDataModule(L.LightningDataModule):
         if stage in (None, "fit"):
             self.datasets["train"] = CATHeDataset(
                 self.data_dir / self.train_embeddings,
-                self.data_dir / self.train_labels
+                self.data_dir / self.train_labels,
+                label_encoder=self.label_encoder
             )
             self.datasets["val"] = CATHeDataset(
                 self.data_dir / self.val_embeddings,
-                self.data_dir / self.val_labels
+                self.data_dir / self.val_labels,
+                label_encoder=self.label_encoder
             )
             # num_classes and train_sampler are already initialized in __init__
             
         if stage == "test" and self.test_embeddings and self.test_labels:
             self.datasets["test"] = CATHeDataset(
                 self.data_dir / self.test_embeddings,
-                self.data_dir / self.test_labels
+                self.data_dir / self.test_labels,
+                label_encoder=self.label_encoder
             )
 
     def train_dataloader(self) -> DataLoader:
