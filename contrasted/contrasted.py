@@ -1,6 +1,7 @@
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -236,12 +237,16 @@ class ContrastiveCATHeModel(L.LightningModule):
                 and self.current_epoch > 0
                 and self.current_epoch % 10 == 0
             ):
+
                 log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs_cpu.size(0)})")
+                start_time = time.time()
                 if self.hparams.visualization_method == 'umap':
                     generate_umap_plot(self, embs_cpu, labs_cpu)
                 else:
                     generate_tsne_plot(self, embs_cpu, labs_cpu)
-            # troid metrics (memory-efficient)
+                elapsed = time.time() - start_time
+                log.info(f"Visualization completed in {elapsed:.2f} seconds.")
+            # centroid metrics (memory-efficient)
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
