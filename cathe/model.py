@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import lightning as L
 from typing import List, Dict, Any, Tuple
-from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
 import numpy as np
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, matthews_corrcoef, precision_score, recall_score, f1_score
@@ -73,13 +72,8 @@ class CATHeClassifier(L.LightningModule):
         self.model = nn.Sequential(*layers)
         self._init_weights()
 
-        # Define metrics - avoid using full num_classes for torchmetrics initialization
-        # This prevents large confusion matrices from being created in GPU memory
+
         self.num_classes = num_classes
-        
-        # Use MeanMetric for tracking loss values
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric().to('cpu')
         
         # Buffers for storing predictions and targets for epoch-end metrics
         self._val_outputs: List[Dict[str, torch.Tensor]] = []
@@ -116,12 +110,8 @@ class CATHeClassifier(L.LightningModule):
         x, y = batch
         logits, loss, preds = self.model_step(batch)
         
-        # Track loss during training - move to CPU first
-        self.train_loss(loss.detach().cpu())
-        
-        # Log with less frequency
-        if batch_idx % 50 == 0:  # Adjust logging frequency as needed
-            self.log("train/loss", loss, on_step=True, on_epoch=False, prog_bar=False)
+        # Log training loss aggregated over epoch
+        self.log("train/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         
         return loss
 
@@ -134,8 +124,8 @@ class CATHeClassifier(L.LightningModule):
         labels_cpu = y.detach().cpu()
         loss_cpu = loss.detach().cpu()
 
-        # Update loss metric
-        self.val_loss(loss_cpu)
+        # Log validation loss aggregated over epoch
+        self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         # Store for end-of-epoch metric calculation
         self._val_outputs.append({"preds": preds_cpu, "labels": labels_cpu})
@@ -151,28 +141,18 @@ class CATHeClassifier(L.LightningModule):
         # Store for end-of-epoch calculation
         self._test_outputs.append({"preds": preds_cpu, "labels": labels_cpu})
 
-    def on_train_epoch_end(self) -> None:
-        # Only log training loss for efficiency
-        train_loss = self.train_loss.compute()
-        self.log("train/loss_epoch", train_loss, prog_bar=True)
-        self.train_loss.reset()
-
     def on_validation_epoch_end(self) -> None:
-        val_loss = self.val_loss.compute()
-
         # Aggregate predictions and labels
         preds_cpu = torch.cat([o["preds"] for o in self._val_outputs]).numpy()
         labels_cpu = torch.cat([o["labels"] for o in self._val_outputs]).numpy()
 
         # Compute metrics
         metrics = compute_classification_metrics(preds_cpu, labels_cpu, stage="val")
-        metrics["val/loss"] = val_loss
 
         # Log metrics
         self.log_dict(metrics, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         # Reset for next epoch
-        self.val_loss.reset()
         self._val_outputs.clear()
 
     def on_test_epoch_end(self) -> None:
