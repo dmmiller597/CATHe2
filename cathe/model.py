@@ -6,6 +6,7 @@ from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, 
 import torch.nn.functional as F
 import numpy as np
 from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
+from torch.optim.lr_scheduler import OneCycleLR
 
 class CATHeClassifier(pl.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -18,7 +19,6 @@ class CATHeClassifier(pl.LightningModule):
         dropout: float,
         learning_rate: float,
         weight_decay: float,
-        lr_scheduler: Dict[str, Any]
     ):
         """
         Initialize the CATH classifier.
@@ -30,7 +30,6 @@ class CATHeClassifier(pl.LightningModule):
             dropout: Dropout probability
             learning_rate: Learning rate for optimizer
             weight_decay: Weight decay (L2 regularization) for optimizer
-            lr_scheduler: Learning rate scheduler configuration
         """
         super().__init__()
         self.save_hyperparameters()
@@ -211,24 +210,17 @@ class CATHeClassifier(pl.LightningModule):
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
-        
-        # Use a simple ReduceLROnPlateau scheduler
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        # Use OneCycleLR scheduler over the estimated total training steps
+        scheduler = OneCycleLR(
             optimizer,
-            mode=self.hparams.lr_scheduler["mode"],
-            factor=self.hparams.lr_scheduler["factor"],
-            patience=self.hparams.lr_scheduler["patience"],
-            min_lr=self.hparams.lr_scheduler["min_lr"]
+            max_lr=self.hparams.learning_rate,
+            total_steps=self.trainer.estimated_stepping_batches
         )
-        
-        # Return a simple scheduler configuration
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": self.hparams.lr_scheduler["monitor"],
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": True
+                "interval": "step",
+                "frequency": 1
             }
         }

@@ -15,14 +15,6 @@ model:
   learning_rate: 1e-4
   weight_decay: 5e-5
 
-  # Learning rate scheduler (ReduceLROnPlateau)
-  lr_scheduler:
-    monitor: "val/balanced_acc"  # Metric to monitor for lr reduction
-    mode: "max"                  # Reduce LR when metric stops increasing
-    factor: 0.5                  # Multiply LR by this factor when plateauing
-    patience: 5                  # Number of epochs with no improvement after which LR will be reduced
-    min_lr: 1e-8                 # Lower bound on the learning rate
-
 training:
   # Training parameters
   batch_size: 512

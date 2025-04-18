@@ -8,7 +8,7 @@ from pathlib import Path
 
 from utils import get_logger, set_seed, configure_logging
 from data import ContrastiveDataModule, CATH_LEVEL_NAMES
-from contrasted import ContrastiveCATHeModel
+from model import ContrastiveCATHeModel
 
 log = get_logger(__name__)
 
