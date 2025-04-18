@@ -84,7 +84,6 @@ def build_model(cfg: DictConfig, num_classes: int) -> CATHeClassifier:
         dropout=cfg.model.dropout,
         learning_rate=cfg.model.learning_rate,
         weight_decay=cfg.model.weight_decay,
-        lr_scheduler=cfg.model.lr_scheduler
     )
 
 def build_logger(cfg: DictConfig) -> WandbLogger:

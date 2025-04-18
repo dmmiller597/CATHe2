@@ -5,16 +5,13 @@ defaults:
 model:
   # Architecture
   embedding_dim: ${data.embedding_dim}
-  projection_dims: [1024]  # Increase capacity for 3000 classes
-  output_dim: 128  # Increase from 128 for better class separation
+  projection_dims: [1024]
+  output_dim: 128
   dropout: 0.3
   # Optimization
   learning_rate: 1e-4
   weight_decay: 1e-4
   temperature: 0.07
-  # --- Added Warmup ---
-  warmup_epochs: 5       # Number of epochs for linear warmup
-  warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
   # --- Added Visualization ---
   visualization_method: "tsne" # "umap" or "tsne"
   enable_visualization: true
@@ -23,7 +20,7 @@ model:
 
 training:
   # Training parameters
-  batch_size: 1024  # large batch size for better triplet mining
+  batch_size: 1024
   max_epochs: 100
   accumulate_grad_batches: 1
   cath_levels: [0, 1, 2, 3] # <--- (0=C, 1=A, 2=T, 3=H)
