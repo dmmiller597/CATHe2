@@ -179,14 +179,14 @@ class ContrastiveCATHeModel(L.LightningModule):
         if m:
             # filter out NaN metrics
             loggable = {k: v for k, v in m.items() if not (isinstance(v, float) and np.isnan(v))}
-            self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
     def on_test_epoch_end(self) -> None:
         m = self._shared_epoch_end(self._test_outputs, 'test')
         if m:
             # filter out NaN metrics
             loggable = {k: v for k, v in m.items() if not (isinstance(v, float) and np.isnan(v))}
-            self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
     def configure_optimizers(self) -> Any:
         optimizer = torch.optim.AdamW(
