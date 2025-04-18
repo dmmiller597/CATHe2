@@ -12,8 +12,8 @@ import torch
 from pathlib import Path
 
 from utils import get_logger, set_seed
-from data.data_module import CATHeDataModule
-from models.classifier import CATHeClassifier
+from cathe.data_module import CATHeDataModule
+from cathe.model import CATHeClassifier
 
 log = get_logger()
 
