@@ -1,0 +1,33 @@
+program: contrasted/train.py
+method: bayes
+project: CATHe-Contrastive-Hierarchical
+name: Superfamily_Temp_LR_Proj_Sweep
+metric:
+  name: val/centroid_f1_macro
+  goal: maximize
+
+# Hyperparameters to search
+parameters:
+  model.temperature:
+    distribution: uniform
+    min: 0.01
+    max: 0.5
+
+  model.learning_rate:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+
+  model.projection_dims:
+    values: [[512], [1024], [2048]]
+
+  model.output_dim:
+    values: [128, 256, 512]
+
+# Command to launch training at level 3 only
+command:
+  - ${env}
+  - python
+  - ${program}
+  - training.cath_levels=[3]
+  - ${args_no_hyphens} 

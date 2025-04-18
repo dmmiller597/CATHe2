@@ -8,11 +8,10 @@ model:
   projection_dims: [1024]  # Increase capacity for 3000 classes
   output_dim: 128  # Increase from 128 for better class separation
   dropout: 0.3
-  #n_neighbors: 1  # take closest neighbor
-  #val_max_samples: 10000 # Increased from 10k
   # Optimization
   learning_rate: 1e-4
   weight_decay: 1e-4
+  temperature: 0.07
   # --- Added Warmup ---
   warmup_epochs: 5       # Number of epochs for linear warmup
   warmup_start_factor: 0.1 # Start LR = learning_rate * warmup_start_factor
@@ -26,12 +25,12 @@ training:
   batch_size: 1024  # large batch size for better triplet mining
   max_epochs: 100
   accumulate_grad_batches: 1
-  cath_levels: [0, 1, 2, 3] # <--- ADD THIS LINE (0=C, 1=A, 2=T, 3=H)
+  cath_levels: [0, 1, 2, 3] # <--- (0=C, 1=A, 2=T, 3=H)
 
   # Monitoring
-  monitor_metric: "val/loss"
-  monitor_mode: "min"
-  early_stopping_patience: 10 # Keep original patience
+  monitor_metric: "val/centroid_f1_macro"
+  monitor_mode: "max"
+  early_stopping_patience: 10
   log_every_n_steps: 100
 
   # Hardware configuration
@@ -47,5 +46,3 @@ training:
 
   # Output paths - These will be dynamically modified per level
   output_dir: "outputs_contrastive_hierarchical" # Base output directory
-  # checkpoint_dir: "${training.output_dir}/checkpoints" # Will be set in code
-  # log_dir: "${training.output_dir}/logs" # Will be set in code 
