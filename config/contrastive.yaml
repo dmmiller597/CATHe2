@@ -31,7 +31,7 @@ training:
   # Monitoring
   monitor_metric: "val/loss"
   monitor_mode: "min"
-  early_stopping_patience: 20 # Keep original patience
+  early_stopping_patience: 10 # Keep original patience
   log_every_n_steps: 100
 
   # Hardware configuration
