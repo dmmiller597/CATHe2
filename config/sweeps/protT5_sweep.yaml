@@ -1,4 +1,4 @@
-# run with: wandb sweep config/sweeps/prot_t5_sweep.yaml
+# run with: wandb sweep config/sweeps/protT5_sweep.yaml
 # wandb agent <SWEEP_ID>
 program: cathe/train.py
 method: bayes
@@ -28,5 +28,5 @@ command:
   - ${env}
   - python
   - ${program}
-  - "data=prot_t5"
+  - "data=protT5"
   - ${args_no_hyphens}
