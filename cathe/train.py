@@ -73,6 +73,7 @@ def build_datamodule(cfg: DictConfig) -> CATHeDataModule:
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers
     )
+    dm.setup()  # initialize datasets in order to set num_classes
     return dm
 
 def build_model(cfg: DictConfig, num_classes: int) -> CATHeClassifier:
