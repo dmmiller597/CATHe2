@@ -71,8 +71,6 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path], last_ckpt: str | None) -
             dropout=cfg.model.dropout,
             learning_rate=cfg.model.learning_rate,
             weight_decay=cfg.model.weight_decay,
-            warmup_epochs=cfg.model.warmup_epochs,
-            warmup_start_factor=cfg.model.warmup_start_factor,
             visualization_method=cfg.model.visualization_method,
             enable_visualization=cfg.model.enable_visualization,
             seed=cfg.training.seed,
