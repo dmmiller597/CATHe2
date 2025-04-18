@@ -20,9 +20,6 @@ parameters:
     min: 1e-5
     max: 1e-3
 
-  model.projection_dims:
-    values: [[512], [1024], [2048]]
-
   model.output_dim:
     values: [128, 256, 512]
 
