@@ -9,12 +9,12 @@ metric:
 parameters:
   model.learning_rate:
     distribution: log_uniform_values
-    min: 0.00001
-    max: 0.01
+    min: 1e-5
+    max: 1e-3
   model.weight_decay:
     distribution: log_uniform_values
-    min: 0.000001
-    max: 0.001
+    min: 1e-5
+    max: 1e-3
   model.dropout:
     distribution: uniform
     min: 0.1

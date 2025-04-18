@@ -5,8 +5,29 @@ from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
 import numpy as np
-from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, matthews_corrcoef, precision_score, recall_score, f1_score
 from torch.optim.lr_scheduler import OneCycleLR
+
+# Define helper for classification metrics (CPU-based)
+def compute_classification_metrics(
+    preds: np.ndarray,
+    targets: np.ndarray,
+    stage: str
+) -> Dict[str, float]:
+    """Computes classification metrics entirely on CPU."""
+    metrics: Dict[str, float] = {}
+    try:
+        metrics[f"{stage}/acc"] = accuracy_score(targets, preds)
+        metrics[f"{stage}/balanced_acc"] = balanced_accuracy_score(targets, preds)
+        metrics[f"{stage}/precision"] = precision_score(targets, preds, average="macro", zero_division=0)
+        metrics[f"{stage}/recall"] = recall_score(targets, preds, average="macro", zero_division=0)
+        metrics[f"{stage}/f1"] = f1_score(targets, preds, average="macro", zero_division=0)
+        metrics[f"{stage}/mcc"] = matthews_corrcoef(targets, preds)
+    except Exception as e:
+        print(f"{stage} metric calculation failed: {e}")
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1", "mcc"):
+            metrics[f"{stage}/{name}"] = 0.0
+    return metrics
 
 class CATHeClassifier(L.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
@@ -60,11 +81,9 @@ class CATHeClassifier(L.LightningModule):
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric().to('cpu')
         
-        # Create prediction and target buffers for custom metric calculation
-        self.val_preds = []
-        self.val_targets = []
-        self.test_preds = []
-        self.test_targets = []
+        # Buffers for storing predictions and targets for epoch-end metrics
+        self._val_outputs: List[Dict[str, torch.Tensor]] = []
+        self._test_outputs: List[Dict[str, torch.Tensor]] = []
         
         # Loss criterion
         self.criterion = nn.CrossEntropyLoss()
@@ -112,15 +131,14 @@ class CATHeClassifier(L.LightningModule):
         
         # Move tensors to CPU to save memory and store as tensors
         preds_cpu = preds.detach().cpu()
-        y_cpu = y.detach().cpu()
+        labels_cpu = y.detach().cpu()
         loss_cpu = loss.detach().cpu()
-        
+
         # Update loss metric
         self.val_loss(loss_cpu)
-        
-        # Store predictions and targets for end-of-epoch metric calculation
-        self.val_preds.append(preds_cpu)
-        self.val_targets.append(y_cpu)
+
+        # Store for end-of-epoch metric calculation
+        self._val_outputs.append({"preds": preds_cpu, "labels": labels_cpu})
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
@@ -128,11 +146,10 @@ class CATHeClassifier(L.LightningModule):
         
         # Move tensors to CPU to save memory and store as tensors
         preds_cpu = preds.detach().cpu()
-        y_cpu = y.detach().cpu()
-        
+        labels_cpu = y.detach().cpu()
+
         # Store for end-of-epoch calculation
-        self.test_preds.append(preds_cpu)
-        self.test_targets.append(y_cpu)
+        self._test_outputs.append({"preds": preds_cpu, "labels": labels_cpu})
 
     def on_train_epoch_end(self) -> None:
         # Only log training loss for efficiency
@@ -143,76 +160,34 @@ class CATHeClassifier(L.LightningModule):
     def on_validation_epoch_end(self) -> None:
         val_loss = self.val_loss.compute()
 
-        # Concatenate all predictions and targets
-        all_preds = torch.cat(self.val_preds).numpy()
-        all_targets = torch.cat(self.val_targets).numpy()
+        # Aggregate predictions and labels
+        preds_cpu = torch.cat([o["preds"] for o in self._val_outputs]).numpy()
+        labels_cpu = torch.cat([o["labels"] for o in self._val_outputs]).numpy()
 
-        # Calculate accuracy manually (memory efficient)
-        accuracy = np.mean(all_preds == all_targets)
+        # Compute metrics
+        metrics = compute_classification_metrics(preds_cpu, labels_cpu, stage="val")
+        metrics["val/loss"] = val_loss
 
-        # Calculate balanced accuracy manually
-        balanced_acc = balanced_accuracy_score(all_targets, all_preds)
+        # Log metrics
+        self.log_dict(metrics, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        # Calculate additional metrics
-        try:
-            f1 = f1_score(all_targets, all_preds, average='macro')
-        except Exception as e:
-            self.print(f"Val F1 calculation failed: {e}")
-            f1 = 0.0
-
-        try:
-            mcc = matthews_corrcoef(all_targets, all_preds)
-        except Exception as e:
-            self.print(f"Val MCC calculation failed: {e}")
-            mcc = 0.0
-
-        metrics = {
-            "val/loss": val_loss,
-            "val/acc": accuracy,
-            "val/balanced_acc": balanced_acc,
-            "val/f1": f1,
-            "val/mcc": mcc
-        }
-        self.log_dict(metrics, prog_bar=True, sync_dist=True)
-
-        # Reset storage
+        # Reset for next epoch
         self.val_loss.reset()
-        self.val_preds = []
-        self.val_targets = []
+        self._val_outputs.clear()
 
     def on_test_epoch_end(self) -> None:
-        # Concatenate all predictions and targets
-        all_preds = torch.cat(self.test_preds).numpy()
-        all_targets = torch.cat(self.test_targets).numpy()
-        
-        # Calculate metrics manually (memory efficient)
-        metrics = {
-            "acc": np.mean(all_preds == all_targets),
-            "balanced_acc": balanced_accuracy_score(all_targets, all_preds)
-        }
-        
-        # Only calculate F1 if requested (expensive for 3000+ classes)
-        try:
-            # Use macro averaging to handle class imbalance
-            metrics["f1"] = f1_score(all_targets, all_preds, average='macro')
-        except Exception as e:
-            self.print(f"F1 calculation failed: {str(e)}")
-        
-        # Try to calculate MCC (can be memory intensive)
-        try:
-            # Remove the 'average' parameter - matthews_corrcoef doesn't accept it
-            metrics["mcc"] = matthews_corrcoef(all_targets, all_preds)
-        except Exception as e:
-            # Use self.print instead of self.log for error messages
-            self.print(f"MCC calculation failed: {str(e)}")
-        
-        # Log all metrics
-        for name, value in metrics.items():
-            self.log(f"test/{name}", value, sync_dist=True)
-        
-        # Reset storage
-        self.test_preds = []
-        self.test_targets = []
+        # Aggregate predictions and labels
+        preds_cpu = torch.cat([o["preds"] for o in self._test_outputs]).numpy()
+        labels_cpu = torch.cat([o["labels"] for o in self._test_outputs]).numpy()
+
+        # Compute metrics
+        metrics = compute_classification_metrics(preds_cpu, labels_cpu, stage="test")
+
+        # Log metrics
+        self.log_dict(metrics, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+
+        # Reset for next epoch
+        self._test_outputs.clear()
 
     def configure_optimizers(self):
         """Configure optimizer with learning rate scheduler."""
