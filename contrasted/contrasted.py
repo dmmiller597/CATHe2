@@ -54,35 +54,36 @@ def compute_centroid_metrics(
     labels: Tensor,
     stage: str,
 ) -> Dict[str, float]:
-    """Computes nearest-centroid classification accuracy metrics."""
+    """Computes nearest‐centroid classification metrics entirely on CPU."""
     metrics: Dict[str, float] = {}
     try:
-        # detach and move to CPU to minimize GPU memory usage
-        embeddings = embeddings.detach().cpu()
-        labels = labels.detach().cpu()
-        # compute unique class centroids
-        classes = torch.unique(labels)
-        centroids = torch.stack([embeddings[labels == c].mean(dim=0) for c in classes])
-        # compute distances from embeddings to centroids
-        dist_to_centroids = pairwise_distance(embeddings, centroids)
-        # assign each embedding to nearest centroid
-        idx = torch.argmin(dist_to_centroids, dim=1)
-        pred = classes[idx]
-        # compute metrics
-        y_true = labels.numpy()
-        y_pred = pred.numpy()
-        metrics[f"{stage}/centroid_acc"] = accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-        # compute additional classification metrics
-        metrics[f"{stage}/centroid_precision"] = precision_score(y_true, y_pred, average='macro', zero_division=0)
-        metrics[f"{stage}/centroid_recall"] = recall_score(y_true, y_pred, average='macro', zero_division=0)
-        metrics[f"{stage}/centroid_f1_macro"] = f1_score(y_true, y_pred, average='macro', zero_division=0)
+        with torch.no_grad():
+            # move off GPU ASAP
+            embs = embeddings.detach().cpu()
+            labs = labels.detach().cpu()
+
+            # 1) compute one centroid per class
+            classes = torch.unique(labs)
+            centroids = torch.stack([embs[labs == c].mean(dim=0) for c in classes])
+
+            # 2) pairwise squared-euclidean distances (CPU)
+            dists = pairwise_distance(embs, centroids)
+
+            # 3) assign nearest centroid
+            preds = classes[torch.argmin(dists, dim=1)]
+
+            # 4) compute numpy/sklearn metrics
+            y_true = labs.numpy()
+            y_pred = preds.numpy()
+            metrics[f"{stage}/centroid_acc"]          = accuracy_score(y_true, y_pred)
+            metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{stage}/centroid_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{stage}/centroid_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{stage}/centroid_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
     except Exception:
-        metrics[f"{stage}/centroid_acc"] = 0.0
-        metrics[f"{stage}/centroid_balanced_acc"] = 0.0
-        metrics[f"{stage}/centroid_precision"] = 0.0
-        metrics[f"{stage}/centroid_recall"] = 0.0
-        metrics[f"{stage}/centroid_f1_macro"] = 0.0
+        # on any error, return zeros to keep training stable
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/centroid_{name}"] = 0.0
     return metrics
 
 
@@ -223,9 +224,9 @@ class ContrastiveCATHeModel(L.LightningModule):
             outputs.clear()
             return metrics
         try:
-            device = self.device
-            embs = torch.cat([o['embeddings'].to(device) for o in outputs])
-            labs = torch.cat([o['labels'].to(device) for o in outputs])
+            # Concatenate and move data to CPU before centroid computation to avoid GPU OOM
+            embs_cpu = torch.cat([o['embeddings'].detach().cpu() for o in outputs])
+            labs_cpu = torch.cat([o['labels'].detach().cpu() for o in outputs])
             # optional visualization
             if (
                 stage == 'val'
@@ -234,13 +235,13 @@ class ContrastiveCATHeModel(L.LightningModule):
                 and self.current_epoch > 0
                 and self.current_epoch % 10 == 0
             ):
-                log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs.size(0)})")
+                log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs_cpu.size(0)})")
                 if self.hparams.visualization_method == 'umap':
-                    generate_umap_plot(self, embs, labs)
+                    generate_umap_plot(self, embs_cpu, labs_cpu)
                 else:
-                    generate_tsne_plot(self, embs, labs)
+                    generate_tsne_plot(self, embs_cpu, labs_cpu)
             # troid metrics (memory-efficient)
-            metrics.update(compute_centroid_metrics(embs, labs, stage))
+            metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
