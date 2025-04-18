@@ -28,9 +28,7 @@ parameters:
 
 # Command to launch training at level 3 only
 command:
-  - TMPDIR=/tmp
   - ${env}
-  - python
-  - ${program}
-  - training.cath_levels=[3]
-  - ${args_no_hyphens} 
+  - bash
+  - -lc
+  - "TMPDIR=/tmp python ${program} training.cath_levels=[3] ${args_no_hyphens}" 
