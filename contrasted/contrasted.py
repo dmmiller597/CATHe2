@@ -57,6 +57,9 @@ def compute_centroid_metrics(
     """Computes nearest-centroid classification accuracy metrics."""
     metrics: Dict[str, float] = {}
     try:
+        # detach and move to CPU to minimize GPU memory usage
+        embeddings = embeddings.detach().cpu()
+        labels = labels.detach().cpu()
         # compute unique class centroids
         classes = torch.unique(labels)
         centroids = torch.stack([embeddings[labels == c].mean(dim=0) for c in classes])
@@ -66,8 +69,8 @@ def compute_centroid_metrics(
         idx = torch.argmin(dist_to_centroids, dim=1)
         pred = classes[idx]
         # compute metrics
-        y_true = labels.cpu().numpy()
-        y_pred = pred.cpu().numpy()
+        y_true = labels.numpy()
+        y_pred = pred.numpy()
         metrics[f"{stage}/centroid_acc"] = accuracy_score(y_true, y_pred)
         metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
         # compute additional classification metrics
