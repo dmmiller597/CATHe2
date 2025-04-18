@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-import pytorch_lightning as pl
+import lightning as L
 from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
@@ -44,7 +44,7 @@ class CATHeDataset(Dataset):
         """Get a sample from the dataset."""
         return self.embeddings[idx], self.labels[idx]
 
-class CATHeDataModule(pl.LightningDataModule):
+class CATHeDataModule(L.LightningDataModule):
     """PyTorch Lightning data module for CATH superfamily classification."""
     
     def __init__(

@@ -1,13 +1,13 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import (
+import lightning as L
+from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     EarlyStopping,
     LearningRateMonitor,
     RichProgressBar
 )
-from pytorch_lightning.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger
 import torch
 from pathlib import Path
 

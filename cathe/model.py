@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
+import lightning as L
 from typing import List, Dict, Any, Tuple
 from torchmetrics import Accuracy, F1Score, MatthewsCorrCoef, MetricCollection, MeanMetric, MaxMetric
 import torch.nn.functional as F
@@ -8,7 +8,7 @@ import numpy as np
 from sklearn.metrics import balanced_accuracy_score, f1_score, matthews_corrcoef
 from torch.optim.lr_scheduler import OneCycleLR
 
-class CATHeClassifier(pl.LightningModule):
+class CATHeClassifier(L.LightningModule):
     """PyTorch Lightning module for CATH superfamily classification."""
 
     def __init__(
