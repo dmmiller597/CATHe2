@@ -15,7 +15,7 @@ CATH_LEVEL_NAMES = {
     0: "Class",
     1: "Architecture",
     2: "Topology",
-    3: "Homologous Superfamily",
+    3: "Homologous_Superfamily",
 }
 
 

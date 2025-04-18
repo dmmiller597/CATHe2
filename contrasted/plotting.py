@@ -27,12 +27,12 @@ def generate_tsne_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         start_time = time.time()
         log.info(f"Generating PCA+t-SNE plot for epoch {self.current_epoch}")
 
-        # Set deterministic sampling seed for reproducibility across plots
-        torch.manual_seed(self.hparams.seed)
+        # Use a local Generator for reproducible sampling without altering global RNG
+        gen = torch.Generator(device=embeddings.device).manual_seed(self.hparams.seed)
 
-        # Sample for efficiency (max 10000 points)
+        # Sample for efficiency (max 10000 points) with local generator
         max_samples = 10000
-        indices = torch.randperm(len(embeddings))[:max_samples]
+        indices = torch.randperm(len(embeddings), generator=gen)[:max_samples]
         emb_subset, lbl_subset = embeddings[indices], labels[indices]
 
         # Get unique labels
@@ -139,12 +139,12 @@ def generate_umap_plot(self, embeddings: Tensor, labels: Tensor) -> None:
         start_time = time.time()
         log.info(f"Generating UMAP plot for epoch {self.current_epoch}")
 
-        # Set deterministic sampling seed for reproducibility across plots
-        torch.manual_seed(self.hparams.seed)
+        # Use a local Generator for reproducible sampling without altering global RNG
+        gen = torch.Generator(device=embeddings.device).manual_seed(self.hparams.seed)
 
-        # Sample for efficiency (max 10000 points)
+        # Sample for efficiency (max 10000 points) with local generator
         max_samples = 10000
-        indices = torch.randperm(len(embeddings))[:max_samples]
+        indices = torch.randperm(len(embeddings), generator=gen)[:max_samples]
         emb_subset, lbl_subset = embeddings[indices], labels[indices]
 
         # Get unique labels

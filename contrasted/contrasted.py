@@ -105,6 +105,7 @@ class ContrastiveCATHeModel(L.LightningModule):
         tsne_viz_dir: str = "results/tsne_plots",
         umap_viz_dir: str = "results/umap_plots",
         temperature: float = 0.07,
+        seed: int = 42,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()

@@ -69,6 +69,7 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path], last_ckpt: str | None) -
             warmup_epochs=cfg.model.warmup_epochs,
             warmup_start_factor=cfg.model.warmup_start_factor,
             visualization_method=cfg.model.visualization_method,
+            seed=cfg.training.seed,
             **vis_args,
         )
     else:
@@ -77,6 +78,7 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path], last_ckpt: str | None) -
             last_ckpt,
             strict=False,
             learning_rate=cfg.model.learning_rate,
+            seed=cfg.training.seed,
             **vis_args,
         )
 
@@ -91,7 +93,7 @@ def build_callbacks(cfg: DictConfig, ckpt_dir: Path, level_suffix: str) -> list:
         monitor=cfg.training.monitor_metric,
         mode=cfg.training.monitor_mode,
         save_top_k=1,
-        save_last=True,
+        save_last=False,
         auto_insert_metric_name=False,
     )
     early_stop_cb = EarlyStopping(
@@ -113,8 +115,8 @@ def build_logger(cfg: DictConfig, log_dir: Path, cath_level: int, level_suffix: 
     wandb_logger = WandbLogger(
         project="CATHe-Contrastive-Hierarchical",
         name=level_suffix,
-        save_dir=str(log_dir),
-        log_model=True,
+        save_dir="/tmp/wandb",
+        log_model=False,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
     wandb_logger.experiment.config.update({
