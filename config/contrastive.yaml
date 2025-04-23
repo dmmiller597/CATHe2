@@ -14,7 +14,7 @@ model:
   temperature: 0.07
   # --- Added Visualization ---
   visualization_method: "tsne" # "umap" or "tsne"
-  enable_visualization: true
+  enable_visualization: false
   tsne_viz_dir: "results/tsne_plots"
   umap_viz_dir: "results/umap_plots"
 
@@ -23,7 +23,7 @@ training:
   batch_size: 1024
   max_epochs: 100
   accumulate_grad_batches: 1
-  cath_levels: [0, 1, 2, 3] # <--- (0=C, 1=A, 2=T, 3=H)
+  cath_levels: [3] # <--- (0=C, 1=A, 2=T, 3=H)
 
   # Monitoring
   monitor_metric: "val/centroid_f1_macro"

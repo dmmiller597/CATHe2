@@ -328,9 +328,16 @@ class ContrastiveCATHeModel(L.LightningModule):
             # centroid metrics (memory-efficient) - always compute
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
             
-            # Only compute kNN metrics every 10 epochs for validation, but always for test
-            compute_knn = (stage == 'test') or (stage == 'val' and hasattr(self, 'current_epoch') and self.current_epoch % 10 == 0)
-            
+            # Compute kNN metrics every 10 epochs for validation, always for test
+            compute_knn = (
+                stage == 'test'
+                # or (
+                #     stage == 'val'
+                #     and hasattr(self, 'current_epoch')
+                #     and self.current_epoch > 0
+                #     and self.current_epoch % 10 == 0
+                # )
+            )
             if compute_knn:
                 # k-NN metrics for k=1 and k=3
                 knn_batch_size = self.hparams.knn_batch_size
