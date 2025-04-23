@@ -474,6 +474,8 @@ class ContrastiveCATHeModel(L.LightningModule):
         all_embs, all_labels = [], []
         self.eval()
         for emb, labels in train_loader:
+            # move embeddings to same device as the model (GPU/CPU)
+            emb = emb.to(self.device)
             with torch.inference_mode():
                 proj = self(emb)
             all_embs.append(proj.cpu().detach())
