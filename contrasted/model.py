@@ -129,9 +129,9 @@ def compute_knn_metrics(
             print("  [knn] knn idxs:\n", knn_idxs[:3])
             print("  [knn] neighbor labels:\n", neighbor_labels[:3])
             print("  [knn] preds:\n", preds[:3])
-    except Exception:
-        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+    except Exception as e:
+        log.error(f"Error in compute_knn_metrics(k={k}): {e}", exc_info=True)
+        raise
     return metrics
 
 
