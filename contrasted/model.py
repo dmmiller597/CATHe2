@@ -88,6 +88,46 @@ def compute_centroid_metrics(
     return metrics
 
 
+def compute_knn_metrics(
+    embeddings: Tensor,
+    labels: Tensor,
+    k: int,
+    stage: str,
+) -> Dict[str, float]:
+    """Leave‑one‑out k‑NN on the embeddings (CPU) and compute accuracy, balanced acc, precision, recall, F1."""
+    metrics = {}
+    try:
+        with torch.no_grad():
+            embs = embeddings.detach().cpu()
+            labs = labels.detach().cpu()
+
+            # a) all‑vs‑all squared‑Euclidean
+            dists = pairwise_distance(embs, embs)
+
+            # b) exclude self by setting diag to +∞
+            dists.fill_diagonal_(float("inf"))
+
+            # c) for each sample, pick the k smallest distances
+            knn_idxs = torch.topk(dists, k, largest=False).indices   # (N, k)
+
+            # d) get the neighbor labels and majority‑vote
+            neighbor_labels = labs[knn_idxs]                          # (N, k)
+            preds, _ = torch.mode(neighbor_labels, dim=1)
+
+            # e) to numpy and compute sklearn metrics
+            y_true = labs.numpy()
+            y_pred = preds.numpy()
+            metrics[f"{stage}/knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
+            metrics[f"{stage}/knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{stage}/knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    except Exception:
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+    return metrics
+
+
 class ContrastiveCATHeModel(L.LightningModule):
     """Lightning module for CATH superfamily contrastive learning."""
 
@@ -225,6 +265,10 @@ class ContrastiveCATHeModel(L.LightningModule):
             metrics[f"{stage}/centroid_precision"] = 0.0
             metrics[f"{stage}/centroid_recall"] = 0.0
             metrics[f"{stage}/centroid_f1_macro"] = 0.0
+            # Add defaults for kNN metrics too
+            for k in [1, 3]:
+                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{stage}/knn_{k}_{name}"] = 0.0
             outputs.clear()
             return metrics
         try:
@@ -251,6 +295,9 @@ class ContrastiveCATHeModel(L.LightningModule):
                 log.info(f"Visualization completed in {elapsed:.2f} seconds.")
             # centroid metrics (memory-efficient)
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+            # k-NN metrics for k=1 and k=3
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage))
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
@@ -259,6 +306,10 @@ class ContrastiveCATHeModel(L.LightningModule):
             metrics.setdefault(f"{stage}/centroid_precision", 0.0)
             metrics.setdefault(f"{stage}/centroid_recall", 0.0)
             metrics.setdefault(f"{stage}/centroid_f1_macro", 0.0)
+            # Add defaults for kNN metrics too
+            for k in [1, 3]:
+                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics.setdefault(f"{stage}/knn_{k}_{name}", 0.0)
         finally:
             outputs.clear()
         return metrics
