@@ -158,6 +158,76 @@ def compute_knn_metrics(
     return metrics
 
 
+def compute_centroid_metrics_reference(
+    test_embeddings: Tensor,
+    test_labels: Tensor,
+    ref_embeddings: Tensor,
+    ref_labels: Tensor,
+    stage: str
+) -> Dict[str, float]:
+    """Classify test points by nearest‐centroid computed from the reference (training) set."""
+    metrics: Dict[str, float] = {}
+    try:
+        classes = torch.unique(ref_labels)
+        centroids = torch.stack([ref_embeddings[ref_labels == c].mean(dim=0) for c in classes])
+        dists = pairwise_distance(test_embeddings, centroids)
+        preds = classes[torch.argmin(dists, dim=1)]
+        y_true = test_labels.numpy()
+        y_pred = preds.numpy()
+        metrics[f"{stage}/centroid_acc"]          = accuracy_score(y_true, y_pred)
+        metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+        metrics[f"{stage}/centroid_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}/centroid_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}/centroid_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    except Exception:
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/centroid_{name}"] = 0.0
+    return metrics
+
+
+def compute_knn_metrics_reference(
+    test_embeddings: Tensor,
+    test_labels: Tensor,
+    ref_embeddings: Tensor,
+    ref_labels: Tensor,
+    k: int,
+    stage: str,
+    knn_batch_size: int = 1024,
+) -> Dict[str, float]:
+    """k‑NN on test points against reference (training) embeddings."""
+    metrics: Dict[str, float] = {}
+    num_ref = ref_embeddings.size(0)
+    if num_ref <= k:
+        log.warning(f"k-NN ref skipped for k={k}, stage={stage}: only {num_ref} ref samples")
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+        return metrics
+
+    try:
+        all_preds = []
+        for i in range(0, test_embeddings.size(0), knn_batch_size):
+            batch_slice = slice(i, min(i + knn_batch_size, test_embeddings.size(0)))
+            test_batch = test_embeddings[batch_slice]
+            dists = pairwise_distance(test_batch, ref_embeddings)
+            knn_idxs = torch.topk(dists, k, largest=False).indices
+            neighbor_labels = ref_labels[knn_idxs]
+            preds_batch, _ = torch.mode(neighbor_labels, dim=1)
+            all_preds.append(preds_batch)
+        preds = torch.cat(all_preds)
+        y_true = test_labels.numpy()
+        y_pred = preds.numpy()
+        metrics[f"{stage}/knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
+        metrics[f"{stage}/knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
+        metrics[f"{stage}/knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    except Exception as e:
+        log.error(f"Error in compute_knn_metrics_reference(k={k}, stage={stage}): {e}", exc_info=True)
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+    return metrics
+
+
 class ContrastiveCATHeModel(L.LightningModule):
     """Lightning module for CATH superfamily contrastive learning."""
 
@@ -201,11 +271,15 @@ class ContrastiveCATHeModel(L.LightningModule):
         init_weights(self)
 
         # Supervised contrastive loss (drop‐in replacement)
-        self.loss_fn = SINCERELoss(temperature=self.hparams.temperature)
+        self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
 
         # Buffers for metrics
         self._val_outputs: List[Dict[str, Tensor]] = []
         self._test_outputs: List[Dict[str, Tensor]] = []
+        # Buffers for reference (training) set:
+        self._ref_embs: Optional[Tensor] = None
+        self._ref_labels: Optional[Tensor] = None
+        self._ref_built: bool = False
 
         # Ensure viz dirs exist if enabled
         if self.hparams.enable_visualization:
@@ -303,9 +377,45 @@ class ContrastiveCATHeModel(L.LightningModule):
             outputs.clear()
             return metrics
         try:
-            # Concatenate and move data to CPU before centroid computation to avoid GPU OOM
-            embs_cpu = torch.cat([o['embeddings'].detach().cpu() for o in outputs])
-            labs_cpu = torch.cat([o['labels'].detach().cpu() for o in outputs])
+            embs_cpu = torch.cat([o['embeddings'].cpu() for o in outputs])
+            labs_cpu = torch.cat([o['labels'].cpu()    for o in outputs])
+
+            if stage == 'test':
+                # centroid & kNN against TRAINING‐set cache
+                metrics.update(
+                    compute_centroid_metrics_reference(
+                        embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
+                    )
+                )
+                metrics.update(
+                    compute_knn_metrics_reference(
+                        embs_cpu, labs_cpu,
+                        self._ref_embs, self._ref_labels,
+                        1, stage, self.hparams.knn_batch_size
+                    )
+                )
+                metrics.update(
+                    compute_knn_metrics_reference(
+                        embs_cpu, labs_cpu,
+                        self._ref_embs, self._ref_labels,
+                        3, stage, self.hparams.knn_batch_size
+                    )
+                )
+            else:
+                # original self‐classification (val or sanity)
+                metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+                if (
+                    stage == 'test'
+                    or (stage == 'val' and False)  # keep your existing val‐knn logic
+                ):
+                    knn_batch_size = self.hparams.knn_batch_size
+                    log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+                    knn_start_time = time.time()
+                    metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+                    metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+                    knn_elapsed = time.time() - knn_start_time
+                    log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+
             # optional visualization
             if (
                 stage == 'val'
@@ -325,29 +435,6 @@ class ContrastiveCATHeModel(L.LightningModule):
                 elapsed = time.time() - start_time
                 log.info(f"Visualization completed in {elapsed:.2f} seconds.")
             
-            # centroid metrics (memory-efficient) - always compute
-            metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
-            
-            # Compute kNN metrics every 10 epochs for validation, always for test
-            compute_knn = (
-                stage == 'test'
-                # or (
-                #     stage == 'val'
-                #     and hasattr(self, 'current_epoch')
-                #     and self.current_epoch > 0
-                #     and self.current_epoch % 10 == 0
-                # )
-            )
-            if compute_knn:
-                # k-NN metrics for k=1 and k=3
-                knn_batch_size = self.hparams.knn_batch_size
-                log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
-                knn_start_time = time.time()
-                metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-                metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-                knn_elapsed = time.time() - knn_start_time
-                log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
-
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
@@ -373,3 +460,24 @@ class ContrastiveCATHeModel(L.LightningModule):
         with torch.inference_mode():
             out = self(x)
         return out.cpu()
+
+    def on_test_epoch_start(self) -> None:
+        """Build the training‐set embedding/label cache once before any test metrics."""
+        if not self._ref_built:
+            self._build_reference_set()
+            self._ref_built = True
+
+    def _build_reference_set(self) -> None:
+        """Run forward over the train loader to collect all normalized embeddings + labels."""
+        log.info("Building reference embeddings from train set")
+        train_loader = self.trainer.datamodule.train_dataloader()
+        all_embs, all_labels = [], []
+        self.eval()
+        for emb, labels in train_loader:
+            with torch.inference_mode():
+                proj = self(emb)
+            all_embs.append(proj.cpu().detach())
+            all_labels.append(labels.cpu().detach())
+        self.train()
+        self._ref_embs = torch.cat(all_embs, dim=0)
+        self._ref_labels = torch.cat(all_labels, dim=0)
