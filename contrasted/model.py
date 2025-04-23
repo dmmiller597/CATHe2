@@ -328,16 +328,19 @@ class ContrastiveCATHeModel(L.LightningModule):
             # centroid metrics (memory-efficient) - always compute
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
             
-            # Only compute kNN metrics every 5 epochs for validation, but always for test
-            compute_knn = (stage == 'test') or (stage == 'val' and hasattr(self, 'current_epoch') and self.current_epoch % 5 == 0)
+            # Only compute kNN metrics every 10 epochs for validation, but always for test
+            compute_knn = (stage == 'test') or (stage == 'val' and hasattr(self, 'current_epoch') and self.current_epoch % 10 == 0)
             
             if compute_knn:
                 # k-NN metrics for k=1 and k=3
                 knn_batch_size = self.hparams.knn_batch_size
                 log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+                knn_start_time = time.time()
                 metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
                 metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-                
+                knn_elapsed = time.time() - knn_start_time
+                log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
