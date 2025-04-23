@@ -387,20 +387,20 @@ class ContrastiveCATHeModel(L.LightningModule):
                         embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
                     )
                 )
-                metrics.update(
-                    compute_knn_metrics_reference(
-                        embs_cpu, labs_cpu,
-                        self._ref_embs, self._ref_labels,
-                        1, stage, self.hparams.knn_batch_size
-                    )
-                )
-                metrics.update(
-                    compute_knn_metrics_reference(
-                        embs_cpu, labs_cpu,
-                        self._ref_embs, self._ref_labels,
-                        3, stage, self.hparams.knn_batch_size
-                    )
-                )
+                # metrics.update(
+                #     compute_knn_metrics_reference(
+                #         embs_cpu, labs_cpu,
+                #         self._ref_embs, self._ref_labels,
+                #         1, stage, self.hparams.knn_batch_size
+                #     )
+                # )
+                # metrics.update(
+                #     compute_knn_metrics_reference(
+                #         embs_cpu, labs_cpu,
+                #         self._ref_embs, self._ref_labels,
+                #         3, stage, self.hparams.knn_batch_size
+                #     )
+                # )
             else:
                 # original self‐classification (val or sanity)
                 metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
