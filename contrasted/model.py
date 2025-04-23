@@ -324,12 +324,20 @@ class ContrastiveCATHeModel(L.LightningModule):
                     generate_tsne_plot(self, embs_cpu, labs_cpu)
                 elapsed = time.time() - start_time
                 log.info(f"Visualization completed in {elapsed:.2f} seconds.")
-            # centroid metrics (memory-efficient)
+            
+            # centroid metrics (memory-efficient) - always compute
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
-            # k-NN metrics for k=1 and k=3
-            knn_batch_size = self.hparams.knn_batch_size
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+            
+            # Only compute kNN metrics every 5 epochs for validation, but always for test
+            compute_knn = (stage == 'test') or (stage == 'val' and hasattr(self, 'current_epoch') and self.current_epoch % 5 == 0)
+            
+            if compute_knn:
+                # k-NN metrics for k=1 and k=3
+                knn_batch_size = self.hparams.knn_batch_size
+                log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+                metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+                metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+                
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
