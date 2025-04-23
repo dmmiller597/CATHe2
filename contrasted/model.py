@@ -122,6 +122,13 @@ def compute_knn_metrics(
             metrics[f"{stage}/knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
             metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
             metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+            # Debug prints
+            print("  [knn] emb shape:", embs.shape, "labs:", torch.unique(labs, return_counts=True))
+            print("  [knn] sample dists:\n", dists[:3, :3])
+            print("  [knn] knn idxs:\n", knn_idxs[:3])
+            print("  [knn] neighbor labels:\n", neighbor_labels[:3])
+            print("  [knn] preds:\n", preds[:3])
     except Exception:
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
             metrics[f"{stage}/knn_{k}_{name}"] = 0.0
