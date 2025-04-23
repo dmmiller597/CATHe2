@@ -67,11 +67,15 @@ class SINCERELoss(nn.Module):
         # using matrix multiply instead of cosine distance function for ~10x cost reduction
         logits = embeds @ embeds.T
         logits /= self.temperature
+        # Cast logits to float32 to ensure stable calculations with mixed precision
+        logits = logits.float()
+        
         # determine which logits are between embeds of the same label (B, B)
         same_label = labels.unsqueeze(0) == labels.unsqueeze(1)
 
         # masking with -inf to get zeros in the summation for the softmax denominator
-        denom_activations = torch.full_like(logits, float("-inf"))
+        # Ensure operations using logits now use float32
+        denom_activations = torch.full_like(logits, float("-inf"), dtype=torch.float32) 
         denom_activations[~same_label] = logits[~same_label]
         # get logsumexp of the logits between embeds of different labels for each row (B,)
         base_denom_row = torch.logsumexp(denom_activations, dim=0)
@@ -86,11 +90,14 @@ class SINCERELoss(nn.Module):
         # count numerator terms for averaging (B,)
         numer_count = in_numer.sum(dim=0).clamp(min=1)
         # numerator activations with others zeroed (B, B)
-        numer_logits = torch.zeros_like(logits)
+        # Ensure operations using logits now use float32
+        numer_logits = torch.zeros_like(logits, dtype=torch.float32)
         numer_logits[in_numer] = logits[in_numer]
 
         # construct denominator term for each numerator via logsumexp over a stack (B, B)
-        log_denom = torch.zeros_like(logits)
+        # Ensure operations using logits now use float32
+        log_denom = torch.zeros_like(logits, dtype=torch.float32)
+        # Stacking should now work as inputs are float32
         log_denom[in_numer] = torch.stack(
             (numer_logits[in_numer], base_denom[in_numer]), dim=0).logsumexp(dim=0)
 
