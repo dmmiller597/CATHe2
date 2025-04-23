@@ -11,6 +11,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import OneCycleLR
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
+from torch.utils.data import TensorDataset, DataLoader
 
 from utils import get_logger
 from distances import pairwise_distance
@@ -93,28 +94,49 @@ def compute_knn_metrics(
     labels: Tensor,
     k: int,
     stage: str,
+    knn_batch_size: int = 1024,
+    num_workers: int = 0
 ) -> Dict[str, float]:
-    """Leave‑one‑out k‑NN on the embeddings (CPU) and compute accuracy, balanced acc, precision, recall, F1."""
+    """Leave‑one‑out k‑NN on the embeddings (CPU), batched for memory efficiency."""
     metrics = {}
+    n_samples = embeddings.size(0)
+    if n_samples <= k:
+        log.warning(f"k-NN computation skipped for k={k}, stage={stage}: Not enough samples ({n_samples})")
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+             metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+        return metrics
+
     try:
         with torch.no_grad():
             embs = embeddings.detach().cpu()
             labs = labels.detach().cpu()
+            all_preds = []
 
-            # a) all‑vs‑all squared‑Euclidean
-            dists = pairwise_distance(embs, embs)
+            # Process in batches to avoid large N x N matrix
+            for i in range(0, n_samples, knn_batch_size):
+                batch_indices = range(i, min(i + knn_batch_size, n_samples))
+                embs_batch = embs[batch_indices]
 
-            # b) exclude self by setting diag to +∞
-            dists.fill_diagonal_(float("inf"))
+                # Compute distances between batch and all samples
+                dists_batch = pairwise_distance(embs_batch, embs) # Shape: [batch_size, n_samples]
 
-            # c) for each sample, pick the k smallest distances
-            knn_idxs = torch.topk(dists, k, largest=False).indices   # (N, k)
+                # Exclude self-distances within the batch vs its position in the full set
+                for batch_idx, global_idx in enumerate(batch_indices):
+                    if global_idx < dists_batch.shape[1]: # Ensure index is valid
+                        dists_batch[batch_idx, global_idx] = float("inf")
 
-            # d) get the neighbor labels and majority‑vote
-            neighbor_labels = labs[knn_idxs]                          # (N, k)
-            preds, _ = torch.mode(neighbor_labels, dim=1)
+                # Find k-nearest neighbors for the current batch
+                knn_idxs_batch = torch.topk(dists_batch, k, largest=False).indices # Shape: [batch_size, k]
 
-            # e) to numpy and compute sklearn metrics
+                # Get neighbor labels and majority vote for the batch
+                neighbor_labels_batch = labs[knn_idxs_batch] # Shape: [batch_size, k]
+                preds_batch, _ = torch.mode(neighbor_labels_batch, dim=1) # Shape: [batch_size]
+                all_preds.append(preds_batch)
+
+            # Concatenate predictions from all batches
+            preds = torch.cat(all_preds)
+
+            # Compute sklearn metrics
             y_true = labs.numpy()
             y_pred = preds.numpy()
             metrics[f"{stage}/knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
@@ -123,15 +145,16 @@ def compute_knn_metrics(
             metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
             metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
-            # Debug prints
-            print("  [knn] emb shape:", embs.shape, "labs:", torch.unique(labs, return_counts=True))
-            print("  [knn] sample dists:\n", dists[:3, :3])
-            print("  [knn] knn idxs:\n", knn_idxs[:3])
-            print("  [knn] neighbor labels:\n", neighbor_labels[:3])
-            print("  [knn] preds:\n", preds[:3])
+            # Optional: Keep limited debug prints if helpful
+            # print(f"  [knn k={k} batch {i//knn_batch_size}] preds_batch sample:", preds_batch[:3])
+
     except Exception as e:
-        log.error(f"Error in compute_knn_metrics(k={k}): {e}", exc_info=True)
-        raise
+        log.error(f"Error in compute_knn_metrics(k={k}, stage={stage}): {e}", exc_info=True)
+        # Ensure metrics dictionary exists and provide defaults on error
+        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+        # Optionally re-raise if you want training to stop on metric calculation errors
+        # raise e
     return metrics
 
 
@@ -155,6 +178,7 @@ class ContrastiveCATHeModel(L.LightningModule):
         umap_viz_dir: str = "results/umap_plots",
         temperature: float = 0.07,
         seed: int = 42,
+        knn_batch_size: int = 1024,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -303,8 +327,9 @@ class ContrastiveCATHeModel(L.LightningModule):
             # centroid metrics (memory-efficient)
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
             # k-NN metrics for k=1 and k=3
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage))
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage))
+            knn_batch_size = self.hparams.knn_batch_size
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
             # ensure defaults on error
