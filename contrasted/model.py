@@ -15,7 +15,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from utils import get_logger
 from distances import pairwise_distance
-from losses import SupConLoss
+from losses import SupConLoss, SINCERELoss
 from plotting import generate_tsne_plot, generate_umap_plot
 
 # Module-level logger
@@ -200,8 +200,8 @@ class ContrastiveCATHeModel(L.LightningModule):
         )
         init_weights(self)
 
-        # Supervised contrastive loss
-        self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
+        # Supervised contrastive loss (drop‐in replacement)
+        self.loss_fn = SINCERELoss(temperature=self.hparams.temperature)
 
         # Buffers for metrics
         self._val_outputs: List[Dict[str, Tensor]] = []
