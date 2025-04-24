@@ -36,7 +36,7 @@ def build_projection_network(
         layers.append(nn.Linear(current, h))
         if use_layer_norm:
             layers.append(nn.LayerNorm(h))
-        layers.append(nn.ReLU(inplace=True))
+        layers.append(nn.GELU())
         layers.append(nn.Dropout(dropout))
         current = h
     layers.append(nn.Linear(current, output_dim))
