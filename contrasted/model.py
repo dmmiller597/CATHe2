@@ -43,13 +43,13 @@ def build_projection_network(
     return nn.Sequential(*layers)
 
 
-def init_weights(module: nn.Module) -> None:
-    """Applies Kaiming Normal initialization for Linear layers."""
-    for m in module.modules():
-        if isinstance(m, nn.Linear):
-            nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+# def init_weights(module: nn.Module) -> None:
+#     """Applies Kaiming Normal initialization for Linear layers."""
+#     for m in module.modules():
+#         if isinstance(m, nn.Linear):
+#             nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
+#             if m.bias is not None:
+#                 nn.init.zeros_(m.bias)
 
 
 class ContrastiveCATHeModel(L.LightningModule):
