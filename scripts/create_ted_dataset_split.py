@@ -23,7 +23,7 @@ DEFAULT_MMSEQS_ITERS = 3
 DEFAULT_MMSEQS_SENS = 7.5
 DEFAULT_MMSEQS_COV_MODE = 0
 DEFAULT_RANDOM_SEED = 42
-DEFAULT_THREADS = 15 # Sensible default, adjust based on node cores
+DEFAULT_THREADS = 15 # adjust based on node cores
 
 # ─── UTIL: RUN SHELL COMMAND ────────────────────────────────────────────────────
 def run_cmd(cmd: List[str]) -> None:
@@ -226,6 +226,8 @@ def main():
     p.add_argument("--seed", type=int, default=DEFAULT_RANDOM_SEED)
     p.add_argument("--threads", type=int, default=DEFAULT_THREADS,
                    help="Number of CPU threads for MMSeqs2")
+    p.add_argument("--tmp_dir", type=Path, default=None,
+                   help="Directory to use for temporary files (overrides system default)")
     args = p.parse_args()
 
     # Configure logging
@@ -240,6 +242,11 @@ def main():
         sys.exit(1)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Ensure specified tmp_dir exists if provided
+    if args.tmp_dir:
+        args.tmp_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Using specified temporary directory: {args.tmp_dir}")
+
     # Load data
     logging.info("Loading input parquet...")
     df = pd.read_parquet(args.input_parquet)
@@ -250,10 +257,11 @@ def main():
     # sanitize IDs
     df["sequence_id"] = df["sequence_id"].astype(str).str.replace(r"[^A-Za-z0-9_.-]", "_", regex=True)
 
-    # Work in temp dir
-    with tempfile.TemporaryDirectory(prefix="ted_split_") as tmpd:
+    # Work in temp dir - use specified one if provided
+    # Use specified tmp_dir if provided, otherwise use system default
+    with tempfile.TemporaryDirectory(prefix="ted_split_", dir=args.tmp_dir) as tmpd:
         tmp_dir = Path(tmpd)
-        logging.info(f"Using temporary directory: {tmp_dir}")
+        logging.info(f"Actual temporary directory being used: {tmp_dir}") # Log the actual path
 
         # 1) split test & val
         test_df, val_df, train_pool = split_test_val(
