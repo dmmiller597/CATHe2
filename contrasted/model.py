@@ -8,13 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import lightning as L
 from torch import Tensor
-from torch.optim import Optimizer
 from torch.optim.lr_scheduler import OneCycleLR
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
-from torch.utils.data import TensorDataset, DataLoader
 
 from utils import get_logger
-from distances import pairwise_distance
 from losses import SupConLoss, SINCERELoss
 from plotting import generate_tsne_plot, generate_umap_plot
 from metrics import compute_centroid_metrics, compute_knn_metrics, compute_centroid_metrics_reference, compute_knn_metrics_reference
@@ -42,14 +38,6 @@ def build_projection_network(
     layers.append(nn.Linear(current, output_dim))
     return nn.Sequential(*layers)
 
-
-# def init_weights(module: nn.Module) -> None:
-#     """Applies Kaiming Normal initialization for Linear layers."""
-#     for m in module.modules():
-#         if isinstance(m, nn.Linear):
-#             nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
-#             if m.bias is not None:
-#                 nn.init.zeros_(m.bias)
 
 
 class ContrastiveCATHeModel(L.LightningModule):
@@ -92,7 +80,6 @@ class ContrastiveCATHeModel(L.LightningModule):
             dropout=self.hparams.dropout,
             use_layer_norm=self.hparams.use_layer_norm,
         )
-        init_weights(self)
 
         # Supervised contrastive loss (drop‐in replacement)
         self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
