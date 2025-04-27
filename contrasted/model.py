@@ -14,10 +14,6 @@ from utils import get_logger
 from losses import SupConLoss, SINCERELoss
 from plotting import generate_tsne_plot, generate_umap_plot
 from metrics import (
-    compute_centroid_metrics,
-    compute_knn_metrics,
-    compute_centroid_metrics_reference,
-    compute_knn_metrics_reference,
     compute_holdout_metrics,
 )
 # Module-level logger
@@ -179,26 +175,22 @@ class ContrastiveCATHeModel(L.LightningModule):
     def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str) -> Dict[str, float]:
         """Common logic for validation and test epoch ends with error handling."""
         metrics: Dict[str, float] = {}
+        metric_prefix = f"{stage}/holdout_centroid"
+
         if not outputs:
             log.warning(f"No outputs for stage={stage}.")
-            # default metrics
-            metrics[f"{stage}/centroid_acc"] = 0.0
-            metrics[f"{stage}/centroid_balanced_acc"] = 0.0
-            metrics[f"{stage}/centroid_precision"] = 0.0
-            metrics[f"{stage}/centroid_recall"] = 0.0
-            metrics[f"{stage}/centroid_f1_macro"] = 0.0
-            # Add defaults for kNN metrics too
-            for k in [1]:
-                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+            # Default metrics (Centroid only)
+            for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                metrics[f"{metric_prefix}_{name}"] = 0.0
             outputs.clear()
             return metrics
+
         try:
             embs_cpu = torch.cat([o['embeddings'].cpu() for o in outputs])
             labs_cpu = torch.cat([o['labels'].cpu()    for o in outputs])
 
             # ----------------------------------------------------------------
-            # Replace standard centroid & k-NN with holdout-based evaluation
+            # Use holdout-based CENTROID evaluation
             # ----------------------------------------------------------------
             metrics.update(
                 compute_holdout_metrics(
@@ -206,7 +198,6 @@ class ContrastiveCATHeModel(L.LightningModule):
                     labs_cpu,
                     stage,
                     holdout_size=300,
-                    k_values=[1],
                     seed=self.hparams.seed,
                 )
             )
@@ -258,7 +249,6 @@ class ContrastiveCATHeModel(L.LightningModule):
                 and self.current_epoch % 10 == 0
                 and self.hparams.enable_visualization
             ):
-
                 log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs_cpu.size(0)})")
                 start_time = time.time()
                 if self.hparams.visualization_method == 'umap':
@@ -270,16 +260,9 @@ class ContrastiveCATHeModel(L.LightningModule):
             
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
-            # ensure defaults on error
-            metrics.setdefault(f"{stage}/centroid_acc", 0.0)
-            metrics.setdefault(f"{stage}/centroid_balanced_acc", 0.0)
-            metrics.setdefault(f"{stage}/centroid_precision", 0.0)
-            metrics.setdefault(f"{stage}/centroid_recall", 0.0)
-            metrics.setdefault(f"{stage}/centroid_f1_macro", 0.0)
-            # Add defaults for kNN metrics too
-            for k in [1]:
-                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics.setdefault(f"{stage}/knn_{k}_{name}", 0.0)
+            # Ensure defaults on error (Centroid only)
+            for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                metrics.setdefault(f"{metric_prefix}_{name}", 0.0)
         finally:
             outputs.clear()
         return metrics
