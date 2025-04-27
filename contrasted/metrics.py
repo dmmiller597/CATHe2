@@ -1,12 +1,15 @@
 import torch
 from torch import Tensor
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
 
 from distances import pairwise_distance
 from utils import get_logger
 
 log = get_logger(__name__)
+
+# Cache for "holdout vs reference" indices per stage ('val' / 'test')
+_holdout_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
 
 
 def compute_centroid_metrics(
@@ -187,7 +190,7 @@ def compute_knn_metrics_reference(
 
 
 # -------------------------------------------------------------------
-# MODIFIED: hold‐out CENTROID evaluation within a single split
+# MODIFIED: hold‐out CENTROID evaluation (cached per split)
 # -------------------------------------------------------------------
 def compute_holdout_metrics(
     embeddings: Tensor,
@@ -199,105 +202,70 @@ def compute_holdout_metrics(
 ) -> Dict[str, float]:
     """
     Hold‐out evaluation using only NEAREST CENTROID.
-    Randomly selects `holdout_size` embeddings/labels as queries, ensuring
-    they come from classes with at least `min_class_size_for_holdout` members
-    within this split. The rest of the split is used as the reference set.
+    Selects `holdout_size` samples once (from classes with ≥ min_class_size_for_holdout)
+    and caches those indices for reuse across the entire run.
     """
     metrics: Dict[str, float] = {}
     metric_prefix = f"{stage}/holdout_centroid"
 
     try:
         with torch.no_grad():
+            # move data to CPU
             embs = embeddings.detach().cpu()
             labs = labels.detach().cpu()
             n = embs.size(0)
 
-            # 1. Identify labels meeting the minimum size criterion
+            # 1) find labels with enough samples
             unique_labels, counts = torch.unique(labs, return_counts=True)
-            eligible_labels = unique_labels[counts >= min_class_size_for_holdout]
-
-            if eligible_labels.numel() == 0:
-                log.warning(f"Holdout metrics skipped for stage={stage}: no labels with >= {min_class_size_for_holdout} samples.")
-                for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            eligible = unique_labels[counts >= min_class_size_for_holdout]
+            if eligible.numel() == 0:
+                log.warning(f"Holdout skipped for {stage}: no classes ≥ {min_class_size_for_holdout}")
+                for m in ("acc","balanced_acc","precision","recall","f1_macro"):
                     metrics[f"{metric_prefix}_{m}"] = 0.0
                 return metrics
 
-            # 2. Get indices corresponding to eligible labels
-            eligible_mask = torch.isin(labs, eligible_labels)
-            eligible_indices = torch.where(eligible_mask)[0]
-
-            if eligible_indices.numel() < holdout_size:
-                log.warning(
-                    f"Holdout metrics skipped for stage={stage}: only {eligible_indices.numel()} "
-                    f"samples from labels with size >= {min_class_size_for_holdout} "
-                    f"(need {holdout_size})."
-                )
-                for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            idxs = torch.where(torch.isin(labs, eligible))[0]
+            if idxs.numel() < holdout_size:
+                log.warning(f"Holdout skipped for {stage}: only {idxs.numel()} eligible (<{holdout_size})")
+                for m in ("acc","balanced_acc","precision","recall","f1_macro"):
                     metrics[f"{metric_prefix}_{m}"] = 0.0
                 return metrics
 
-            # 3. Reproducible random split FROM ELIGIBLE indices
-            gen = torch.Generator().manual_seed(seed)
-            perm = torch.randperm(eligible_indices.numel(), generator=gen)
-            selected_holdout_indices_in_eligible = eligible_indices[perm[:holdout_size]]
+            # 2) reuse or compute+cache the holdout/ref split
+            if stage in _holdout_cache:
+                hold_idx, ref_idx = _holdout_cache[stage]
+            else:
+                gen = torch.Generator().manual_seed(seed)
+                perm = torch.randperm(idxs.numel(), generator=gen)
+                hold_idx = idxs[perm[:holdout_size]]
+                mask = torch.ones(n, dtype=torch.bool)
+                mask[hold_idx] = False
+                ref_idx = torch.where(mask)[0]
+                _holdout_cache[stage] = (hold_idx, ref_idx)
 
-            # 4. Define holdout and reference sets
-            hold_idx = selected_holdout_indices_in_eligible
-            # Reference set includes *all* indices NOT chosen for holdout
-            ref_mask = torch.ones(n, dtype=torch.bool)
-            ref_mask[hold_idx] = False
-            ref_idx = torch.where(ref_mask)[0]
+            # 3) partition embeddings / labels
+            hold_embs, hold_labs = embs[hold_idx], labs[hold_idx]
+            ref_embs, ref_labs   = embs[ref_idx], labs[ref_idx]
 
-            # Check if reference set is empty (unlikely but possible if holdout_size ~ n)
-            if ref_idx.numel() == 0:
-                log.warning(f"Holdout metrics skipped for stage={stage}: reference set is empty after selecting holdout.")
-                for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics[f"{metric_prefix}_{m}"] = 0.0
-                return metrics
+            # 4) compute centroids from REF and assign HOLD‐OUT
+            classes = torch.unique(ref_labs)
+            centroids = torch.stack([ref_embs[ref_labs == c].mean(dim=0) for c in classes])
+            dists = pairwise_distance(hold_embs, centroids)
+            preds = classes[torch.argmin(dists, dim=1)]
 
-            hold_embs = embs[hold_idx]
-            hold_labs = labs[hold_idx]
-            ref_embs  = embs[ref_idx]
-            ref_labs  = labs[ref_idx]
-
-            # -- centroid metrics --
-            # Compute centroids ONLY from the reference set
-            classes = torch.unique(ref_labs) # Use ref_labs here
-            # Handle case where a class might only exist in holdout set by chance
-            valid_centroids = []
-            valid_classes = []
-            for c in classes:
-                class_mask = ref_labs == c
-                if torch.sum(class_mask) > 0:
-                     valid_centroids.append(ref_embs[class_mask].mean(dim=0))
-                     valid_classes.append(c)
-
-            if not valid_centroids:
-                 log.warning(f"Holdout metrics skipped for stage={stage}: No valid centroids could be computed from the reference set.")
-                 for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                     metrics[f"{metric_prefix}_{m}"] = 0.0
-                 return metrics
-
-            centroids = torch.stack(valid_centroids)
-            classes_tensor = torch.tensor(valid_classes, device=labs.device) # Ensure device match if needed later
-
-
-            dists_cent = pairwise_distance(hold_embs, centroids)
-            preds_cent = classes_tensor[torch.argmin(dists_cent, dim=1)] # Use classes_tensor
-
+            # 5) sklearn metrics
             y_true = hold_labs.numpy()
-            y_pred_cent = preds_cent.numpy()
-
-            metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true, y_pred_cent)
-            metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true, y_pred_cent)
-            metrics[f"{metric_prefix}_precision"]    = precision_score(y_true, y_pred_cent, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}_recall"]       = recall_score(y_true, y_pred_cent, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true, y_pred_cent, average="macro", zero_division=0)
+            y_pred = preds.numpy()
+            metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
     except Exception as e:
-        log.error(f"Error in compute_holdout_metrics(stage={stage}): {e}", exc_info=True)
-        # fallback zeros
-        for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+        log.error(f"Error in compute_holdout_metrics for {stage}: {e}", exc_info=True)
+        # on error/fallback
+        for m in ("acc","balanced_acc","precision","recall","f1_macro"):
             metrics[f"{metric_prefix}_{m}"] = 0.0
 
     return metrics
