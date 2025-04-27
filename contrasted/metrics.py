@@ -1,6 +1,6 @@
 import torch
 from torch import Tensor
-from typing import Dict
+from typing import Dict, List
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
 
 from distances import pairwise_distance
@@ -183,4 +183,87 @@ def compute_knn_metrics_reference(
         log.error(f"Error in compute_knn_metrics_reference(k={k}, stage={stage}): {e}", exc_info=True)
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
             metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+    return metrics
+
+
+# -------------------------------------------------------------------
+# NEW: hold‐out evaluation within a single split
+# -------------------------------------------------------------------
+def compute_holdout_metrics(
+    embeddings: Tensor,
+    labels: Tensor,
+    stage: str,
+    holdout_size: int = 300,
+    k_values: List[int] = [1, 3],
+    seed: int = 42
+) -> Dict[str, float]:
+    """
+    Hold‐out evaluation: randomly select `holdout_size` embeddings/labels
+    as queries and use the rest as the reference set to compute
+    centroid and k-NN (for each k in k_values) metrics.
+    """
+    metrics: Dict[str, float] = {}
+    try:
+        with torch.no_grad():
+            embs = embeddings.detach().cpu()
+            labs = labels.detach().cpu()
+            n = embs.size(0)
+
+            if n <= holdout_size:
+                log.warning(f"Holdout metrics skipped for stage={stage}: only {n} samples")
+                # fill zeros if too few samples
+                for k in k_values:
+                    for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                        metrics[f"{stage}/holdout_knn_{k}_{m}"] = 0.0
+                for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{stage}/holdout_centroid_{m}"] = 0.0
+                return metrics
+
+            # reproducible random split
+            gen = torch.Generator().manual_seed(seed)
+            perm = torch.randperm(n, generator=gen)
+            hold_idx, ref_idx = perm[:holdout_size], perm[holdout_size:]
+
+            hold_embs = embs[hold_idx]
+            hold_labs = labs[hold_idx]
+            ref_embs  = embs[ref_idx]
+            ref_labs  = labs[ref_idx]
+
+            # -- centroid metrics --
+            classes = torch.unique(ref_labs)
+            centroids = torch.stack([ref_embs[ref_labs == c].mean(dim=0) for c in classes])
+            dists_cent = pairwise_distance(hold_embs, centroids)
+            preds_cent = classes[torch.argmin(dists_cent, dim=1)]
+            y_true = hold_labs.numpy()
+            y_pred_cent = preds_cent.numpy()
+
+            metrics[f"{stage}/holdout_centroid_acc"]          = accuracy_score(y_true, y_pred_cent)
+            metrics[f"{stage}/holdout_centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred_cent)
+            metrics[f"{stage}/holdout_centroid_precision"]    = precision_score(y_true, y_pred_cent, average="macro", zero_division=0)
+            metrics[f"{stage}/holdout_centroid_recall"]       = recall_score(y_true, y_pred_cent, average="macro", zero_division=0)
+            metrics[f"{stage}/holdout_centroid_f1_macro"]     = f1_score(y_true, y_pred_cent, average="macro", zero_division=0)
+
+            # -- k-NN metrics --
+            dists_knn = pairwise_distance(hold_embs, ref_embs)
+            for k in k_values:
+                knn_idxs = torch.topk(dists_knn, k, largest=False).indices
+                neigh_labs = ref_labs[knn_idxs]
+                preds_knn, _ = torch.mode(neigh_labs, dim=1)
+                y_pred_knn = preds_knn.numpy()
+
+                metrics[f"{stage}/holdout_knn_{k}_acc"]           = accuracy_score(y_true, y_pred_knn)
+                metrics[f"{stage}/holdout_knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred_knn)
+                metrics[f"{stage}/holdout_knn_{k}_precision"]     = precision_score(y_true, y_pred_knn, average="macro", zero_division=0)
+                metrics[f"{stage}/holdout_knn_{k}_recall"]        = recall_score(y_true, y_pred_knn, average="macro", zero_division=0)
+                metrics[f"{stage}/holdout_knn_{k}_f1_macro"]      = f1_score(y_true, y_pred_knn, average="macro", zero_division=0)
+
+    except Exception as e:
+        log.error(f"Error in compute_holdout_metrics(stage={stage}): {e}", exc_info=True)
+        # fallback zeros
+        for k in k_values:
+            for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                metrics[f"{stage}/holdout_knn_{k}_{m}"] = 0.0
+        for m in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            metrics[f"{stage}/holdout_centroid_{m}"] = 0.0
+
     return metrics

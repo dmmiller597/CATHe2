@@ -13,7 +13,13 @@ from torch.optim.lr_scheduler import OneCycleLR
 from utils import get_logger
 from losses import SupConLoss, SINCERELoss
 from plotting import generate_tsne_plot, generate_umap_plot
-from metrics import compute_centroid_metrics, compute_knn_metrics, compute_centroid_metrics_reference, compute_knn_metrics_reference
+from metrics import (
+    compute_centroid_metrics,
+    compute_knn_metrics,
+    compute_centroid_metrics_reference,
+    compute_knn_metrics_reference,
+    compute_holdout_metrics,
+)
 # Module-level logger
 log = get_logger(__name__)
 
@@ -191,41 +197,57 @@ class ContrastiveCATHeModel(L.LightningModule):
             embs_cpu = torch.cat([o['embeddings'].cpu() for o in outputs])
             labs_cpu = torch.cat([o['labels'].cpu()    for o in outputs])
 
-            if stage == 'test':
-                # centroid & kNN against TRAINING‐set cache
-                metrics.update(
-                    compute_centroid_metrics_reference(
-                        embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
-                    )
+            # ----------------------------------------------------------------
+            # Replace standard centroid & k-NN with holdout-based evaluation
+            # ----------------------------------------------------------------
+            metrics.update(
+                compute_holdout_metrics(
+                    embs_cpu,
+                    labs_cpu,
+                    stage,
+                    holdout_size=300,
+                    k_values=[1],
+                    seed=self.hparams.seed,
                 )
-                metrics.update(
-                    compute_knn_metrics_reference(
-                        embs_cpu, labs_cpu,
-                        self._ref_embs, self._ref_labels,
-                        1, stage, self.hparams.knn_batch_size
-                    )
-                )
-                metrics.update(
-                    compute_knn_metrics_reference(
-                        embs_cpu, labs_cpu,
-                        self._ref_embs, self._ref_labels,
-                        3, stage, self.hparams.knn_batch_size
-                    )
-                )
-            else:
-                # original self‐classification (val or sanity)
-                metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
-                if (
-                    stage == 'test'
-                    or (stage == 'val' and False)  # keep your existing val‐knn logic
-                ):
-                    knn_batch_size = self.hparams.knn_batch_size
-                    log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
-                    knn_start_time = time.time()
-                    metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-                    metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-                    knn_elapsed = time.time() - knn_start_time
-                    log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+            )
+            # ----------------------------------------------------------------
+            # (old metrics commented out below)
+            # if stage == 'test':
+            #     # centroid & kNN against TRAINING‐set cache
+            #     metrics.update(
+            #         compute_centroid_metrics_reference(
+            #             embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
+            #         )
+            #     )
+            #     metrics.update(
+            #         compute_knn_metrics_reference(
+            #             embs_cpu, labs_cpu,
+            #             self._ref_embs, self._ref_labels,
+            #             1, stage, self.hparams.knn_batch_size
+            #         )
+            #     )
+            #     metrics.update(
+            #         compute_knn_metrics_reference(
+            #             embs_cpu, labs_cpu,
+            #             self._ref_embs, self._ref_labels,
+            #             3, stage, self.hparams.knn_batch_size
+            #         )
+            #     )
+            # else:
+            #     # original self‐classification (val or sanity)
+            #     metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+            #     if (
+            #         stage == 'test'
+            #         or (stage == 'val' and False)  # keep your existing val‐knn logic
+            #     ):
+            #         knn_batch_size = self.hparams.knn_batch_size
+            #         log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+            #         knn_start_time = time.time()
+            #         metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+            #         metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+            #         knn_elapsed = time.time() - knn_start_time
+            #         log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+            # end old metrics
 
             # optional visualization
             if (
