@@ -184,9 +184,9 @@ class ContrastiveCATHeModel(L.LightningModule):
             # Default metrics (Centroid and KNN)
             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                 metrics[f"{stage}/centroid_{name}"] = 0.0
-            for k in [1, 3]:
-                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+            # for k in [1, 3]:
+            #     for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+            #         metrics[f"{stage}/knn_{k}_{name}"] = 0.0
             outputs.clear()
             return metrics
 
@@ -231,18 +231,21 @@ class ContrastiveCATHeModel(L.LightningModule):
             #     )
             # else:
             #     # original self‐classification (val or sanity) - RE-ENABLED
+            centroid_start_time = time.time()
             metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+            centroid_elapsed = time.time() - centroid_start_time
+            log.info(f"Centroid metrics computed in {centroid_elapsed:.2f} seconds for {stage}.")
             # if (
             #     stage == 'test' # Condition removed, KNN now calculated for both val/test
             #     or (stage == 'val' and False)  # keep your existing val‐knn logic # Condition simplified
             # ):
-            knn_batch_size = self.hparams.knn_batch_size
-            log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
-            knn_start_time = time.time()
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-            knn_elapsed = time.time() - knn_start_time
-            log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+            # knn_batch_size = self.hparams.knn_batch_size
+            # log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+            # knn_start_time = time.time()
+            # metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+            # metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+            # knn_elapsed = time.time() - knn_start_time
+            # log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
             # end old metrics / re-enabled metrics
 
             # optional visualization
