@@ -15,6 +15,8 @@ from losses import SupConLoss, SINCERELoss
 from plotting import generate_tsne_plot, generate_umap_plot
 from metrics import (
     compute_holdout_metrics,
+    compute_centroid_metrics,
+    compute_knn_metrics,
 )
 # Module-level logger
 log = get_logger(__name__)
@@ -175,13 +177,16 @@ class ContrastiveCATHeModel(L.LightningModule):
     def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str) -> Dict[str, float]:
         """Common logic for validation and test epoch ends with error handling."""
         metrics: Dict[str, float] = {}
-        metric_prefix = f"{stage}/holdout_centroid"
+        # metric_prefix = f"{stage}/holdout_centroid" # No longer needed for holdout
 
         if not outputs:
             log.warning(f"No outputs for stage={stage}.")
-            # Default metrics (Centroid only)
+            # Default metrics (Centroid and KNN)
             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                metrics[f"{metric_prefix}_{name}"] = 0.0
+                metrics[f"{stage}/centroid_{name}"] = 0.0
+            for k in [1, 3]:
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{stage}/knn_{k}_{name}"] = 0.0
             outputs.clear()
             return metrics
 
@@ -190,21 +195,21 @@ class ContrastiveCATHeModel(L.LightningModule):
             labs_cpu = torch.cat([o['labels'].cpu()    for o in outputs])
 
             # ----------------------------------------------------------------
-            # Use holdout-based CENTROID evaluation
+            # Use holdout-based CENTROID evaluation - COMMENTED OUT
             # ----------------------------------------------------------------
-            metrics.update(
-                compute_holdout_metrics(
-                    embs_cpu,
-                    labs_cpu,
-                    stage,
-                    holdout_size=300,
-                    seed=self.hparams.seed,
-                )
-            )
+            # metrics.update(
+            #     compute_holdout_metrics(
+            #         embs_cpu,
+            #         labs_cpu,
+            #         stage,
+            #         holdout_size=300,
+            #         seed=self.hparams.seed,
+            #     )
+            # )
             # ----------------------------------------------------------------
             # (old metrics commented out below)
             # if stage == 'test':
-            #     # centroid & kNN against TRAINING‐set cache
+            #     # centroid & kNN against TRAINING‐set cache - COMMENTED OUT
             #     metrics.update(
             #         compute_centroid_metrics_reference(
             #             embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
@@ -225,20 +230,20 @@ class ContrastiveCATHeModel(L.LightningModule):
             #         )
             #     )
             # else:
-            #     # original self‐classification (val or sanity)
-            #     metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
-            #     if (
-            #         stage == 'test'
-            #         or (stage == 'val' and False)  # keep your existing val‐knn logic
-            #     ):
-            #         knn_batch_size = self.hparams.knn_batch_size
-            #         log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
-            #         knn_start_time = time.time()
-            #         metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-            #         metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-            #         knn_elapsed = time.time() - knn_start_time
-            #         log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
-            # end old metrics
+            #     # original self‐classification (val or sanity) - RE-ENABLED
+            metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+            # if (
+            #     stage == 'test' # Condition removed, KNN now calculated for both val/test
+            #     or (stage == 'val' and False)  # keep your existing val‐knn logic # Condition simplified
+            # ):
+            knn_batch_size = self.hparams.knn_batch_size
+            log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
+            knn_start_time = time.time()
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
+            metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
+            knn_elapsed = time.time() - knn_start_time
+            log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+            # end old metrics / re-enabled metrics
 
             # optional visualization
             if (
@@ -257,12 +262,15 @@ class ContrastiveCATHeModel(L.LightningModule):
                     generate_tsne_plot(self, embs_cpu, labs_cpu)
                 elapsed = time.time() - start_time
                 log.info(f"Visualization completed in {elapsed:.2f} seconds.")
-            
+
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
-            # Ensure defaults on error (Centroid only)
+            # Ensure defaults on error (Centroid and KNN)
             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                metrics.setdefault(f"{metric_prefix}_{name}", 0.0)
+                metrics.setdefault(f"{stage}/centroid_{name}", 0.0)
+            for k in [1, 3]:
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics.setdefault(f"{stage}/knn_{k}_{name}", 0.0)
         finally:
             outputs.clear()
         return metrics
