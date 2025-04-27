@@ -17,6 +17,8 @@ from metrics import (
     compute_holdout_metrics,
     compute_centroid_metrics,
     compute_knn_metrics,
+    compute_centroid_metrics_reference,
+    compute_knn_metrics_reference,
 )
 # Module-level logger
 log = get_logger(__name__)
@@ -135,18 +137,24 @@ class ContrastiveCATHeModel(L.LightningModule):
         self._test_outputs.append({"embeddings": proj.cpu().detach(), "labels": labels.cpu().detach()})
 
     def on_validation_epoch_end(self) -> None:
+        # Compute and log validation metrics using the shared logic
+        # Centroid metrics will be computed, kNN will be skipped for 'val' stage
         m = self._shared_epoch_end(self._val_outputs, 'val')
         if m:
             # filter out NaN metrics
             loggable = {k: v for k, v in m.items() if not (isinstance(v, float) and np.isnan(v))}
             self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        # Outputs are cleared within _shared_epoch_end
 
     def on_test_epoch_end(self) -> None:
+        # Compute and log test metrics using the shared logic
+        # Both Centroid and kNN metrics will be computed for 'test' stage
         m = self._shared_epoch_end(self._test_outputs, 'test')
         if m:
             # filter out NaN metrics
             loggable = {k: v for k, v in m.items() if not (isinstance(v, float) and np.isnan(v))}
             self.log_dict(loggable, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        # Outputs are cleared within _shared_epoch_end
 
     def configure_optimizers(self) -> Any:
         optimizer = torch.optim.AdamW(
@@ -175,107 +183,61 @@ class ContrastiveCATHeModel(L.LightningModule):
         }
 
     def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str) -> Dict[str, float]:
-        """Common logic for validation and test epoch ends with error handling."""
+        """
+        Common logic for epoch ends.
+        - Gathers embeddings and labels.
+        - Computes Centroid metrics for both 'val' and 'test' stages.
+        - Computes k-NN(k=1) metrics only for the 'test' stage.
+        - Clears the provided output list.
+        """
         metrics: Dict[str, float] = {}
-        # metric_prefix = f"{stage}/holdout_centroid" # No longer needed for holdout
-
         if not outputs:
-            log.warning(f"No outputs for stage={stage}.")
-            # Default metrics (Centroid and KNN)
+            log.warning(f"No outputs provided for stage={stage} metrics computation.")
+            # Return default zero metrics
             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                 metrics[f"{stage}/centroid_{name}"] = 0.0
-            # for k in [1, 3]:
-            #     for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            #         metrics[f"{stage}/knn_{k}_{name}"] = 0.0
-            outputs.clear()
+            if stage == 'test': # Only add default KNN for test stage if outputs are empty
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{stage}/knn_1_{name}"] = 0.0 # k=1
+            outputs.clear() # Still clear outputs even if empty
             return metrics
 
         try:
-            embs_cpu = torch.cat([o['embeddings'].cpu() for o in outputs])
-            labs_cpu = torch.cat([o['labels'].cpu()    for o in outputs])
+            # Gather embeddings and labels safely
+            # Use detach().cpu() for safety, although validation outputs might already be detached
+            embs_cpu = torch.cat([o['embeddings'].cpu().detach() for o in outputs])
+            labs_cpu = torch.cat([o['labels'].cpu().detach() for o in outputs])
 
-            # ----------------------------------------------------------------
-            # Use holdout-based CENTROID evaluation - COMMENTED OUT
-            # ----------------------------------------------------------------
-            # metrics.update(
-            #     compute_holdout_metrics(
-            #         embs_cpu,
-            #         labs_cpu,
-            #         stage,
-            #         holdout_size=300,
-            #         seed=self.hparams.seed,
-            #     )
-            # )
-            # ----------------------------------------------------------------
-            # (old metrics commented out below)
-            # if stage == 'test':
-            #     # centroid & kNN against TRAINING‐set cache - COMMENTED OUT
-            #     metrics.update(
-            #         compute_centroid_metrics_reference(
-            #             embs_cpu, labs_cpu, self._ref_embs, self._ref_labels, stage
-            #         )
-            #     )
-            #     metrics.update(
-            #         compute_knn_metrics_reference(
-            #             embs_cpu, labs_cpu,
-            #             self._ref_embs, self._ref_labels,
-            #             1, stage, self.hparams.knn_batch_size
-            #         )
-            #     )
-            #     metrics.update(
-            #         compute_knn_metrics_reference(
-            #             embs_cpu, labs_cpu,
-            #             self._ref_embs, self._ref_labels,
-            #             3, stage, self.hparams.knn_batch_size
-            #         )
-            #     )
-            # else:
-            #     # original self‐classification (val or sanity) - RE-ENABLED
+            # 1. Compute Centroid metrics (Always computed)
             centroid_start_time = time.time()
-            metrics.update(compute_centroid_metrics(embs_cpu, labs_cpu, stage))
+            centroid_metrics = compute_centroid_metrics(embs_cpu, labs_cpu, stage)
+            metrics.update(centroid_metrics)
             centroid_elapsed = time.time() - centroid_start_time
             log.info(f"Centroid metrics computed in {centroid_elapsed:.2f} seconds for {stage}.")
-            # if (
-            #     stage == 'test' # Condition removed, KNN now calculated for both val/test
-            #     or (stage == 'val' and False)  # keep your existing val‐knn logic # Condition simplified
-            # ):
-            # knn_batch_size = self.hparams.knn_batch_size
-            # log.info(f"Computing KNN metrics for {stage} at epoch {getattr(self, 'current_epoch', 'N/A')}")
-            # knn_start_time = time.time()
-            # metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 1, stage, knn_batch_size))
-            # metrics.update(compute_knn_metrics(embs_cpu, labs_cpu, 3, stage, knn_batch_size))
-            # knn_elapsed = time.time() - knn_start_time
-            # log.info(f"KNN metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
-            # end old metrics / re-enabled metrics
 
-            # optional visualization
-            if (
-                stage == 'val'
-                and hasattr(self, 'trainer')
-                and not self.trainer.sanity_checking
-                and self.current_epoch > 0
-                and self.current_epoch % 10 == 0
-                and self.hparams.enable_visualization
-            ):
-                log.info(f"Visualizing embeddings (method={self.hparams.visualization_method}, epoch={self.current_epoch}, n={embs_cpu.size(0)})")
-                start_time = time.time()
-                if self.hparams.visualization_method == 'umap':
-                    generate_umap_plot(self, embs_cpu, labs_cpu)
-                else:
-                    generate_tsne_plot(self, embs_cpu, labs_cpu)
-                elapsed = time.time() - start_time
-                log.info(f"Visualization completed in {elapsed:.2f} seconds.")
+            # 2. Compute k-NN metrics (Only for test stage)
+            if stage == 'test':
+                knn_start_time = time.time()
+                # Use compute_knn_metrics instead of compute_knn_metrics_reference
+                knn_metrics = compute_knn_metrics(
+                    embs_cpu, labs_cpu,
+                    k=1, stage=stage, knn_batch_size=self.hparams.knn_batch_size
+                )
+                metrics.update(knn_metrics)
+                knn_elapsed = time.time() - knn_start_time
+                log.info(f"k-NN (k=1) metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
 
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)
-            # Ensure defaults on error (Centroid and KNN)
+            # Ensure defaults on error
             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                 metrics.setdefault(f"{stage}/centroid_{name}", 0.0)
-            for k in [1, 3]:
+            if stage == 'test': # Only set default KNN for test stage on error
                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics.setdefault(f"{stage}/knn_{k}_{name}", 0.0)
+                    metrics.setdefault(f"{stage}/knn_1_{name}", 0.0)
         finally:
-            outputs.clear()
+            outputs.clear() # Clear outputs after processing
+
         return metrics
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> Tensor:
@@ -290,6 +252,9 @@ class ContrastiveCATHeModel(L.LightningModule):
 
     def on_test_epoch_start(self) -> None:
         """Build the training‐set embedding/label cache once before any test metrics."""
+        # This is no longer strictly necessary if we only compute self-classification metrics,
+        # but keep it in case reference metrics are needed later or by other parts.
+        # Can be commented out if reference set is truly unused.
         if not self._ref_built:
             self._build_reference_set()
             self._ref_built = True

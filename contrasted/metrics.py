@@ -16,37 +16,67 @@ def compute_centroid_metrics(
     embeddings: Tensor,
     labels: Tensor,
     stage: str,
+    min_class_size: int = 2,
 ) -> Dict[str, float]:
-    """Computes nearest‐centroid classification metrics entirely on CPU."""
+    """
+    Computes nearest‐centroid classification metrics entirely on CPU.
+    Ignores classes with fewer than `min_class_size` samples for centroid calculation
+    and evaluates only on samples from eligible classes.
+    """
     metrics: Dict[str, float] = {}
+    metric_prefix = f"{stage}/centroid"
     try:
         with torch.no_grad():
             # move off GPU ASAP
             embs = embeddings.detach().cpu()
             labs = labels.detach().cpu()
 
-            # 1) compute one centroid per class
-            classes = torch.unique(labs)
-            centroids = torch.stack([embs[labs == c].mean(dim=0) for c in classes])
+            # 1) Identify classes with enough samples
+            unique_labels, counts = torch.unique(labs, return_counts=True)
+            eligible_classes = unique_labels[counts >= min_class_size]
 
-            # 2) pairwise squared-euclidean distances (CPU)
-            dists = pairwise_distance(embs, centroids)
+            if eligible_classes.numel() == 0:
+                log.warning(f"Centroid metrics skipped for {stage}: no classes with >= {min_class_size} samples.")
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{metric_prefix}_{name}"] = 0.0
+                return metrics
 
-            # 3) assign nearest centroid
-            preds = classes[torch.argmin(dists, dim=1)]
+            # 2) Compute centroids *only* for eligible classes using all their samples
+            centroids = torch.stack([embs[labs == c].mean(dim=0) for c in eligible_classes])
 
-            # 4) compute numpy/sklearn metrics
-            y_true = labs.numpy()
+            # 3) Filter embeddings/labels to evaluate *only* on samples from eligible classes
+            eligible_mask = torch.isin(labs, eligible_classes)
+            eval_embs = embs[eligible_mask]
+            eval_labs = labs[eligible_mask]
+
+            if eval_embs.numel() == 0: # Should not happen if eligible_classes is not empty, but safety check
+                log.warning(f"Centroid metrics skipped for {stage}: No eligible samples found after filtering.")
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{metric_prefix}_{name}"] = 0.0
+                return metrics
+
+            # 4) Compute pairwise distances between evaluation embeddings and eligible centroids
+            dists = pairwise_distance(eval_embs, centroids) # Shape: [n_eval_samples, n_eligible_classes]
+
+            # 5) Assign nearest eligible centroid
+            preds_indices = torch.argmin(dists, dim=1)
+            preds = eligible_classes[preds_indices] # Map indices back to original class labels
+
+            # 6) Compute numpy/sklearn metrics on the filtered set
+            y_true = eval_labs.numpy()
             y_pred = preds.numpy()
-            metrics[f"{stage}/centroid_acc"]          = accuracy_score(y_true, y_pred)
-            metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-            metrics[f"{stage}/centroid_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{stage}/centroid_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{stage}/centroid_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
-    except Exception:
+            metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true, y_pred)
+            # Use labels=eligible_classes.numpy() if using average='weighted' or 'micro' might be needed
+            metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+    except Exception as e:
+        log.error(f"Error computing centroid metrics for {stage}: {e}", exc_info=True)
         # on any error, return zeros to keep training stable
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/centroid_{name}"] = 0.0
+            metrics[f"{metric_prefix}_{name}"] = 0.0
     return metrics
 
 
@@ -56,23 +86,40 @@ def compute_knn_metrics(
     k: int,
     stage: str,
     knn_batch_size: int = 1024,
-    num_workers: int = 0
+    num_workers: int = 0,
+    min_class_size: int = 2,
 ) -> Dict[str, float]:
-    """Leave‑one‑out k‑NN on the embeddings (CPU), batched for memory efficiency."""
+    """
+    Leave‑one‑out k‑NN on the embeddings (CPU), batched for memory efficiency.
+    Evaluates metrics only on samples whose true class has at least `min_class_size` members.
+    """
     metrics = {}
+    metric_prefix = f"{stage}/knn_{k}"
     n_samples = embeddings.size(0)
+
     if n_samples <= k:
         log.warning(f"k-NN computation skipped for k={k}, stage={stage}: Not enough samples ({n_samples})")
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-             metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+             metrics[f"{metric_prefix}_{name}"] = 0.0
         return metrics
 
     try:
         with torch.no_grad():
             embs = embeddings.detach().cpu()
             labs = labels.detach().cpu()
-            all_preds = []
 
+            # --- Pre-check: Identify eligible classes ---
+            unique_labels, counts = torch.unique(labs, return_counts=True)
+            eligible_classes = unique_labels[counts >= min_class_size]
+
+            if eligible_classes.numel() == 0:
+                log.warning(f"k-NN ({k}) metrics skipped for {stage}: no classes with >= {min_class_size} samples.")
+                for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                    metrics[f"{metric_prefix}_{name}"] = 0.0
+                return metrics
+            # --- End Pre-check ---
+
+            all_preds = []
             # Process in batches to avoid large N x N matrix
             for i in range(0, n_samples, knn_batch_size):
                 batch_indices = range(i, min(i + knn_batch_size, n_samples))
@@ -97,14 +144,27 @@ def compute_knn_metrics(
             # Concatenate predictions from all batches
             preds = torch.cat(all_preds)
 
+            # --- Filter results for metric calculation ---
+            eligible_mask = torch.isin(labs, eligible_classes)
+            y_true_filtered = labs[eligible_mask].numpy()
+            y_pred_filtered = preds[eligible_mask].numpy()
+
+            if len(y_true_filtered) == 0:
+                 log.warning(f"k-NN ({k}) metrics skipped for {stage}: no eligible samples remained after filtering.")
+                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
+                     metrics[f"{metric_prefix}_{name}"] = 0.0
+                 return metrics
+            # --- End Filter ---
+
+            # Compute sklearn metrics using filtered results
             # Compute sklearn metrics
-            y_true = labs.numpy()
-            y_pred = preds.numpy()
-            metrics[f"{stage}/knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
-            metrics[f"{stage}/knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
-            metrics[f"{stage}/knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            y_true = y_true_filtered # Use filtered data
+            y_pred = y_pred_filtered # Use filtered data
+            metrics[f"{metric_prefix}_acc"]           = accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
             # Optional: Keep limited debug prints if helpful
             # print(f"  [knn k={k} batch {i//knn_batch_size}] preds_batch sample:", preds_batch[:3])
@@ -113,7 +173,7 @@ def compute_knn_metrics(
         log.error(f"Error in compute_knn_metrics(k={k}, stage={stage}): {e}", exc_info=True)
         # Ensure metrics dictionary exists and provide defaults on error
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+            metrics[f"{metric_prefix}_{name}"] = 0.0
         # Optionally re-raise if you want training to stop on metric calculation errors
         # raise e
     return metrics
