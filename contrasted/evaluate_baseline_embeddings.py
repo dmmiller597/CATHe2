@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 import yaml
+import csv
 
 import numpy as np
 import pandas as pd
@@ -166,6 +167,7 @@ def main():
     parser.add_argument("--cath_level", type=int, default=3, choices=[0, 1, 2, 3], help="CATH level for labels (0=C, 1=A, 2=T, 3=H).")
     parser.add_argument("--min_class_size", type=int, default=2, help="Minimum samples per class for evaluation.")
     parser.add_argument("--knn_batch_size", type=int, default=1024, help="Batch size for k-NN distance calculations.")
+    parser.add_argument("--output_csv", type=str, default="results/baseline_protT5_embeddings_evaluation.csv", help="Optional path to save results to a CSV file.")
 
     args = parser.parse_args()
 
@@ -260,7 +262,7 @@ def main():
         except Exception as e:
             print(f"Failed to process {split} split: {e}")
 
-    print("\n--- Final Results ---")
+    print("\n--- Final Results (Console) ---")
     if not results:
         print("No results generated.")
     else:
@@ -268,6 +270,25 @@ def main():
         sorted_results = dict(sorted(results.items()))
         for key, value in sorted_results.items():
             print(f"{key}: {value:.4f}")
+
+        # --- Save results to CSV if path provided ---
+        if args.output_csv:
+            output_path = Path(args.output_csv)
+            try:
+                # Create parent directory if it doesn't exist
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(output_path, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Metric', 'Value']) # Write header
+                    for key, value in sorted_results.items():
+                        writer.writerow([key, f"{value:.4f}"]) # Write data row
+                print(f"\nResults successfully saved to: {output_path}")
+            except Exception as e:
+                print(f"\nError saving results to CSV ({output_path}): {e}")
+        else:
+             print("\nResults not saved to CSV (no --output_csv path provided).")
+        # --- End save block ---
+
 
 if __name__ == "__main__":
     main()
