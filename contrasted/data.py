@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 import lightning as L
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
@@ -26,7 +26,7 @@ def get_level_label(sf: str, level: int) -> str:
 
 
 class EmbeddingDataset(Dataset):
-    """Dataset for precomputed embeddings and hierarchical CATH labels."""
+    """Dataset for precomputed embeddings, CATH labels, and sequence IDs."""
 
     def __init__(self, emb_path: Path, lbl_path: Path, level: int = 3):
         if level not in CATH_LEVEL_NAMES:
@@ -46,6 +46,13 @@ class EmbeddingDataset(Dataset):
         df = pd.read_csv(lbl_path)
         if "SF" not in df.columns:
             raise KeyError(f"'SF' column not found in {lbl_path}")
+        if "sequence_id" not in df.columns:
+            log.warning(f"'sequence_id' column not found in {lbl_path}, cannot retrieve sequence IDs.")
+            self.sequence_ids = ["unknown"] * len(df) # Placeholder
+        else:
+             self.sequence_ids = df["sequence_id"].astype(str).to_list()
+
+
         sf_series = df["SF"].astype(str).apply(lambda s: get_level_label(s, level))
         unique_sf = sorted(sf_series.unique())
         encoder = {sf: idx for idx, sf in enumerate(unique_sf)}
@@ -56,16 +63,23 @@ class EmbeddingDataset(Dataset):
         self.num_classes = len(unique_sf)
         self.embedding_dim = self.embeddings.shape[1]
 
-        if len(self.embeddings) != len(self.labels):
-            raise ValueError("Mismatch between embeddings and labels lengths")
+        if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids)):
+            raise ValueError(
+                "Mismatch between embeddings, labels, and sequence_ids lengths: "
+                f"{len(self.embeddings)}, {len(self.labels)}, {len(self.sequence_ids)}"
+            )
+        log.info(f"Loaded {len(self)} samples for level {self.level}.")
+
 
     def __len__(self) -> int:
         return len(self.embeddings)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
+        """Returns embedding, label index, and sequence ID."""
         emb = torch.from_numpy(self.embeddings[idx])
         lbl = self.labels[idx]
-        return emb, lbl
+        seq_id = self.sequence_ids[idx]
+        return emb, lbl, seq_id
 
 
 class ContrastiveDataModule(L.LightningDataModule):

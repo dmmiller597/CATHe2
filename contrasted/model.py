@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import lightning as L
 from torch import Tensor
 from torch.optim.lr_scheduler import OneCycleLR
+import csv
 
 from utils import get_logger
 from losses import SupConLoss, SINCERELoss
@@ -67,6 +68,8 @@ class ContrastiveCATHeModel(L.LightningModule):
         temperature: float = 0.07,
         seed: int = 42,
         knn_batch_size: int = 1024,
+        evaluated_ids_output_dir: str = "results/evaluated_ids",
+        min_class_size_for_eval: int = 2,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -103,6 +106,9 @@ class ContrastiveCATHeModel(L.LightningModule):
             os.makedirs(self.hparams.tsne_viz_dir, exist_ok=True)
             os.makedirs(self.hparams.umap_viz_dir, exist_ok=True)
 
+        # Ensure output directory exists
+        os.makedirs(self.hparams.evaluated_ids_output_dir, exist_ok=True)
+
     def forward(self, x: Tensor) -> Tensor:
         x = self.projection(x)
         return F.normalize(x, p=2, dim=1)
@@ -117,24 +123,27 @@ class ContrastiveCATHeModel(L.LightningModule):
         )
         return loss
 
-    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
-        emb, labels = batch
+    def validation_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> None:
+        emb, labels, sequence_ids = batch
         with torch.inference_mode():
             proj = self(emb)
-            # compute validation loss
             loss = self.loss_fn(proj, labels)
-        # log validation loss
-        self.log(
-            'val/loss', loss,
-            on_step=False, on_epoch=True, prog_bar=True, sync_dist=True
-        )
-        self._val_outputs.append({"embeddings": proj.detach(), "labels": labels.detach()})
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self._val_outputs.append({
+            "embeddings": proj.detach(),
+            "labels": labels.detach(),
+            "sequence_ids": sequence_ids
+        })
 
-    def test_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> None:
-        emb, labels = batch
+    def test_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> None:
+        emb, labels, sequence_ids = batch
         with torch.inference_mode():
             proj = self(emb)
-        self._test_outputs.append({"embeddings": proj.cpu().detach(), "labels": labels.cpu().detach()})
+        self._test_outputs.append({
+            "embeddings": proj.cpu().detach(),
+            "labels": labels.cpu().detach(),
+            "sequence_ids": sequence_ids
+        })
 
     def on_validation_epoch_end(self) -> None:
         # Compute and log validation metrics using the shared logic
@@ -182,15 +191,15 @@ class ContrastiveCATHeModel(L.LightningModule):
             },
         }
 
-    def _shared_epoch_end(self, outputs: List[Dict[str, Tensor]], stage: str) -> Dict[str, float]:
+    def _shared_epoch_end(self, outputs: List[Dict[str, Any]], stage: str) -> Dict[str, float]:
         """
-        Common logic for epoch ends.
-        - Gathers embeddings and labels.
-        - Computes Centroid metrics for both 'val' and 'test' stages.
-        - Computes k-NN(k=1) metrics only for the 'test' stage.
-        - Clears the provided output list.
+        Common logic for epoch ends. Gathers data, computes metrics, and saves
+        evaluated sequence IDs for the test stage.
         """
         metrics: Dict[str, float] = {}
+        # Indices of samples evaluated by centroid metric (should be same as kNN)
+        evaluated_indices: Optional[Tensor] = None
+
         if not outputs:
             log.warning(f"No outputs provided for stage={stage} metrics computation.")
             # Return default zero metrics
@@ -203,29 +212,74 @@ class ContrastiveCATHeModel(L.LightningModule):
             return metrics
 
         try:
-            # Gather embeddings and labels safely
-            # Use detach().cpu() for safety, although validation outputs might already be detached
+            # Gather embeddings, labels, and sequence IDs
             embs_cpu = torch.cat([o['embeddings'].cpu().detach() for o in outputs])
             labs_cpu = torch.cat([o['labels'].cpu().detach() for o in outputs])
+            # Sequence IDs are lists of strings, flatten them
+            ids_list: List[str] = [seq_id for o in outputs for seq_id in o['sequence_ids']]
 
-            # 1. Compute Centroid metrics (Always computed)
+            # --- Visualization (only during validation, every 5 epochs if enabled) ---
+            if stage == 'val' and self.hparams.enable_visualization and self.current_epoch % 5 == 0:
+                log.info(f"Generating '{self.hparams.visualization_method}' plot for validation epoch {self.current_epoch}...")
+                if self.hparams.visualization_method == "tsne":
+                    generate_tsne_plot(self, embs_cpu, labs_cpu)
+                elif self.hparams.visualization_method == "umap":
+                    generate_umap_plot(self, embs_cpu, labs_cpu)
+                else:
+                    log.warning(f"Unsupported visualization method '{self.hparams.visualization_method}' specified, skipping plot generation.")
+            # --- End Visualization ---
+
+            # 1. Compute Centroid metrics (receives indices)
             centroid_start_time = time.time()
-            centroid_metrics = compute_centroid_metrics(embs_cpu, labs_cpu, stage)
+            centroid_metrics, evaluated_indices = compute_centroid_metrics(
+                embs_cpu, labs_cpu, stage, min_class_size=self.hparams.min_class_size_for_eval
+            )
             metrics.update(centroid_metrics)
             centroid_elapsed = time.time() - centroid_start_time
             log.info(f"Centroid metrics computed in {centroid_elapsed:.2f} seconds for {stage}.")
 
-            # 2. Compute k-NN metrics (Only for test stage)
+            # 2. Compute k-NN metrics (Only for test stage, ignore returned indices)
             if stage == 'test':
                 knn_start_time = time.time()
-                # Use compute_knn_metrics instead of compute_knn_metrics_reference
-                knn_metrics = compute_knn_metrics(
+                knn_metrics, _ = compute_knn_metrics(
                     embs_cpu, labs_cpu,
-                    k=1, stage=stage, knn_batch_size=self.hparams.knn_batch_size
+                    k=1, stage=stage, knn_batch_size=self.hparams.knn_batch_size,
+                    min_class_size=self.hparams.min_class_size_for_eval
                 )
                 metrics.update(knn_metrics)
                 knn_elapsed = time.time() - knn_start_time
                 log.info(f"k-NN (k=1) metrics computed in {knn_elapsed:.2f} seconds for {stage}.")
+
+            # --- ADDED: Save evaluated IDs for the test stage using indices ---
+            if stage == 'test' and evaluated_indices is not None and len(evaluated_indices) > 0:
+                try:
+                    # Get label decoder from datamodule
+                    label_decoder = self.trainer.datamodule.get_label_decoder()
+
+                    # Select the IDs and labels corresponding to the evaluated indices
+                    eval_ids = [ids_list[i] for i in evaluated_indices.tolist()]
+                    eval_true_labels = labs_cpu[evaluated_indices]
+                    eval_sfs = [label_decoder.get(lbl.item(), "N/A") for lbl in eval_true_labels]
+
+                    # Define output filename
+                    output_filename = os.path.join(
+                        self.hparams.evaluated_ids_output_dir,
+                        f"test_evaluated_ids_epoch_{self.current_epoch}.csv"
+                    )
+                    # Write to CSV
+                    with open(output_filename, 'w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(['sequence_id', 'true_superfamily']) # Header
+                        writer.writerows(zip(eval_ids, eval_sfs))
+                    log.info(f"Saved {len(eval_ids)} evaluated sequence IDs for test stage to {output_filename}")
+
+                except AttributeError:
+                     log.error("Could not get label decoder, possibly datamodule not available. Skipping saving IDs.")
+                except Exception as e_save:
+                     log.error(f"Failed to save evaluated sequence IDs for test stage: {e_save}", exc_info=True)
+            elif stage == 'test':
+                log.warning("No evaluated indices available for test stage, skipping ID saving.")
+            # --- END ADDED ---
 
         except Exception as e:
             log.error(f"Error during _shared_epoch_end for {stage}: {e}", exc_info=True)

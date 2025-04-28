@@ -1,6 +1,6 @@
 import torch
 from torch import Tensor
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
 
 from distances import pairwise_distance
@@ -17,14 +17,17 @@ def compute_centroid_metrics(
     labels: Tensor,
     stage: str,
     min_class_size: int = 2,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Optional[Tensor]]:
     """
     Computes nearest‐centroid classification metrics entirely on CPU.
     Ignores classes with fewer than `min_class_size` samples for centroid calculation
     and evaluates only on samples from eligible classes.
+    Returns metrics dict and indices of evaluated samples relative to input.
     """
     metrics: Dict[str, float] = {}
     metric_prefix = f"{stage}/centroid"
+    eval_indices: Optional[Tensor] = None # Store evaluated indices
+
     try:
         with torch.no_grad():
             # move off GPU ASAP
@@ -39,7 +42,7 @@ def compute_centroid_metrics(
                 log.warning(f"Centroid metrics skipped for {stage}: no classes with >= {min_class_size} samples.")
                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                     metrics[f"{metric_prefix}_{name}"] = 0.0
-                return metrics
+                return metrics, None # Return None for indices
 
             # 2) Compute centroids *only* for eligible classes using all their samples
             centroids = torch.stack([embs[labs == c].mean(dim=0) for c in eligible_classes])
@@ -48,12 +51,13 @@ def compute_centroid_metrics(
             eligible_mask = torch.isin(labs, eligible_classes)
             eval_embs = embs[eligible_mask]
             eval_labs = labs[eligible_mask]
+            eval_indices = torch.arange(embs.size(0))[eligible_mask] # Store filtered original indices
 
             if eval_embs.numel() == 0: # Should not happen if eligible_classes is not empty, but safety check
                 log.warning(f"Centroid metrics skipped for {stage}: No eligible samples found after filtering.")
                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                     metrics[f"{metric_prefix}_{name}"] = 0.0
-                return metrics
+                return metrics, None # Return None for indices
 
             # 4) Compute pairwise distances between evaluation embeddings and eligible centroids
             dists = pairwise_distance(eval_embs, centroids) # Shape: [n_eval_samples, n_eligible_classes]
@@ -77,7 +81,9 @@ def compute_centroid_metrics(
         # on any error, return zeros to keep training stable
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
             metrics[f"{metric_prefix}_{name}"] = 0.0
-    return metrics
+        return metrics, None # Return None indices on error
+
+    return metrics, eval_indices # Return calculated metrics and the indices used
 
 
 def compute_knn_metrics(
@@ -88,20 +94,23 @@ def compute_knn_metrics(
     knn_batch_size: int = 1024,
     num_workers: int = 0,
     min_class_size: int = 2,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Optional[Tensor]]:
     """
     Leave‑one‑out k‑NN on the embeddings (CPU), batched for memory efficiency.
     Evaluates metrics only on samples whose true class has at least `min_class_size` members.
+    Returns metrics dict and indices of evaluated samples relative to input.
     """
     metrics = {}
     metric_prefix = f"{stage}/knn_{k}"
+    eval_indices: Optional[Tensor] = None # Store evaluated indices
     n_samples = embeddings.size(0)
+    original_indices = torch.arange(n_samples) # Track original indices
 
     if n_samples <= k:
         log.warning(f"k-NN computation skipped for k={k}, stage={stage}: Not enough samples ({n_samples})")
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
              metrics[f"{metric_prefix}_{name}"] = 0.0
-        return metrics
+        return metrics, None
 
     try:
         with torch.no_grad():
@@ -116,7 +125,7 @@ def compute_knn_metrics(
                 log.warning(f"k-NN ({k}) metrics skipped for {stage}: no classes with >= {min_class_size} samples.")
                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                     metrics[f"{metric_prefix}_{name}"] = 0.0
-                return metrics
+                return metrics, None
             # --- End Pre-check ---
 
             all_preds = []
@@ -134,7 +143,9 @@ def compute_knn_metrics(
                         dists_batch[batch_idx, global_idx] = float("inf")
 
                 # Find k-nearest neighbors for the current batch
-                knn_idxs_batch = torch.topk(dists_batch, k, largest=False).indices # Shape: [batch_size, k]
+                actual_k = min(k, n_samples - 1)
+                if actual_k <= 0: raise ValueError(f"Cannot compute k-NN with k={actual_k}")
+                knn_idxs_batch = torch.topk(dists_batch, actual_k, largest=False).indices # Shape: [batch_size, k]
 
                 # Get neighbor labels and majority vote for the batch
                 neighbor_labels_batch = labs[knn_idxs_batch] # Shape: [batch_size, k]
@@ -146,20 +157,21 @@ def compute_knn_metrics(
 
             # --- Filter results for metric calculation ---
             eligible_mask = torch.isin(labs, eligible_classes)
-            y_true_filtered = labs[eligible_mask].numpy()
-            y_pred_filtered = preds[eligible_mask].numpy()
+            y_true_filtered = labs[eligible_mask]
+            y_pred_filtered = preds[eligible_mask]
+            eval_indices = original_indices[eligible_mask] # Store filtered original indices
 
             if len(y_true_filtered) == 0:
                  log.warning(f"k-NN ({k}) metrics skipped for {stage}: no eligible samples remained after filtering.")
                  for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
                      metrics[f"{metric_prefix}_{name}"] = 0.0
-                 return metrics
+                 return metrics, None
             # --- End Filter ---
 
             # Compute sklearn metrics using filtered results
             # Compute sklearn metrics
-            y_true = y_true_filtered # Use filtered data
-            y_pred = y_pred_filtered # Use filtered data
+            y_true = y_true_filtered.numpy()
+            y_pred = y_pred_filtered.numpy()
             metrics[f"{metric_prefix}_acc"]           = accuracy_score(y_true, y_pred)
             metrics[f"{metric_prefix}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
             metrics[f"{metric_prefix}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
@@ -176,7 +188,9 @@ def compute_knn_metrics(
             metrics[f"{metric_prefix}_{name}"] = 0.0
         # Optionally re-raise if you want training to stop on metric calculation errors
         # raise e
-    return metrics
+        return metrics, None # Return None indices on error
+
+    return metrics, eval_indices # Return calculated metrics and the indices used
 
 
 def compute_centroid_metrics_reference(
