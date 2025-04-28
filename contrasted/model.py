@@ -113,8 +113,8 @@ class ContrastiveCATHeModel(L.LightningModule):
         x = self.projection(x)
         return F.normalize(x, p=2, dim=1)
 
-    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
-        emb, labels = batch
+    def training_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> Tensor:
+        emb, labels, _ = batch # Unpack sequence_id into _
         proj = self(emb)
         loss = self.loss_fn(proj, labels)
         self.log(
