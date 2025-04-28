@@ -190,35 +190,37 @@ def main():
          print(f"An unexpected error occurred loading the config: {e}")
          return
 
+    # --- MODIFIED: Only process the 'test' split ---
+    splits = ["test"]
+    # --- END MODIFICATION ---
 
-    splits = ["train", "val", "test"]
     results = {}
 
-    for split in splits:
+    for split in splits: # This loop will now only run once with split="test"
         emb_key = f"{split}_embeddings"
         lbl_key = f"{split}_labels"
 
         # Check if paths exist in config
         if emb_key not in data_config or lbl_key not in data_config:
              print(f"Skipping {split} split - '{emb_key}' or '{lbl_key}' not found in {args.config_file}.")
-             continue
+             continue # Or potentially raise an error if test set is mandatory
 
         emb_file_rel = data_config[emb_key]
         lbl_file_rel = data_config[lbl_key]
 
         if not emb_file_rel or not lbl_file_rel:
             print(f"Skipping {split} split - missing file paths in config for this split.")
-            continue
+            continue # Or potentially raise an error
 
         emb_path = base_dir / emb_file_rel
         lbl_path = base_dir / lbl_file_rel
 
         if not emb_path.is_file():
             print(f"ERROR: Embeddings file not found: {emb_path}")
-            continue
+            continue # Or potentially raise an error
         if not lbl_path.is_file():
             print(f"ERROR: Labels file not found: {lbl_path}")
-            continue
+            continue # Or potentially raise an error
 
         print(f"\nLoading data for {split} split...")
         try:
@@ -226,7 +228,7 @@ def main():
             emb_data = np.load(emb_path)
             if "embeddings" not in emb_data:
                 print(f"ERROR: 'embeddings' key not found in {emb_path}")
-                continue
+                continue # Or potentially raise an error
             embeddings_np = emb_data["embeddings"].astype(np.float32)
             embeddings_tensor = torch.from_numpy(embeddings_np)
 
@@ -234,7 +236,7 @@ def main():
             df = pd.read_csv(lbl_path)
             if "SF" not in df.columns:
                 print(f"ERROR: 'SF' column not found in {lbl_path}")
-                continue
+                continue # Or potentially raise an error
 
             # Process labels using imported function
             sf_series = df["SF"].astype(str).apply(lambda s: get_level_label(s, args.cath_level))
@@ -245,7 +247,7 @@ def main():
             # Check length consistency
             if len(embeddings_tensor) != len(labels_tensor):
                  print(f"ERROR: Mismatch lengths for {split}: embeddings={len(embeddings_tensor)}, labels={len(labels_tensor)}")
-                 continue
+                 continue # Or potentially raise an error
 
             print(f"Loaded {len(embeddings_tensor)} samples.")
 
@@ -260,7 +262,7 @@ def main():
             results.update(split_results)
 
         except Exception as e:
-            print(f"Failed to process {split} split: {e}")
+            print(f"Failed to process {split} split: {e}") # Consider re-raising for critical errors
 
     print("\n--- Final Results (Console) ---")
     if not results:
