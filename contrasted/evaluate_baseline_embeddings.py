@@ -19,8 +19,8 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 
 # Import utilities directly from the contrasted package
-from .data import CATH_LEVEL_NAMES, get_level_label # Use relative import
-from .distances import pairwise_distance # Use relative import
+from data import CATH_LEVEL_NAMES, get_level_label # Use relative import
+from distances import pairwise_distance # Use relative import
 
 # Core Evaluation Logic (adapted from contrasted/metrics.py)
 
