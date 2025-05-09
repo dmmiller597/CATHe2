@@ -45,18 +45,7 @@ def load_prostT5_encoder_model(device):
     logging.info("Loading ProstT5 Encoder model...")
     model_name = "Rostlab/ProstT5"
     encoder_model = T5EncoderModel.from_pretrained(model_name).to(device)
-
-    if device.type == 'cuda':
-        logging.info("Attempting to torch.compile the encoder model...")
-        try:
-            # Using "reduce-overhead" mode for inference optimization
-            encoder_model = torch.compile(encoder_model, mode="reduce-overhead")
-            logging.info("Encoder model compiled successfully.")
-        except Exception as e:
-            logging.warning(f"torch.compile for encoder model failed: {e}. Proceeding without compilation.")
-    
     encoder_model.eval()
-
     if device.type == 'cuda':
         logging.info("Using half precision for Encoder model on GPU.")
         encoder_model.half()
@@ -72,18 +61,7 @@ def load_prostT5_translation_model(device):
     logging.info("Loading ProstT5 Translation (Seq2Seq) model...")
     model_name = "Rostlab/ProstT5"
     translation_model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
-
-    if device.type == 'cuda':
-        logging.info("Attempting to torch.compile the translation model...")
-        try:
-            # Using "reduce-overhead" mode for inference optimization
-            translation_model = torch.compile(translation_model, mode="reduce-overhead")
-            logging.info("Translation model compiled successfully.")
-        except Exception as e:
-            logging.warning(f"torch.compile for translation model failed: {e}. Proceeding without compilation.")
-
     translation_model.eval()
-
     if device.type == 'cuda':
         logging.info("Using half precision for Translation model on GPU.")
         translation_model.half()
