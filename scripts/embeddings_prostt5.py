@@ -113,10 +113,14 @@ def generate_prostt5_embeddings(encoder_model, tokenizer, original_sequences, se
     sorted_original_sequences = [item['seq'] for item in indexed_sequences]
     sorted_indices = [item['id'] for item in indexed_sequences]
 
+    # Pre-process all sorted sequences at once before batching
+    all_preprocessed_sorted_sequences = preprocess_sequences_for_prostt5(sorted_original_sequences, sequence_type)
+
     with torch.inference_mode():
-        for i in tqdm(range(0, len(sorted_original_sequences), batch_size), desc=f"Embedding {sequence_type}"):
+        for i in tqdm(range(0, len(all_preprocessed_sorted_sequences), batch_size), desc=f"Embedding {sequence_type}"):
+            # batch_original_seqs is needed for original_len, so we still need to slice it.
             batch_original_seqs = sorted_original_sequences[i:i + batch_size]
-            batch_preprocessed_seqs = preprocess_sequences_for_prostt5(batch_original_seqs, sequence_type)
+            batch_preprocessed_seqs = all_preprocessed_sorted_sequences[i:i + batch_size]
             
             try:
                 ids = tokenizer.batch_encode_plus(
@@ -156,7 +160,6 @@ def translate_aa_to_3di(translation_model, tokenizer, aa_sequences, device, batc
     indexed_aa_sequences = [{'seq': seq, 'id': i, 'len': len(seq)} for i, seq in enumerate(aa_sequences) if isinstance(seq, str) and len(seq) > 0]
     if not indexed_aa_sequences:
         logging.warning("No valid AA sequences provided for translation.")
-        # Ensure the function returns a list of the correct length, even if empty or filled with placeholders
         return ["" for _ in aa_sequences]
 
 
@@ -165,11 +168,15 @@ def translate_aa_to_3di(translation_model, tokenizer, aa_sequences, device, batc
     sorted_input_aa_sequences = [item['seq'] for item in indexed_aa_sequences]
     original_indices_for_sorted = [item['id'] for item in indexed_aa_sequences]
 
+    # Pre-process all sorted AA sequences at once before batching for translation
+    all_preprocessed_sorted_aa_sequences = preprocess_sequences_for_prostt5(sorted_input_aa_sequences, 'aa')
+
     with torch.inference_mode():
-        for i in tqdm(range(0, len(sorted_input_aa_sequences), batch_size), desc="Translating AA to 3Di"):
+        for i in tqdm(range(0, len(all_preprocessed_sorted_aa_sequences), batch_size), desc="Translating AA to 3Di"):
+            # batch_aa_seqs_sorted is needed for max_length calculation, so slice original sorted.
             batch_aa_seqs_sorted = sorted_input_aa_sequences[i:i + batch_size]
             batch_original_indices = original_indices_for_sorted[i:i + batch_size]
-            batch_preprocessed_for_translation = preprocess_sequences_for_prostt5(batch_aa_seqs_sorted, 'aa')
+            batch_preprocessed_for_translation = all_preprocessed_sorted_aa_sequences[i:i + batch_size]
             
             try:
                 ids = tokenizer.batch_encode_plus(
