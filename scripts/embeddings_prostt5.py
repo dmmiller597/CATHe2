@@ -52,7 +52,16 @@ def load_prostT5_encoder_model(device):
     else:
         logging.info("Using full precision for Encoder model on CPU.")
         encoder_model.float()
-    logging.info("ProstT5 Encoder model loaded successfully.")
+    
+    logging.info("Attempting to compile Encoder model with torch.compile (mode='max-autotune')...")
+    try:
+        # Apply torch.compile after model is on device, in eval mode, and correct dtype
+        encoder_model = torch.compile(encoder_model, mode="max-autotune")
+        logging.info("ProstT5 Encoder model compiled successfully.")
+    except Exception as e:
+        logging.warning(f"Failed to compile Encoder model: {e}. Proceeding without compilation.")
+        
+    logging.info("ProstT5 Encoder model loaded.") # Adjusted message
     return encoder_model
 
 
@@ -68,7 +77,16 @@ def load_prostT5_translation_model(device):
     else:
         logging.info("Using full precision for Translation model on CPU.")
         translation_model.float()
-    logging.info("ProstT5 Translation model loaded successfully.")
+
+    logging.info("Attempting to compile Translation model with torch.compile (mode='max-autotune')...")
+    try:
+        # Apply torch.compile after model is on device, in eval mode, and correct dtype
+        translation_model = torch.compile(translation_model, mode="max-autotune")
+        logging.info("ProstT5 Translation model compiled successfully.")
+    except Exception as e:
+        logging.warning(f"Failed to compile Translation model: {e}. Proceeding without compilation.")
+
+    logging.info("ProstT5 Translation model loaded.") # Adjusted message
     return translation_model
 
 
