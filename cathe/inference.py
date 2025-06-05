@@ -5,6 +5,7 @@ import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import pickle
+import os
 from Bio import SeqIO
 from transformers import T5Tokenizer, T5EncoderModel
 import re
@@ -22,21 +23,64 @@ log = get_logger()
 class ProtT5Embedder:
     """Generate ProtT5 embeddings for protein sequences."""
     
-    def __init__(self, model_name: str = "Rostlab/prot_t5_xl_half_uniref50-enc", device: str = "auto") -> None:
+    def __init__(
+        self, 
+        model_name: str = "Rostlab/prot_t5_xl_half_uniref50-enc", 
+        device: str = "auto",
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = False
+    ) -> None:
         """Initialize ProtT5 model and tokenizer.
         
         Args:
-            model_name: HuggingFace model identifier for ProtT5
+            model_name: HuggingFace model identifier or local path to ProtT5
             device: Device to run inference on ('auto', 'cpu', 'cuda')
+            cache_dir: Custom cache directory for model downloads
+            local_files_only: If True, only use locally cached files
         """
         self.device = self._get_device(device)
         log.info(f"Loading ProtT5 model on {self.device}")
         
+        # Set up cache directory if provided
+        if cache_dir:
+            cache_path = Path(cache_dir).resolve()
+            cache_path.mkdir(parents=True, exist_ok=True)
+            log.info(f"Using custom cache directory: {cache_path}")
+        else:
+            cache_path = None
+        
         try:
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False)
-            self.model = T5EncoderModel.from_pretrained(model_name).to(self.device)
+            # Check if it's a local path
+            if Path(model_name).exists():
+                log.info(f"Loading model from local path: {model_name}")
+                self.tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False)
+                self.model = T5EncoderModel.from_pretrained(model_name).to(self.device)
+            else:
+                # Try to load from HuggingFace Hub
+                log.info(f"Loading model from HuggingFace Hub: {model_name}")
+                self.tokenizer = T5Tokenizer.from_pretrained(
+                    model_name, 
+                    do_lower_case=False,
+                    cache_dir=cache_path,
+                    local_files_only=local_files_only
+                )
+                self.model = T5EncoderModel.from_pretrained(
+                    model_name,
+                    cache_dir=cache_path,
+                    local_files_only=local_files_only
+                ).to(self.device)
+            
             self.model.eval()
             log.info("ProtT5 model loaded successfully")
+            
+        except OSError as e:
+            if "Disk quota exceeded" in str(e):
+                log.error("Disk quota exceeded while downloading model. Solutions:")
+                log.error("1. Set a custom cache directory with --cache_dir")
+                log.error("2. Use --local_files_only if model is already cached")
+                log.error("3. Use a smaller model variant")
+                log.error("4. Clear space in your home directory")
+            raise
         except Exception as e:
             log.error(f"Failed to load ProtT5 model: {e}")
             raise
@@ -292,6 +336,23 @@ def create_arg_parser() -> argparse.ArgumentParser:
         help="Maximum sequence length for ProtT5"
     )
     
+    parser.add_argument(
+        "--model_name",
+        default="Rostlab/prot_t5_xl_half_uniref50-enc",
+        help="ProtT5 model name or local path"
+    )
+    
+    parser.add_argument(
+        "--cache_dir",
+        help="Custom cache directory for model downloads"
+    )
+    
+    parser.add_argument(
+        "--local_files_only",
+        action="store_true",
+        help="Only use locally cached model files"
+    )
+    
     return parser
 
 def main() -> None:
@@ -316,7 +377,12 @@ def main() -> None:
         
         # Step 2: Generate embeddings
         log.info("Generating ProtT5 embeddings...")
-        embedder = ProtT5Embedder(device=args.device)
+        embedder = ProtT5Embedder(
+            model_name=args.model_name,
+            device=args.device,
+            cache_dir=args.cache_dir,
+            local_files_only=args.local_files_only
+        )
         embeddings = embedder.embed_batch(sequences, batch_size=args.batch_size)
         
         # Step 3: Load classifier and make predictions
