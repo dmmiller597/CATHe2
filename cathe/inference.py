@@ -2,15 +2,10 @@
 """
 CATHe Protein Structure Classification - Inference Pipeline
 
-Predicts CATH superfamilies for protein sequences using ProtT5 + trained CATHe model.
-
-USAGE:
-    python cathe/inference.py -f proteins.fasta -c model.ckpt -t train_labels.csv
-
 REQUIRED FILES:
-    proteins.fasta     - Input protein sequences (FASTA format)
-    model.ckpt         - Trained CATHe PyTorch Lightning checkpoint  
-    train_labels.csv   - Training labels with 'SF' column (CATH IDs)
+    --fasta     - Input protein sequences (FASTA format)
+    --checkpoint         - Trained CATHe PyTorch Lightning checkpoint  
+    --training_labels   - Training labels with 'SF' column (CATH IDs)
 
 OUTPUT:
     predictions.csv    - Results: sequence_id, cath_id, predicted_class_id, confidence
