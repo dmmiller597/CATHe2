@@ -50,20 +50,34 @@ class ProtT5Embedder:
     def __init__(
         self, 
         model_name: str = "Rostlab/prot_t5_xl_half_uniref50-enc", 
-        device: str = "auto"
+        device: str = "auto",
+        cache_dir: Optional[str] = None
     ) -> None:
         """Initialize ProtT5 model and tokenizer.
         
         Args:
             model_name: HuggingFace model identifier
             device: Device to run inference on ('auto', 'cpu', 'cuda')
+            cache_dir: Directory to cache downloaded models
         """
         self.device = self._get_device(device)
         log.info(f"Loading ProtT5 model on {self.device}")
         
+        if cache_dir:
+            log.info(f"Using cache directory: {cache_dir}")
+            # Ensure cache directory exists
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        
         try:
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False)
-            self.model = T5EncoderModel.from_pretrained(model_name).to(self.device)
+            self.tokenizer = T5Tokenizer.from_pretrained(
+                model_name, 
+                do_lower_case=False,
+                cache_dir=cache_dir
+            )
+            self.model = T5EncoderModel.from_pretrained(
+                model_name,
+                cache_dir=cache_dir
+            ).to(self.device)
             self.model.eval()
             log.info("ProtT5 model loaded successfully")
             
@@ -324,6 +338,11 @@ def create_arg_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
+        "--cache_dir",
+        help="Directory to cache downloaded models (default: HuggingFace default cache)"
+    )
+    
+    parser.add_argument(
         "--output", "-o",
         default="predictions.csv",
         help="Output CSV file for predictions"
@@ -377,7 +396,7 @@ def main() -> None:
         
         # Step 2: Generate embeddings
         log.info("🔄 Generating ProtT5 embeddings...")
-        embedder = ProtT5Embedder(device=args.device)
+        embedder = ProtT5Embedder(device=args.device, cache_dir=args.cache_dir)
         embeddings = embedder.embed_batch(sequences, batch_size=args.batch_size)
         
         # Step 3: Load classifier
