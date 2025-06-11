@@ -12,7 +12,7 @@ data/splits/sf_label_map.json   # for downstream code
 """
 
 from __future__ import annotations
-import argparse, logging, json, numpy as np, pyarrow.dataset as ds, pandas as pd
+import argparse, logging, json, numpy as np, pyarrow.dataset as ds, pandas as pd, pyarrow as pa
 from pathlib import Path
 from tqdm import tqdm
 
@@ -37,6 +37,8 @@ def load_meta(path: str) -> pd.DataFrame:
         use_threads=True
     )
     df = tbl.to_pandas(types_mapper=pd.ArrowDtype)  # zero-copy
+    # Prevent Arrow offset-overflow by upgrading to 64-bit offsets (large_string)
+    df["sequence_id"] = df["sequence_id"].astype(pd.ArrowDtype(pa.large_string()))
     df["SF"] = df["SF"].astype("category")          # compress to codes
     return df
 
