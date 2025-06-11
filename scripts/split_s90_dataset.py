@@ -96,75 +96,66 @@ def load_and_filter_data(input_path: str, min_sequences: int) -> pd.DataFrame | 
 
 def create_stratified_splits(
     df: pd.DataFrame, val_frac: float, test_frac: float, seed: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     """Create stratified train/val/test splits, ensuring SF representation."""
     np.random.seed(seed)
     
-    train_dfs, val_dfs, test_dfs = [], [], []
+    df_with_splits = df.copy()
+    # Default to train, as it's the largest set. Then overwrite val/test.
+    df_with_splits['split'] = 'train'
     
     # Process each SF group separately to maintain perfect stratification
-    grouped_by_sf = df.groupby('SF')
+    grouped_by_sf = df_with_splits.groupby('SF')
     
     for sf, group_df in tqdm(grouped_by_sf, total=len(grouped_by_sf), desc="Splitting superfamilies"):
         # Shuffle the group to ensure random splits
-        group_df = group_df.sample(frac=1.0, random_state=seed)
-        group_size = len(group_df)
+        shuffled_group = group_df.sample(frac=1.0, random_state=seed)
+        group_size = len(shuffled_group)
         
         # Calculate split sizes, ensuring at least one sample in val/test
         val_size = max(1, int(group_size * val_frac))
         test_size = max(1, int(group_size * test_frac))
         
-        # Ensure train set is not empty for smallest groups (e.g. size=3)
-        if group_size - val_size - test_size <= 0:
-            # For a group of 3: val=1, test=1, train=1
-            # For a group of 4: val=1, test=1, train=2
-            val_size = 1
-            test_size = 1
+        # With min_sequences>=3 and val/test fractions < 0.5, the train
+        # set is guaranteed to be non-empty.
         
-        # Split into train, val, and test sets
-        test_df = group_df.iloc[:test_size].copy()
-        val_df = group_df.iloc[test_size:test_size + val_size].copy()
-        train_df = group_df.iloc[test_size + val_size:].copy()
+        # Get indices for val and test sets
+        test_indices = shuffled_group.index[:test_size]
+        val_indices = shuffled_group.index[test_size:test_size + val_size]
         
-        # Add to collections
-        train_dfs.append(train_df)
-        val_dfs.append(val_df)
-        test_dfs.append(test_df)
-    
-    # Combine all small dataframes and add the 'split' label
-    train_df = pd.concat(train_dfs, ignore_index=True)
-    val_df = pd.concat(val_dfs, ignore_index=True)
-    test_df = pd.concat(test_dfs, ignore_index=True)
-    
-    train_df['split'] = 'train'
-    val_df['split'] = 'val'
-    test_df['split'] = 'test'
-    
-    return train_df, val_df, test_df
+        # Assign splits. The rest remain 'train' by default.
+        df_with_splits.loc[test_indices, 'split'] = 'test'
+        df_with_splits.loc[val_indices, 'split'] = 'val'
 
-def save_splits(
-    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, output_file: str
-) -> pd.DataFrame:
+    return df_with_splits
+
+def save_splits(full_df: pd.DataFrame, output_file: str) -> None:
     """Save the combined dataset with a 'split' column to a single parquet file."""
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Create and save a combined dataset
-    full_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+    # Save the combined dataset
     full_df.to_parquet(output_path)
     
     logger.info(f"Saved combined dataset with splits to: {output_path}")
+    
+    split_counts = full_df['split'].value_counts()
     logger.info(
-        f"Split counts: train ({len(train_df):,}), val ({len(val_df):,}), test ({len(test_df):,})"
+        f"Split counts: train ({split_counts.get('train', 0):,}), "
+        f"val ({split_counts.get('val', 0):,}), "
+        f"test ({split_counts.get('test', 0):,})"
     )
-    return full_df
 
-def log_statistics(
-    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, full_df: pd.DataFrame
-):
+def log_statistics(full_df: pd.DataFrame):
     """Log final summary statistics of the dataset splits."""
     logger.info("---------- Dataset Split Summary ----------")
     total_seqs = len(full_df)
+    
+    # Derive split-specific dataframes for analysis
+    train_df = full_df[full_df['split'] == 'train']
+    val_df = full_df[full_df['split'] == 'val']
+    test_df = full_df[full_df['split'] == 'test']
+    
     logger.info(f"Total SF groups: {len(full_df['SF'].unique()):,}")
     logger.info(f"Total sequences: {total_seqs:,}")
     logger.info(f"  - Train: {len(train_df):,} ({len(train_df)/total_seqs:.1%})")
@@ -187,7 +178,6 @@ def log_statistics(
             logger.warning(f"SFs in val but not train: {val_sfs - train_sfs}")
     logger.info("-------------------------------------------")
 
-
 def main():
     """Main function to orchestrate the dataset splitting process."""
     args = parse_args()
@@ -202,13 +192,13 @@ def main():
         f"Creating splits with fractions: "
         f"{train_frac:.0%} train, {args.val_fraction:.0%} val, {args.test_fraction:.0%} test"
     )
-    train_df, val_df, test_df = create_stratified_splits(
+    full_df_with_splits = create_stratified_splits(
         filtered_df, args.val_fraction, args.test_fraction, args.seed
     )
     
-    full_df = save_splits(train_df, val_df, test_df, args.output_file)
+    save_splits(full_df_with_splits, args.output_file)
     
-    log_statistics(train_df, val_df, test_df, full_df)
+    log_statistics(full_df_with_splits)
     
     logger.info("Script finished successfully.")
 
