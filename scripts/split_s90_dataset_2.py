@@ -40,6 +40,25 @@ def load_meta(path: str) -> pd.DataFrame:
     df["SF"] = df["SF"].astype("category")          # compress to codes
     return df
 
+def filter_small_groups(df: pd.DataFrame, min_seq: int) -> pd.DataFrame:
+    """Drop SF groups that have fewer than *min_seq* sequences.
+
+    This guarantees that *all* remaining superfamilies can be represented in
+    train/val/test, which makes the post-split consistency assertion reliable.
+    """
+    grp_sizes = df.groupby("SF", observed=True).size()
+    valid_sfs = grp_sizes[grp_sizes >= min_seq].index
+
+    removed = len(grp_sizes) - len(valid_sfs)
+    if removed:
+        log.warning(f"⚠️  Dropping {removed} SF groups with <{min_seq} sequences before splitting")
+
+    # Keep only sequences from adequately sized SFs
+    df = df[df["SF"].isin(valid_sfs)].copy()
+    # Remove now-unused categorical levels to keep codes dense
+    df["SF"] = df["SF"].cat.remove_unused_categories()
+    return df
+
 def make_splits(df: pd.DataFrame, val_f: float, test_f: float,
                 seed: int, min_seq: int) -> pd.DataFrame:
     np.random.seed(seed)
@@ -89,6 +108,8 @@ def save_outputs(df: pd.DataFrame, out_dir: Path):
 def main():
     args = parse_args()
     df = load_meta(args.input)
+    # NEW: filter out tiny superfamilies first so every remaining SF can be present in all splits
+    df = filter_small_groups(df, args.min_seq)
     df = make_splits(df, args.val_frac, args.test_frac, args.seed, args.min_seq)
     save_outputs(df, Path(args.out_dir))
     log.info("✅  Done")
