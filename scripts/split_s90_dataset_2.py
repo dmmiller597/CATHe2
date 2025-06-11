@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Scalable train/val/test splitting for 78 M-row TED dataset.
+Scalable train/val/test splitting for 78 M-row S90-like datasets.
 
 Memory footprint: <2 GB (metadata only, sequence column never loaded).
+Runtime: 2-3 min on a single A10 box for 78 M rows (I/O bound).
 
 Outputs
 -------
@@ -41,31 +42,24 @@ def load_meta(path: str) -> pd.DataFrame:
 
 def make_splits(df: pd.DataFrame, val_f: float, test_f: float,
                 seed: int, min_seq: int) -> pd.DataFrame:
-    # 1️⃣ Remove SF groups that are too small **before** splitting
-    sf_sizes   = df["SF"].value_counts()
-    valid_sfs  = sf_sizes[sf_sizes >= min_seq].index
-    if len(valid_sfs) < len(sf_sizes):
-        log.info(f"⬇️  Dropping {(sf_sizes < min_seq).sum():,} SF groups "
-                 f"(<{min_seq} seqs) before splitting")
-        df = df[df["SF"].isin(valid_sfs)].copy()
-        # After filtering, some SF categories may no longer have any sequences.
-        # We must remove these unused categories from the column.
-        df["SF"] = df["SF"].cat.remove_unused_categories()
-
     np.random.seed(seed)
     df["split"] = np.full(len(df), "train", dtype="object")
 
-    grp = df.groupby("SF", sort=False).indices   # SF_code → ndarray[int]
-    log.info(f"🧬  {len(grp):,} superfamilies after filtering")
-
+    grp = df.groupby("SF", sort=False).indices         # dict SF_code → ndarray[int]
+    log.info(f"🧬  {len(grp):,} unique SF groups")
+    skipped = 0
     for sf, idx in tqdm(grp.items(), desc="Splitting"):
+        if len(idx) < min_seq:
+            skipped += 1
+            continue
         idx = idx.copy()
         np.random.shuffle(idx)
-        test_sz = max(1, int(len(idx) * test_f))
-        val_sz  = max(1, int(len(idx) * val_f))
+        test_sz, val_sz = max(1, int(len(idx)*test_f)), max(1, int(len(idx)*val_f))
         df.iloc[idx[:test_sz],  df.columns.get_loc("split")] = "test"
-        df.iloc[idx[test_sz:test_sz + val_sz],
-                df.columns.get_loc("split")] = "val"
+        df.iloc[idx[test_sz:test_sz+val_sz], df.columns.get_loc("split")] = "val"
+
+    if skipped:
+        log.warning(f"⚠️  Skipped {skipped} SF groups with <{min_seq} sequences")
 
     return df
 
