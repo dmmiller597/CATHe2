@@ -56,7 +56,8 @@ def load_prott5() -> Tuple[T5EncoderModel, T5Tokenizer, torch.device]:
         "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False
     )
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    mdl = mdl.to(dev).eval()  # fp16 weights are baked in
+    mdl = mdl.to(dev).eval()
+    mdl = torch.compile(mdl, mode="reduce-overhead", dynamic=True)
     return mdl, tok, dev
 
 
@@ -74,6 +75,7 @@ def encode_batch(
     tokenizer: T5Tokenizer,
     device: torch.device,
     seqs: List[str],
+    tok_workers: int,
 ) -> np.ndarray:
     """
     Encode ≤64 sequences → (B, 1024) float16 numpy.
@@ -91,6 +93,7 @@ def encode_batch(
         add_special_tokens=True,
         padding="longest",
         return_tensors="pt",
+        num_workers=tok_workers,
     )
 
     inp_ids = tok_inputs["input_ids"].to(device)
@@ -122,10 +125,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seq",  type=str, default="data/TED/s90_reps.parquet",
                    help="Parquet/Arrow dataset with sequence_id + sequence")
     p.add_argument("--out",  type=str, default="data/TED/s90/embeddings/protT5")
-    p.add_argument("--batch",        type=int, default=64,
-                   help="GPU micro-batch size (sequences)")
-    p.add_argument("--arrow-batch",  type=int, default=8000,
+    p.add_argument("--batch",        type=int, default=256,
+                   help="GPU micro-batch size (push up to 384 on 80 GB A100)")
+    p.add_argument("--arrow-batch",  type=int, default=64000,
                    help="Rows pulled per Arrow scan batch")
+    p.add_argument("--tok-workers",  type=int, default=8,
+                   help="Tokenizer worker threads")
     return p.parse_args()
 
 
@@ -184,7 +189,7 @@ def main() -> None:
             sub_split = splits_batch[i : i + args.batch]
             sub_label = labels_batch[i : i + args.batch]
 
-            emb = encode_batch(model, tokenizer, device, sub_seqs)
+            emb = encode_batch(model, tokenizer, device, sub_seqs, args.tok_workers)
 
             # write embeddings + labels
             for e, sp, lb in zip(emb, sub_split, sub_label):
