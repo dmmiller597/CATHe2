@@ -32,9 +32,9 @@ def parse_args():
         help='Path to the input s90 parquet file. (Default: %(default)s)'
     )
     parser.add_argument(
-        '--output-dir', type=str,
-        default='data/TED/s90',
-        help='Directory to save the output split files. (Default: %(default)s)'
+        '--output-file', type=str,
+        default='data/TED/s90/s90_splits.parquet',
+        help='Path to save the output parquet file with splits. (Default: %(default)s)'
     )
     parser.add_argument(
         '--min-sequences', type=int,
@@ -140,24 +140,19 @@ def create_stratified_splits(
     return train_df, val_df, test_df
 
 def save_splits(
-    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, output_dir: str
+    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, output_file: str
 ) -> pd.DataFrame:
-    """Save the dataset splits to parquet files."""
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Saving splits to directory: {output_path}")
+    """Save the combined dataset with a 'split' column to a single parquet file."""
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Save individual splits
-    train_df.to_parquet(output_path / 's90_train.parquet')
-    val_df.to_parquet(output_path / 's90_val.parquet')
-    test_df.to_parquet(output_path / 's90_test.parquet')
-    
-    # Create and save a combined dataset for easier loading later
+    # Create and save a combined dataset
     full_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
-    full_df.to_parquet(output_path / 's90_full.parquet')
+    full_df.to_parquet(output_path)
     
+    logger.info(f"Saved combined dataset with splits to: {output_path}")
     logger.info(
-        f"Saved splits: train ({len(train_df):,}), val ({len(val_df):,}), test ({len(test_df):,})"
+        f"Split counts: train ({len(train_df):,}), val ({len(val_df):,}), test ({len(test_df):,})"
     )
     return full_df
 
@@ -208,7 +203,7 @@ def main():
         filtered_df, args.val_fraction, args.test_fraction, args.seed
     )
     
-    full_df = save_splits(train_df, val_df, test_df, args.output_dir)
+    full_df = save_splits(train_df, val_df, test_df, args.output_file)
     
     log_statistics(train_df, val_df, test_df, full_df)
     
