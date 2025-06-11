@@ -13,6 +13,7 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 # Configure logging for clear output
 logging.basicConfig(
@@ -102,7 +103,9 @@ def create_stratified_splits(
     train_dfs, val_dfs, test_dfs = [], [], []
     
     # Process each SF group separately to maintain perfect stratification
-    for sf, group_df in df.groupby('SF'):
+    grouped_by_sf = df.groupby('SF')
+    
+    for sf, group_df in tqdm(grouped_by_sf, total=len(grouped_by_sf), desc="Splitting superfamilies"):
         # Shuffle the group to ensure random splits
         group_df = group_df.sample(frac=1.0, random_state=seed)
         group_size = len(group_df)
