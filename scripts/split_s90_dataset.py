@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import json
 
 # Configure logging for clear output
 logging.basicConfig(
@@ -63,12 +64,14 @@ def load_and_filter_data(input_path: str, min_sequences: int) -> pd.DataFrame | 
     """Load the S90 dataset and filter SF groups with too few sequences."""
     logger.info(f"Loading dataset from: {input_path}")
     try:
-        df = pd.read_parquet(input_path)
-        logger.info(f"Loaded {len(df):,} total sequences.")
-        
-        # Ensure we only have the necessary columns
-        df = df[['sequence_id', 'sequence', 'length', 'SF']]
-        
+        # To handle large datasets efficiently, only load the columns required for
+        # splitting. The 'sequence' column, which is the largest, is intentionally
+        # omitted to conserve memory.
+        columns_to_load = ['sequence_id', 'SF', 'length']
+        logger.info(f"Loading columns {columns_to_load} from dataset...")
+        df = pd.read_parquet(input_path, columns=columns_to_load)
+        logger.info(f"Loaded metadata for {len(df):,} total sequences.")
+
         # Count sequences per SF to prepare for filtering
         sf_counts = df['SF'].value_counts()
         initial_sf_count = len(sf_counts)
@@ -195,7 +198,21 @@ def main():
     full_df_with_splits = create_stratified_splits(
         filtered_df, args.val_fraction, args.test_fraction, args.seed
     )
-    
+
+    # Create integer labels for SFs, essential for training classifiers
+    logger.info("Creating integer labels for Superfamilies.")
+    sf_labels = sorted(full_df_with_splits['SF'].unique())
+    sf_to_int = {sf: i for i, sf in enumerate(sf_labels)}
+    full_df_with_splits['SF_label'] = full_df_with_splits['SF'].map(sf_to_int)
+
+    # Save the mapping to a JSON file for later use (e.g., in the model)
+    output_path = Path(args.output_file)
+    mapping_filename = f"{output_path.stem}_sf_map.json"
+    mapping_path = output_path.parent / mapping_filename
+    with open(mapping_path, 'w') as f:
+        json.dump(sf_to_int, f, indent=4)
+    logger.info(f"Saved Superfamily to integer mapping to: {mapping_path}")
+
     save_splits(full_df_with_splits, args.output_file)
     
     log_statistics(full_df_with_splits)
