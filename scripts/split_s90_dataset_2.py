@@ -66,7 +66,7 @@ def make_splits(df: pd.DataFrame, val_f: float, test_f: float,
     np.random.seed(seed)
     df["split"] = np.full(len(df), "train", dtype="object")
 
-    grp = df.groupby("SF", sort=False).indices         # dict SF_code → ndarray[int]
+    grp = df.groupby("SF", sort=False, observed=True).indices         # dict SF_code → ndarray[int]
     log.info(f"🧬  {len(grp):,} unique SF groups")
     skipped = 0
     for sf, idx in tqdm(grp.items(), desc="Splitting"):
