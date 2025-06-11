@@ -75,7 +75,6 @@ def encode_batch(
     tokenizer: T5Tokenizer,
     device: torch.device,
     seqs: List[str],
-    tok_workers: int,
 ) -> np.ndarray:
     """
     Encode ≤64 sequences → (B, 1024) float16 numpy.
@@ -93,7 +92,6 @@ def encode_batch(
         add_special_tokens=True,
         padding="longest",
         return_tensors="pt",
-        num_workers=tok_workers,
     )
 
     inp_ids = tok_inputs["input_ids"].to(device)
@@ -129,8 +127,6 @@ def parse_args() -> argparse.Namespace:
                    help="GPU micro-batch size (push up to 384 on 80 GB A100)")
     p.add_argument("--arrow-batch",  type=int, default=64000,
                    help="Rows pulled per Arrow scan batch")
-    p.add_argument("--tok-workers",  type=int, default=8,
-                   help="Tokenizer worker threads")
     return p.parse_args()
 
 
@@ -189,7 +185,7 @@ def main() -> None:
             sub_split = splits_batch[i : i + args.batch]
             sub_label = labels_batch[i : i + args.batch]
 
-            emb = encode_batch(model, tokenizer, device, sub_seqs, args.tok_workers)
+            emb = encode_batch(model, tokenizer, device, sub_seqs)
 
             # write embeddings + labels
             for e, sp, lb in zip(emb, sub_split, sub_label):
