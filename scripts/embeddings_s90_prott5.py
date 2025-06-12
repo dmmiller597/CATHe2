@@ -25,7 +25,7 @@ python scripts/embeddings_s90_prott5.py \
 """
 
 from __future__ import annotations
-import argparse, logging, re, sys
+import argparse, logging, re, sys, json
 from pathlib import Path
 from typing import Dict, Tuple, List
 
@@ -115,6 +115,41 @@ def create_memmap(path: Path, shape: Tuple[int, ...], dtype: str) -> np.memmap:
     return np.memmap(path, mode="w+", dtype=dtype, shape=shape)
 
 
+def open_memmap(path: Path, shape: Tuple[int, ...], dtype: str, resume: bool) -> np.memmap:
+    """Create new or open existing memmap depending on resume flag.
+
+    Safety rules
+    1. resume=True  & file exists  → open in r+
+    2. resume=True  & file missing → error (cannot resume)
+    3. resume=False & file missing → create new
+    4. resume=False & file exists  → error (would overwrite)
+    """
+    if path.exists():
+        if resume:
+            log.info(f"📥  Resuming from existing memmap {path}")
+            return np.memmap(path, mode="r+", dtype=dtype, shape=shape)
+        log.error(f"{path} already exists. Delete it or use --resume to continue.")
+        sys.exit(1)
+    else:
+        if resume:
+            log.error(f"Expected existing file {path} for --resume but none found.")
+            sys.exit(1)
+        return create_memmap(path, shape, dtype)
+
+
+def detect_rows(mm: np.memmap) -> int:
+    """Return count of rows already written (labels != 0)."""
+    nz = np.flatnonzero(mm)
+    return int(nz[-1]) + 1 if nz.size else 0
+
+
+def save_progress(state: Dict[str, int], path: Path) -> None:
+    """Persist write_ptr dictionary to JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fp:
+        json.dump(state, fp)
+
+
 # ────────────────────────────── pipeline ───────────────────────────────
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
@@ -126,12 +161,21 @@ def parse_args() -> argparse.Namespace:
                    help="GPU micro-batch size (push up to 384 on 80 GB A100)")
     p.add_argument("--arrow-batch",  type=int, default=64000,
                    help="Rows pulled per Arrow scan batch")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume an interrupted run using existing output files")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     out_dir = Path(args.out)
+    resume = args.resume
+    progress_path = out_dir / "progress.json"
+
+    # Handle stale progress file on fresh run
+    if not resume and progress_path.exists():
+        log.warning(f"⚠️  Removing stale progress file {progress_path}")
+        progress_path.unlink()
 
     # 1️⃣  load metadata once
     log.info(f"📥  Reading split metadata → {args.meta}")
@@ -150,10 +194,29 @@ def main() -> None:
     lab_mm: Dict[str, np.memmap] = {}
     write_ptr = {s: 0 for s in splits}
 
+    # Attempt to restore write pointers from progress file if present
+    progress_state: Dict[str, int] = {}
+    if resume and progress_path.exists():
+        try:
+            progress_state = json.load(progress_path.open())
+        except Exception as e:
+            log.warning(f"Could not load progress file: {e}. Falling back to memmap scan.")
+
     for sp in splits:
         n = counts.get(sp, 0)
-        emb_mm[sp] = create_memmap(out_dir / sp / "embeddings.npy",  (n, 1024), "float16")
-        lab_mm[sp] = create_memmap(out_dir / sp / "labels.npy",      (n,),      "int32")
+        emb_mm[sp] = open_memmap(out_dir / sp / "embeddings.npy", (n, 1024), "float16", resume)
+        lab_mm[sp] = open_memmap(out_dir / sp / "labels.npy",     (n,),      "int32",  resume)
+
+        if resume:
+            if sp in progress_state:
+                write_ptr[sp] = int(progress_state[sp])
+            else:
+                write_ptr[sp] = detect_rows(lab_mm[sp])
+
+    already_done = sum(write_ptr.values())
+    if resume and already_done:
+        log.info(f"⏩  Resuming – {already_done:,} sequences already encoded")
+    skipped_global = already_done
 
     #   index meta for O(1) look-up
     meta_idx = meta.set_index("sequence_id")[["split", "SF_label"]]
@@ -172,6 +235,17 @@ def main() -> None:
                    desc="Streaming"):
         ids = rb.column("sequence_id").to_pylist()
         seqs = rb.column("sequence").to_pylist()
+
+        # Skip sequences that were processed in a previous run
+        if resume and skipped_global:
+            if skipped_global >= len(seqs):
+                skipped_global -= len(seqs)
+                total_seen += len(seqs)
+                continue
+            else:
+                ids = ids[skipped_global:]
+                seqs = seqs[skipped_global:]
+                skipped_global = 0
 
         # look-up split + label
         meta_slice = meta_idx.loc[ids]  # preserves order
@@ -199,6 +273,7 @@ def main() -> None:
         if total_seen // 1_000_000 != (total_seen - len(seqs)) // 1_000_000:
             for sp in splits:
                 emb_mm[sp].flush(); lab_mm[sp].flush()
+            save_progress(write_ptr, progress_path)
             log.info(f"💾  Flushed after {total_seen:,} sequences")
 
     # 5️⃣  final consistency check + flush
@@ -206,6 +281,9 @@ def main() -> None:
         expected = counts.get(sp, 0)
         assert write_ptr[sp] == expected, f"{sp}: wrote {write_ptr[sp]} vs expected {expected}"
         emb_mm[sp].flush(); lab_mm[sp].flush()
+
+    # Persist final progress state
+    save_progress(write_ptr, progress_path)
 
     log.info("✅  All done!")
 
