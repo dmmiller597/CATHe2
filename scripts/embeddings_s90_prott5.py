@@ -143,12 +143,6 @@ def detect_rows(mm: np.memmap) -> int:
     return int(nz[-1]) + 1 if nz.size else 0
 
 
-def save_progress(state: Dict[str, int], path: Path) -> None:
-    """Persist write_ptr dictionary to JSON."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as fp:
-        json.dump(state, fp)
-
 
 # ────────────────────────────── pipeline ───────────────────────────────
 def parse_args() -> argparse.Namespace:
@@ -170,12 +164,6 @@ def main() -> None:
     args = parse_args()
     out_dir = Path(args.out)
     resume = args.resume
-    progress_path = out_dir / "progress.json"
-
-    # Handle stale progress file on fresh run
-    if not resume and progress_path.exists():
-        log.warning(f"⚠️  Removing stale progress file {progress_path}")
-        progress_path.unlink()
 
     # 1️⃣  load metadata once
     log.info(f"📥  Reading split metadata → {args.meta}")
@@ -194,24 +182,13 @@ def main() -> None:
     lab_mm: Dict[str, np.memmap] = {}
     write_ptr = {s: 0 for s in splits}
 
-    # Attempt to restore write pointers from progress file if present
-    progress_state: Dict[str, int] = {}
-    if resume and progress_path.exists():
-        try:
-            progress_state = json.load(progress_path.open())
-        except Exception as e:
-            log.warning(f"Could not load progress file: {e}. Falling back to memmap scan.")
-
     for sp in splits:
         n = counts.get(sp, 0)
         emb_mm[sp] = open_memmap(out_dir / sp / "embeddings.npy", (n, 1024), "float16", resume)
         lab_mm[sp] = open_memmap(out_dir / sp / "labels.npy",     (n,),      "int32",  resume)
 
-        if resume:
-            if sp in progress_state:
-                write_ptr[sp] = int(progress_state[sp])
-            else:
-                write_ptr[sp] = detect_rows(lab_mm[sp])
+    if resume:
+        write_ptr[sp] = detect_rows(lab_mm[sp])
 
     already_done = sum(write_ptr.values())
     if resume and already_done:
@@ -273,7 +250,6 @@ def main() -> None:
         if total_seen // 1_000_000 != (total_seen - len(seqs)) // 1_000_000:
             for sp in splits:
                 emb_mm[sp].flush(); lab_mm[sp].flush()
-            save_progress(write_ptr, progress_path)
             log.info(f"💾  Flushed after {total_seen:,} sequences")
 
     # 5️⃣  final consistency check + flush
@@ -281,9 +257,6 @@ def main() -> None:
         expected = counts.get(sp, 0)
         assert write_ptr[sp] == expected, f"{sp}: wrote {write_ptr[sp]} vs expected {expected}"
         emb_mm[sp].flush(); lab_mm[sp].flush()
-
-    # Persist final progress state
-    save_progress(write_ptr, progress_path)
 
     log.info("✅  All done!")
 
