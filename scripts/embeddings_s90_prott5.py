@@ -100,12 +100,13 @@ def encode_batch(
 
     # mean-pool (exclude <s> & </s>) per sequence
     lengths = attn.sum(dim=1)  # includes both special tokens
-    pooled = [
-        hs[j, 1 : ln - 1].mean(dim=0).cpu().to(dtype=torch.float16).numpy()
-        for j, ln in enumerate(lengths)
-    ]
+    mask = attn.bool()
+    mask[:, 0] = mask[range(len(lengths)), lengths-1] = False   # drop <s> & </s>
+    summed = (hs * mask.unsqueeze(-1)).sum(1)
+    lens   = mask.sum(1).unsqueeze(-1)
+    pooled = (summed / lens).to(dtype=torch.float16).cpu().numpy()
 
-    return np.vstack(pooled)[rev_order]  # original order
+    return pooled[rev_order]  # original order
 
 
 # ────────────────────────── I/O helper functions ───────────────────────
