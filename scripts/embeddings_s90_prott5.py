@@ -25,7 +25,7 @@ python scripts/embeddings_s90_prott5.py \
 """
 
 from __future__ import annotations
-import argparse, logging, re, sys, json
+import argparse, logging, re, sys
 from pathlib import Path
 from typing import Dict, Tuple, List
 
@@ -137,10 +137,12 @@ def open_memmap(path: Path, shape: Tuple[int, ...], dtype: str, resume: bool) ->
         return create_memmap(path, shape, dtype)
 
 
-def detect_rows(mm: np.memmap) -> int:
-    """Return count of rows already written (labels != 0)."""
-    nz = np.flatnonzero(mm)
-    return int(nz[-1]) + 1 if nz.size else 0
+def detect_rows(emb_mm: np.memmap, lab_mm: np.memmap) -> int:
+    """Return count of rows already written by finding first all-zero embedding."""
+    for i in range(emb_mm.shape[0]):
+        if np.allclose(emb_mm[i], 0, atol=1e-7):
+            return i
+    return emb_mm.shape[0]  # All rows written
 
 
 
@@ -187,8 +189,8 @@ def main() -> None:
         emb_mm[sp] = open_memmap(out_dir / sp / "embeddings.npy", (n, 1024), "float16", resume)
         lab_mm[sp] = open_memmap(out_dir / sp / "labels.npy",     (n,),      "int32",  resume)
 
-    if resume:
-        write_ptr[sp] = detect_rows(lab_mm[sp])
+        if resume:
+            write_ptr[sp] = detect_rows(emb_mm[sp], lab_mm[sp])
 
     already_done = sum(write_ptr.values())
     if resume and already_done:
