@@ -29,6 +29,7 @@ import argparse, logging, re, sys
 from pathlib import Path
 from typing import Dict, Tuple, List
 
+
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
@@ -76,7 +77,7 @@ def encode_batch(
     seqs: List[str],
 ) -> np.ndarray:
     """
-    Encode ≤64 sequences → (B, 1024) float16 numpy.
+    Encode up to --batch sequences → (B, 1024) float16 numpy.
     Keeps original order.
     """
     if not seqs:
@@ -227,8 +228,26 @@ def main() -> None:
                 seqs = seqs[skipped_global:]
                 skipped_global = 0
 
-        # look-up split + label
-        meta_slice = meta_idx.loc[ids]  # preserves order
+        # Look up metadata, safely skipping sequences not found in the meta file.
+        meta_slice = meta_idx.reindex(ids)
+        valid_mask = meta_slice["split"].notna()
+
+        # If any sequences were missing from the metadata file, filter them out.
+        if not valid_mask.all():
+            n_missing = len(valid_mask) - valid_mask.sum()
+            log.warning(f"Skipping {n_missing} sequences from arrow batch not found in meta file.")
+
+            # Filter the dataframe and the sequence list to keep only valid entries.
+            meta_slice = meta_slice[valid_mask]
+
+            # Use a list comprehension to filter the list of sequences.
+            # This is simpler than importing itertools.compress.
+            valid_mask_list = valid_mask.to_list()
+            seqs = [s for (s, v) in zip(seqs, valid_mask_list) if v]
+
+            if not seqs:
+                continue
+
         splits_batch = meta_slice["split"].values
         labels_batch = meta_slice["SF_label"].values.astype("int32")
 
