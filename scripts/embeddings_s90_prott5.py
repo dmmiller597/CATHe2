@@ -21,7 +21,7 @@ python scripts/embeddings_s90_prott5.py \
   --meta   data/TED/s90/s90_meta.parquet \
   --seq    data/TED/s90_reps.parquet \
   --out    data/TED/s90/embeddings/protT5 \
-  --batch  64 --arrow-batch 8000
+  --batch-tokens 16000 --arrow-batch 64000
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def encode_batch(
     seqs: List[str],
 ) -> np.ndarray:
     """
-    Encode up to --batch sequences → (B, 1024) float16 numpy.
+    Encode a list of sequences → (B, 1024) float16 numpy.
     Keeps original order.
     """
     if not seqs:
@@ -155,8 +155,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seq",  type=str, default="data/TED/s90_reps.parquet",
                    help="Parquet/Arrow dataset with sequence_id + sequence")
     p.add_argument("--out",  type=str, default="data/TED/s90/embeddings/protT5")
-    p.add_argument("--batch",        type=int, default=256,
-                   help="GPU micro-batch size (push up to 384 on 80 GB A100)")
+    p.add_argument("--batch-tokens", type=int, default=16000,
+                   help="Maximum tokens (<seq_len>+2) per micro-batch")
     p.add_argument("--arrow-batch",  type=int, default=64000,
                    help="Rows pulled per Arrow scan batch")
     p.add_argument("--resume", action="store_true",
@@ -251,12 +251,10 @@ def main() -> None:
         splits_batch = meta_slice["split"].values
         labels_batch = meta_slice["SF_label"].values.astype("int32")
 
-        # encode in GPU micro-batches
-        for i in range(0, len(seqs), args.batch):
-            sub_seqs  = seqs[i : i + args.batch]
-            sub_split = splits_batch[i : i + args.batch]
-            sub_label = labels_batch[i : i + args.batch]
-
+        # encode in GPU micro-batches governed by token budget rather than fixed count
+        for sub_seqs, sub_split, sub_label in iter_token_batches(
+                seqs, splits_batch, labels_batch, args.batch_tokens):
+            
             emb = encode_batch(model, tokenizer, device, sub_seqs)
 
             # write embeddings + labels in batches per split
@@ -291,6 +289,38 @@ def main() -> None:
         emb_mm[sp].flush(); lab_mm[sp].flush()
 
     log.info("✅  All done!")
+
+
+# ─────────────────── variable-token batching helper ────────────────────
+
+def iter_token_batches(
+    seqs: List[str],
+    splits: np.ndarray,
+    labels: np.ndarray,
+    token_budget: int,
+):
+    """Yield slices whose combined (len+2) ≤ token_budget.
+
+    Keeps input order; the +2 reserves space for the <s> and </s> special tokens
+    added by the tokenizer.
+    """
+    buf_seqs: List[str] = []
+    buf_splits: List[str] = []
+    buf_labels: List[int] = []
+    running_tokens = 0
+
+    for s, sp, lb in zip(seqs, splits, labels):
+        t = len(s) + 2  # +2 for special tokens
+        if buf_seqs and running_tokens + t > token_budget:
+            yield buf_seqs, np.array(buf_splits), np.array(buf_labels)
+            buf_seqs, buf_splits, buf_labels, running_tokens = [], [], [], 0
+        buf_seqs.append(s)
+        buf_splits.append(sp)
+        buf_labels.append(lb)
+        running_tokens += t
+
+    if buf_seqs:
+        yield buf_seqs, np.array(buf_splits), np.array(buf_labels)
 
 
 if __name__ == "__main__":
