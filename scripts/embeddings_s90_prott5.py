@@ -53,7 +53,7 @@ def load_prott5() -> Tuple[T5EncoderModel, T5Tokenizer, torch.device]:
         "Rostlab/prot_t5_xl_half_uniref50-enc"
     )
     tok = T5Tokenizer.from_pretrained(
-        "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False
+        "Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False, legacy=True
     )
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     mdl = mdl.to(dev).eval()  # fp16 weights are baked in
