@@ -28,7 +28,7 @@ def get_T5_model():
 
     model = model.to(device) # move model to GPU
     model = model.eval() # set model to evaluation model
-    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False)
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False, legacy=True)
 
     return model, tokenizer, device
 
@@ -105,8 +105,8 @@ def main():
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/protT5',
                         help='Output directory for embeddings (default: data/TED/s30/protT5)')
-    parser.add_argument('--batch-size', '-b', type=int, default=64,
-                        help='Batch size for embedding generation (default: 64)')
+    parser.add_argument('--batch-size', '-b', type=int, default=256,
+                        help='Batch size for embedding generation (default: 256)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
