@@ -105,8 +105,8 @@ def main():
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/protT5',
                         help='Output directory for embeddings (default: data/TED/s30/protT5)')
-    parser.add_argument('--batch-size', '-b', type=int, default=256,
-                        help='Batch size for embedding generation (default: 256)')
+    parser.add_argument('--batch-size', '-b', type=int, default=128,
+                        help='Batch size for embedding generation (default: 128)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
