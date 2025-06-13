@@ -240,12 +240,22 @@ def main() -> None:
 
             emb = encode_batch(model, tokenizer, device, sub_seqs)
 
-            # write embeddings + labels
-            for e, sp, lb in zip(emb, sub_split, sub_label):
-                idx = write_ptr[sp]
-                emb_mm[sp][idx] = e
-                lab_mm[sp][idx] = lb
-                write_ptr[sp] += 1
+            # write embeddings + labels in batches per split
+            for sp_val in splits:
+                mask = (sub_split == sp_val)
+                if not np.any(mask):
+                    continue
+
+                embs_to_write = emb[mask]
+                labs_to_write = sub_label[mask]
+                n_to_write = len(embs_to_write)
+
+                start_idx = write_ptr[sp_val]
+                end_idx = start_idx + n_to_write
+                
+                emb_mm[sp_val][start_idx:end_idx] = embs_to_write
+                lab_mm[sp_val][start_idx:end_idx] = labs_to_write
+                write_ptr[sp_val] = end_idx
 
         total_seen += len(seqs)
 
