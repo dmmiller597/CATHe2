@@ -20,6 +20,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import re
+from typing import List
 
 # Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50)
 def get_T5_model():
@@ -32,42 +33,87 @@ def get_T5_model():
 
     return model, tokenizer, device
 
+# ────────────────────────────────────────────────────────────────────────────────
+# Helper: dynamic token batching
+# ────────────────────────────────────────────────────────────────────────────────
 
-def get_embeddings(model, tokenizer, sequences, device, batch_size):
-    """Get ProtT5 embeddings for a list of sequences"""
-    all_embeddings = []
-    
-    # Sort sequences by length for more efficient batching
-    seq_lengths = [(i, len(seq)) for i, seq in enumerate(sequences)]
-    seq_lengths.sort(key=lambda x: x[1], reverse=True)  # Sort by longest first
-    sorted_indices = [x[0] for x in seq_lengths]
-    sequences = [sequences[i] for i in sorted_indices]
-    
-    # Pre-process all sequences at once to avoid redundant processing in the loop
-    # Replace rare/ambiguous amino acids by X and introduce white-space between all amino acids
-    sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
-    
-    with torch.inference_mode():  # More efficient than no_grad for inference
-        for i in tqdm(range(0, len(sequences), batch_size)):
-            batch_sequences = sequences[i:i + batch_size]
-            
-            # Tokenize sequences and pad up to the longest sequence in the batch
-            ids = tokenizer.batch_encode_plus(batch_sequences, add_special_tokens=True, padding="longest")
-            input_ids = torch.tensor(ids['input_ids'], device=device)
-            attention_mask = torch.tensor(ids['attention_mask'], device=device)
-            
-            # Generate embeddings
-            embedding_repr = model(input_ids=input_ids, attention_mask=attention_mask)
-                
-            # Extract per-protein embeddings - vectorize operations where possible
+def _iter_token_batches(seqs: List[str], token_budget: int):
+    """Yield lists of sequences whose combined (len+2) ≤ *token_budget*.
+
+    The +2 accounts for the <s> and </s> special tokens that the ProtT5 tokenizer
+    adds to every sequence.  Each sequence stays intact – never split across
+    batches – so per-sequence pooling remains correct.
+    """
+
+    buffer: List[str] = []
+    running = 0
+
+    for seq in seqs:
+        tokens = len(seq) + 2  # reserve for special tokens
+        # flush if adding the next sequence would exceed the budget
+        if buffer and running + tokens > token_budget:
+            yield buffer
+            buffer, running = [], 0
+
+        buffer.append(seq)
+        running += tokens
+
+    if buffer:
+        yield buffer
+
+def get_embeddings(
+    model: T5EncoderModel,
+    tokenizer: T5Tokenizer,
+    sequences: List[str],
+    device: torch.device,
+    max_tokens: int,
+):
+    """Encode *sequences* with a dynamic token budget.
+
+    Returns
+    -------
+    np.ndarray
+        (N, 1024) array with one row per input sequence in *original order*.
+    """
+
+    # 1️⃣  length-sort for faster batching, remember indices
+    order = sorted(range(len(sequences)), key=lambda i: len(sequences[i]), reverse=True)
+    rev_order = np.argsort(order)  # to restore original order later
+    seqs_sorted = [sequences[i] for i in order]
+
+    # 2️⃣  lightweight preprocessing (replace rare AAs, add whitespace)
+    seqs_sorted = [" ".join(list(re.sub(r"[UZOB]", "X", s))) for s in seqs_sorted]
+
+    embeddings: List[np.ndarray] = []
+    with torch.inference_mode():
+        pbar = tqdm(total=len(seqs_sorted), desc="Embedding", unit="seq")
+        for batch in _iter_token_batches(seqs_sorted, max_tokens):
+            ids = tokenizer.batch_encode_plus(batch, add_special_tokens=True, padding="longest")
+            input_ids = torch.tensor(ids["input_ids"], device=device)
+            attention_mask = torch.tensor(ids["attention_mask"], device=device)
+
+            reps = model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+
+            # mean-pool per sequence (skip <s> & </s>)
             for j, seq_len in enumerate(attention_mask.sum(dim=1)):
-                seq_emb = embedding_repr.last_hidden_state[j, 1:seq_len-1]
-                per_protein_emb = seq_emb.mean(dim=0).cpu().numpy()
-                all_embeddings.append(per_protein_emb)
-    
-    return np.array(all_embeddings), sorted_indices
+                seq_emb = reps[j, 1:seq_len - 1]
+                embeddings.append(seq_emb.mean(dim=0).cpu().numpy())
 
-def process_split_data(df_split, split_name, output_dir, model, tokenizer, device, batch_size=64):
+            pbar.update(len(batch))
+        pbar.close()
+
+    emb_arr = np.vstack(embeddings)[rev_order]  # restore original order
+    return emb_arr
+
+def process_split_data(
+    df_split: pd.DataFrame,
+    split_name: str,
+    output_dir: Path,
+    model: T5EncoderModel,
+    tokenizer: T5Tokenizer,
+    device: torch.device,
+    max_tokens: int = 8000,
+):
     """Process data for a specific split"""
     print(f"\nProcessing {split_name} split with {len(df_split)} sequences...")
     
@@ -75,20 +121,16 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     sequences = df_split['sequence'].tolist()
     sequence_ids = df_split['sequence_id'].tolist()
     
-    embeddings, sorted_indices = get_embeddings(model, tokenizer, sequences, device, batch_size)
-    
-    # Reorder metadata based on sorted indices
-    sorted_sequence_ids = [sequence_ids[i] for i in sorted_indices]
-    sorted_sf = df_split['SF'].values[sorted_indices]
+    embeddings = get_embeddings(model, tokenizer, sequences, device, max_tokens)
     
     # Save embeddings
     output_file = output_dir / f'protT5_embeddings_{split_name}.npz'
     np.savez_compressed(output_file, embeddings=embeddings)
     
-    # Save metadata (sequence IDs and labels)
+    # Metadata kept in original DataFrame order
     metadata_df = pd.DataFrame({
-        'sequence_id': sorted_sequence_ids,
-        'SF': sorted_sf
+        'sequence_id': sequence_ids,
+        'SF': df_split['SF'].values
     })
     metadata_file = output_dir / f'protT5_labels_{split_name}.csv'
     metadata_df.to_csv(metadata_file, index=False)
@@ -96,7 +138,7 @@ def process_split_data(df_split, split_name, output_dir, model, tokenizer, devic
     print(f"Saved {split_name} embeddings shape: {embeddings.shape}")
     print(f"Saved embeddings to {output_file}")
     print(f"Saved metadata to {metadata_file}")
-    print(f"Number of unique superfamilies: {len(np.unique(sorted_sf))}")
+    print(f"Number of unique superfamilies: {len(np.unique(df_split['SF'].values))}")
 
 def main():
     # Parse command-line arguments
@@ -105,8 +147,8 @@ def main():
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
     parser.add_argument('--output', '-o', type=str, default='data/TED/s30/protT5',
                         help='Output directory for embeddings (default: data/TED/s30/protT5)')
-    parser.add_argument('--batch-size', '-b', type=int, default=128,
-                        help='Batch size for embedding generation (default: 128)')
+    parser.add_argument('--max-tokens', '-t', type=int, default=32000,
+                        help='Maximum total tokens per batch (default: 32000)')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
                         help='Process specific splits (e.g., train val test). If not specified, processes all splits.')
     
@@ -130,7 +172,7 @@ def main():
     for split in splits_to_process:
         df_split = df[df['split'] == split].reset_index(drop=True)
         if len(df_split) > 0:
-            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.batch_size)
+            process_split_data(df_split, split, output_dir, model, tokenizer, device, args.max_tokens)
         else:
             print(f"Warning: No data found for split '{split}'. Skipping.")
 
