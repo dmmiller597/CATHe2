@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 import torch
-from transformers import T5EncoderModel, T5TokenizerFast
+from transformers import T5EncoderModel, T5Tokenizer
 from tqdm import tqdm
 
 # ───────────────────────────── logger ──────────────────────────────
@@ -56,11 +56,11 @@ def _preprocess(seq: str) -> str:
 
 # ───────────────────────── model utilities ─────────────────────────
 
-def _load_prott5() -> Tuple[T5EncoderModel, T5TokenizerFast, torch.device]:
+def _load_prott5() -> Tuple[T5EncoderModel, T5Tokenizer, torch.device]:
     name = "Rostlab/prot_t5_xl_half_uniref50-enc"
     log.info("🔌 Loading ProtT5-XL-U50 encoder (%s)", name)
     mdl = T5EncoderModel.from_pretrained(name)
-    tok = T5TokenizerFast.from_pretrained(name, do_lower_case=False)
+    tok = T5Tokenizer.from_pretrained(name, do_lower_case=False, legacy=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     mdl = mdl.to(device).eval()  # fp16 weights already baked in
@@ -73,7 +73,7 @@ def _load_prott5() -> Tuple[T5EncoderModel, T5TokenizerFast, torch.device]:
 @torch.inference_mode()
 def _encode_batch(
     model: T5EncoderModel,
-    tok: T5TokenizerFast,
+    tok: T5Tokenizer,
     device: torch.device,
     seqs: List[str],
 ) -> np.ndarray:
@@ -168,9 +168,22 @@ def main() -> None:
     n_total = len(meta)
     log.info("📊  Total sequences according to metadata: %s", f"{n_total:,}")
 
-    # 2) Prepare output mem-maps
-    emb_mm = _create_memmap(out_dir / "embeddings.npy", (n_total, 1024), "float16")
-    lab_mm = _create_memmap(out_dir / "labels.npy",     (n_total,),       "int32")
+    # 2) Prepare output mem-maps (optionally sharded)
+    shard_size = args.shard_size if args.shard_size > 0 else n_total
+
+    def _open_shard(idx: int, remaining: int):
+        """Open a new (possibly smaller) memmap shard."""
+        n_in_shard = min(shard_size, remaining)
+        emb_path = out_dir / f"embeddings_{idx:03d}.npy" if args.shard_size > 0 else out_dir / "embeddings.npy"
+        lab_path = out_dir / f"labels_{idx:03d}.npy"     if args.shard_size > 0 else out_dir / "labels.npy"
+        emb_mm_local = _create_memmap(emb_path, (n_in_shard, 1024), "float16")
+        lab_mm_local = _create_memmap(lab_path, (n_in_shard,), "int32")
+        return emb_mm_local, lab_mm_local, n_in_shard
+
+    emb_mm, lab_mm, shard_capacity = _open_shard(0, n_total)
+    shard_idx = 0
+    written_in_shard = 0
+    written = 0  # total sequences written across all shards
 
     # 3) Load model
     model, tokenizer, device = _load_prott5()
@@ -180,7 +193,6 @@ def main() -> None:
     scanner = ds_seq.scanner(columns=["sequence_id", "sequence"],
                              batch_size=args.arrow_batch)
 
-    written = 0
     for record_batch in tqdm(scanner.to_batches(), unit_scale=args.arrow_batch, desc="Embedding"):
         ids = record_batch.column("sequence_id").to_pylist()
         seqs = record_batch.column("sequence").to_pylist()
@@ -195,10 +207,28 @@ def main() -> None:
 
         for sub_seqs, sub_labels in _iter_token_batches(seqs, labels, args.batch_tokens):
             embs = _encode_batch(model, tokenizer, device, sub_seqs)
-            n = len(embs)
-            emb_mm[written:written + n] = embs
-            lab_mm[written:written + n] = sub_labels
-            written += n
+            lbs = sub_labels
+
+            offset = 0
+            while offset < len(embs):
+                space_left = shard_capacity - written_in_shard
+                n_write = min(space_left, len(embs) - offset)
+
+                emb_mm[written_in_shard:written_in_shard + n_write] = embs[offset:offset + n_write]
+                lab_mm[written_in_shard:written_in_shard + n_write] = lbs[offset:offset + n_write]
+
+                written_in_shard += n_write
+                written += n_write
+                offset += n_write
+
+                # If current shard is full and more data remains, open a new one
+                if written_in_shard == shard_capacity and written < n_total:
+                    emb_mm.flush(); lab_mm.flush()
+                    del emb_mm; del lab_mm  # ensure file handles are closed before opening new shard
+
+                    shard_idx += 1
+                    emb_mm, lab_mm, shard_capacity = _open_shard(shard_idx, n_total - written)
+                    written_in_shard = 0
 
         if written and written % args.flush_every == 0:
             emb_mm.flush(); lab_mm.flush();
