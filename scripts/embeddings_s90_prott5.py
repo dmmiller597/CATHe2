@@ -30,10 +30,11 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterator, List, Tuple
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
 import torch
 from transformers import T5EncoderModel, T5Tokenizer
@@ -50,9 +51,9 @@ log = logging.getLogger("protT5_embed")
 # ──────────────────── amino-acid preprocessing ─────────────────────
 _aa_cleaner = re.compile(r"[UZOB]")  # ambiguous/rare residues → X
 
-def _preprocess(seq: str) -> str:
+def _preprocess(seq: str, cleaner: re.Pattern) -> str:
     """Replace rare AAs with X and insert spaces for the tokenizer."""
-    return " ".join(_aa_cleaner.sub("X", seq))
+    return " ".join(cleaner.sub("X", seq))
 
 # ───────────────────────── model utilities ─────────────────────────
 
@@ -76,6 +77,7 @@ def _encode_batch(
     tok: T5Tokenizer,
     device: torch.device,
     seqs: List[str],
+    cleaner: re.Pattern,
 ) -> np.ndarray:
     """Mean-pool ProtT5 encoder features → (B, 1024) float16."""
     if not seqs:
@@ -85,7 +87,7 @@ def _encode_batch(
     rev = np.argsort(order)
 
     tok_inputs = tok(
-        [_preprocess(seqs[i]) for i in order],
+        [_preprocess(seqs[i], cleaner) for i in order],
         add_special_tokens=True,
         padding="longest",
         return_tensors="pt",
@@ -106,42 +108,56 @@ def _encode_batch(
 
 # ─────────────────── variable-token batching helper ─────────────────
 
-def _iter_token_batches(
-    seqs: List[str],
-    labels: np.ndarray,
-    budget: int,
-):
-    """Yield subsequences whose combined (len + 2) ≤ token budget."""
-    buf_s: List[str] = []
-    buf_l: List[int] = []
-    running = 0
+def _iter_batches_from_arrow(
+    scanner: ds.Scanner,
+    meta_map: dict[str, int],
+    token_budget: int,
+    label_col: str,
+) -> Iterator[Tuple[int, List[str], np.ndarray]]:
+    """
+    Generator that streams from an Arrow scanner, groups sequences into
+    token-limited batches, and yields batch data for processing.
 
-    for s, lb in zip(seqs, labels):
-        t = len(s) + 2
-        if buf_s and running + t > budget:
-            yield buf_s, np.asarray(buf_l, dtype=np.int32)
-            buf_s, buf_l, running = [], [], 0
-        buf_s.append(s)
-        buf_l.append(lb)
-        running += t
+    Yields:
+        A tuple of (start_index, sequences, labels) for each batch.
+    """
+    buf_seqs: List[str] = []
+    buf_labels: List[int] = []
+    buf_indices: List[int] = []
+    running_tokens = 0
+    start_offset = 0
 
-    if buf_s:
-        yield buf_s, np.asarray(buf_l, dtype=np.int32)
+    for i, record in enumerate(scanner.to_reader()):
+        chunk = record.read_next_batch()
+        ids = chunk.column("sequence_id").to_pylist()
+        seqs = chunk.column("sequence").to_pylist()
 
-# ───────────────────────────── I/O helpers ─────────────────────────
+        for j, (seq_id, seq) in enumerate(zip(ids, seqs)):
+            label = meta_map.get(seq_id)
+            if label is None:
+                continue
 
-def _create_memmap(path: Path, shape: Tuple[int, ...], dtype: str) -> np.memmap:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("📝  Allocating memmap %s  shape=%s  dtype=%s", path, shape, dtype)
-    return np.memmap(path, mode="w+", dtype=dtype, shape=shape)
+            n_tokens = len(seq) + 2
+            if buf_seqs and running_tokens + n_tokens > token_budget:
+                yield start_offset, buf_seqs, np.array(buf_labels, dtype=np.int32)
+                start_offset += len(buf_seqs)
+                buf_seqs, buf_labels, running_tokens = [], [], 0
+
+            buf_seqs.append(seq)
+            buf_labels.append(label)
+            running_tokens += n_tokens
+    
+    if buf_seqs:
+        yield start_offset, buf_seqs, np.array(buf_labels, dtype=np.int32)
 
 # ─────────────────────────── argument parsing ──────────────────────
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--meta", default="data/TED/s90/s90_meta.parquet", help="Parquet with sequence_id + label column")
     p.add_argument("--seq",  default="data/TED/s90_reps.parquet", help="Parquet/Arrow with sequence_id + sequence")
-    p.add_argument("--out",  default="data/TED/s90/embeddings/protT5", help="Output directory for .npy files")
+    p.add_argument("--out", "--output-dir", default="data/TED/s90/embeddings/protT5",
+                   help="Output directory for .npy files")
 
     p.add_argument("--label-col", default="SF_label", help="Column in --meta to use as label")
     p.add_argument("--batch-tokens", type=int, default=120_000,
@@ -157,87 +173,62 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cleaner = re.compile(r"[UZOB]")
 
-    # 1) Load metadata once and index for O(1) look-ups
-    meta = pd.read_parquet(args.meta).set_index("sequence_id")
-    if args.label_col not in meta.columns:
-        log.error("❌  --meta missing required label column '%s'", args.label_col)
-        sys.exit(1)
+    # 1) Load metadata into a memory-efficient dictionary for fast lookups
+    log.info("📖  Loading metadata from %s", args.meta)
+    meta_table = ds.dataset(args.meta).to_table(columns=["sequence_id", args.label_col])
+    meta_map = dict(zip(
+        meta_table["sequence_id"].to_pylist(),
+        meta_table[args.label_col].to_pylist()
+    ))
+    n_total = len(meta_map)
+    log.info("📊  Total sequences to find: %s", f"{n_total:,}")
 
-    labels_arr = meta[args.label_col].to_numpy("int32", copy=False)
-    n_total = len(meta)
-    log.info("📊  Total sequences according to metadata: %s", f"{n_total:,}")
-
-    # 2) Prepare output mem-maps (optionally sharded)
-    shard_size = args.shard_size if args.shard_size > 0 else n_total
-
-    def _open_shard(idx: int, remaining: int):
-        """Open a new (possibly smaller) memmap shard."""
-        n_in_shard = min(shard_size, remaining)
-        emb_path = out_dir / f"embeddings_{idx:03d}.npy" if args.shard_size > 0 else out_dir / "embeddings.npy"
-        lab_path = out_dir / f"labels_{idx:03d}.npy"     if args.shard_size > 0 else out_dir / "labels.npy"
-        emb_mm_local = _create_memmap(emb_path, (n_in_shard, 1024), "float16")
-        lab_mm_local = _create_memmap(lab_path, (n_in_shard,), "int32")
-        return emb_mm_local, lab_mm_local, n_in_shard
-
-    emb_mm, lab_mm, shard_capacity = _open_shard(0, n_total)
-    shard_idx = 0
-    written_in_shard = 0
-    written = 0  # total sequences written across all shards
+    # 2) Prepare output mem-maps
+    emb_path = out_dir / "embeddings.npy"
+    lab_path = out_dir / "labels.npy"
+    log.info("📝  Allocating memmap %s", emb_path)
+    emb_mm = np.memmap(emb_path, mode="w+", dtype="float16", shape=(n_total, 1024))
+    log.info("📝  Allocating memmap %s", lab_path)
+    lab_mm = np.memmap(lab_path, mode="w+", dtype="int32", shape=(n_total,))
 
     # 3) Load model
     model, tokenizer, device = _load_prott5()
 
-    # 4) Stream sequence dataset
-    ds_seq = ds.dataset(args.seq, format="parquet")
-    scanner = ds_seq.scanner(columns=["sequence_id", "sequence"],
-                             batch_size=args.arrow_batch)
+    # 4) Stream sequence dataset and process in batches
+    seq_ds = ds.dataset(args.seq, format="parquet")
+    scanner = seq_ds.scanner(
+        columns=["sequence_id", "sequence"],
+        batch_size=args.arrow_batch
+    )
+    
+    total_sequences = seq_ds.count_rows()
+    pbar = tqdm(
+        _iter_batches_from_arrow(scanner, meta_map, args.batch_tokens, args.label_col),
+        desc="Embedding",
+        unit=" seq",
+        total=total_sequences
+    )
 
-    for record_batch in tqdm(scanner.to_batches(), unit_scale=args.arrow_batch, desc="Embedding"):
-        ids = record_batch.column("sequence_id").to_pylist()
-        seqs = record_batch.column("sequence").to_pylist()
+    written_count = 0
+    for start_idx, seqs, labels in pbar:
+        embs = _encode_batch(model, tokenizer, device, seqs, cleaner)
+        n_current = len(embs)
+        end_idx = start_idx + n_current
+        emb_mm[start_idx:end_idx] = embs
+        lab_mm[start_idx:end_idx] = labels
+        written_count = end_idx
+        pbar.update(n_current)
+        pbar.set_postfix(sequences=f"{written_count:,}/{n_total:,}")
 
-        meta_slice = meta.reindex(ids)
-        mask = meta_slice[args.label_col].notna()
-        if not mask.all():
-            seqs   = [s for s, ok in zip(seqs, mask) if ok]
-            labels = meta_slice.loc[mask, args.label_col].to_numpy("int32", copy=False)
-        else:
-            labels = meta_slice[args.label_col].to_numpy("int32", copy=False)
-
-        for sub_seqs, sub_labels in _iter_token_batches(seqs, labels, args.batch_tokens):
-            embs = _encode_batch(model, tokenizer, device, sub_seqs)
-            lbs = sub_labels
-
-            offset = 0
-            while offset < len(embs):
-                space_left = shard_capacity - written_in_shard
-                n_write = min(space_left, len(embs) - offset)
-
-                emb_mm[written_in_shard:written_in_shard + n_write] = embs[offset:offset + n_write]
-                lab_mm[written_in_shard:written_in_shard + n_write] = lbs[offset:offset + n_write]
-
-                written_in_shard += n_write
-                written += n_write
-                offset += n_write
-
-                # If current shard is full and more data remains, open a new one
-                if written_in_shard == shard_capacity and written < n_total:
-                    emb_mm.flush(); lab_mm.flush()
-                    del emb_mm; del lab_mm  # ensure file handles are closed before opening new shard
-
-                    shard_idx += 1
-                    emb_mm, lab_mm, shard_capacity = _open_shard(shard_idx, n_total - written)
-                    written_in_shard = 0
-
-        if written and written % args.flush_every == 0:
-            emb_mm.flush(); lab_mm.flush();
-            log.info("💾  Flushed to disk @ %s sequences", f"{written:,}")
 
     # 5) Final flush & sanity check
-    emb_mm.flush(); lab_mm.flush()
-    assert written == n_total, f"Wrote {written} vs expected {n_total}"
-    log.info("✅  Finished embedding %s sequences → %s", f"{written:,}", out_dir)
+    emb_mm.flush()
+    lab_mm.flush()
+    assert written_count == n_total, f"Wrote {written_count} vs expected {n_total}"
+    log.info("✅  Finished embedding %s sequences → %s", f"{written_count:,}", out_dir)
 
 
 if __name__ == "__main__":
