@@ -139,9 +139,9 @@ def _create_memmap(path: Path, shape: Tuple[int, ...], dtype: str) -> np.memmap:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--meta", required=True, help="Parquet with sequence_id + label column")
-    p.add_argument("--seq",  required=True, help="Parquet/Arrow with sequence_id + sequence")
-    p.add_argument("--out",  required=True, help="Output directory for .npy files")
+    p.add_argument("--meta", default="data/TED/s90/s90_meta.parquet", help="Parquet with sequence_id + label column")
+    p.add_argument("--seq",  default="data/TED/s90_reps.parquet", help="Parquet/Arrow with sequence_id + sequence")
+    p.add_argument("--out",  default="data/TED/s90/embeddings/protT5", help="Output directory for .npy files")
 
     p.add_argument("--label-col", default="SF_label", help="Column in --meta to use as label")
     p.add_argument("--batch-tokens", type=int, default=120_000,
