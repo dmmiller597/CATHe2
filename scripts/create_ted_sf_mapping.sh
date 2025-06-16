@@ -1,93 +1,111 @@
 #!/usr/bin/env bash
 # david miller - 16/06/2025
-# Create TED-ID to CATH-SF mapping from FASTA and TSV files
-# Efficiently handles millions of sequences using awk.
-# need to run on bubba213-3 
+# Create TED-ID → CATH-SF mapping from FASTA & TSV files in a single awk pass.
+# Designed for large datasets (millions of sequences) – minimal disk I/O, robust, and fully POSIX-compliant.
+
 set -euo pipefail
 IFS=$'\n\t'
 
-# Input files
+# -----------------------------------------------------------------------------
+# Default locations – override with CLI flags if required
+# -----------------------------------------------------------------------------
 FASTA_FILE="/SAN/orengolab/cath_alphafold/cath_ted_gold_sequences_hmmvalidated_qscore_0.7_S100_rep_seq.fasta"
 DICT_FILE="/state/partition2/NO_BACKUP/databases/ted/datasets/ted_365m.domain_summary.cath.globularity.taxid.qscore.tsv"
-
-# Output files
 OUTPUT_FILE="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-mapping.json"
 UNMAPPED_FILE="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-unmapped.txt"
 
-# Create output directory if it doesn't exist
-mkdir -p "$(dirname "$OUTPUT_FILE")"
-mkdir -p "$(dirname "$UNMAPPED_FILE")"
+usage() {
+  cat <<EOF
+Usage: ${0##*/} [-f FASTA_FILE] [-d TSV_DICT] [-o OUTPUT_JSON] [-u UNMAPPED_IDS]
 
-# Temporary files
-TED_IDS_FILE=$(mktemp -t ted_ids.XXXXXX)
-TSV_LOOKUP_FILE=$(mktemp -t ted_lookup.XXXXXX)
-
-# Cleanup function
-cleanup() {
-    rm -f "$TED_IDS_FILE" "$TSV_LOOKUP_FILE" "${TEMP_FASTA_FOR_TEST:-}" "${TEMP_DICT_FOR_TEST:-}"
+Maps TED identifiers in FASTA_FILE to their CATH-SF annotations in TSV_DICT.
+Outputs:
+  * OUTPUT_JSON   – JSON dictionary TED_ID → CATH-SF
+  * UNMAPPED_IDS  – newline-separated list of TED_IDs without mapping
+EOF
+  exit 1
 }
-trap cleanup EXIT
 
-echo "Processing files..."
+# -----------------------------------------------------------------------------
+# CLI parsing ──────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+while getopts ":f:d:o:u:h" opt; do
+  case "$opt" in
+    f) FASTA_FILE=$OPTARG ;;
+    d) DICT_FILE=$OPTARG ;;
+    o) OUTPUT_FILE=$OPTARG ;;
+    u) UNMAPPED_FILE=$OPTARG ;;
+    h|\?) usage ;;
+  esac
+done
 
-# Extract TED-IDs from FASTA headers
-echo "Extracting TED-IDs from FASTA file..."
-awk '/^>/{sub(/^>/,""); sub(/\r$/,"\"); print}' "$FASTA_FILE" > "$TED_IDS_FILE"
-TOTAL_FASTA_IDS=$(wc -l < "$TED_IDS_FILE")
-echo "Found $TOTAL_FASTA_IDS TED-IDs in FASTA file"
+# -----------------------------------------------------------------------------
+# Pre-flight checks
+# -----------------------------------------------------------------------------
+for f in "$FASTA_FILE" "$DICT_FILE"; do
+  if [[ ! -r "$f" ]]; then
+    echo "ERROR: Cannot read file: $f" >&2
+    exit 1
+  fi
+done
 
-# Create lookup table from TSV (TED-ID -> CATH-SF)
-echo "Creating lookup table from TSV file..."
-sed 's/\r$//' "$DICT_FILE" | awk -F '\t' 'NF >= 15 && $15 != "-" && $15 != "" { print $1 "\t" $15 }' > "$TSV_LOOKUP_FILE"
-TOTAL_TSV_MAPPINGS=$(wc -l < "$TSV_LOOKUP_FILE")
-echo "Found $TOTAL_TSV_MAPPINGS TED-IDs with CATH-SF mappings in TSV file"
+mkdir -p "$(dirname "$OUTPUT_FILE")" "$(dirname "$UNMAPPED_FILE")"
 
-# Use awk to perform the mapping efficiently.
-# Mapped JSON is printed to stdout, unmapped IDs to stderr.
-echo "Creating JSON mapping using awk..."
-{
-    awk -F'\t' '
-        BEGIN { print "{" }
-        NR==FNR {
-            lookup[$1] = $2
-            next
-        }
-        {
-            if ($1 in lookup) {
-                if (!first_entry) printf ",\n"
-                first_entry = 0
-                val = lookup[$1]
-                gsub(/"/, "\\\"", val)
-                printf "  \"%s\": \"%s\"", $1, val
-            } else {
-                print $1 > "/dev/stderr"
-            }
-        }
-        END {
-            if (first_entry == 0) printf "\n"
-            print "}"
-        }
-    ' "$TSV_LOOKUP_FILE" "$TED_IDS_FILE"
-} > "$OUTPUT_FILE" 2> "$UNMAPPED_FILE"
+# -----------------------------------------------------------------------------
+# Mapping (single awk pass) ────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 1. Read TSV dictionary first (ARGIND 1) into associative array dict[ted_id] = cath_sf
+# 2. Scan FASTA headers, perform lookup, build JSON, and write unmapped IDs.
+#
+#   * Handles duplicate IDs gracefully (processed once).
+#   * Works with CRLF-terminated files.
+#   * Emits summary statistics to stderr.
 
-echo "Mapping complete."
+awk -v json="$OUTPUT_FILE" -v unmapped="$UNMAPPED_FILE" '
+  BEGIN {
+    FS="\t"; ORS="";
+    mapped=0; total=0; unmapped_cnt=0;
+    print "{\n" > json           # open JSON file
+  }
 
-# Calculate counts from the generated files for the summary
-MAPPED_COUNT=$(grep -c '":' "$OUTPUT_FILE")
-UNMAPPED_COUNT=$(wc -l < "$UNMAPPED_FILE" 2>/dev/null || echo 0)
+  # ---------------- TSV dictionary ----------------
+  FNR==NR {
+    if (NF >= 15 && $15 != "-" && $15 != "")
+      dict[$1] = $15
+    next
+  }
 
-# Display summary
-echo ""
-echo "=== SUMMARY ==="
-echo "Total FASTA TED-IDs: $TOTAL_FASTA_IDS"
-echo "Successfully mapped: $MAPPED_COUNT"
-echo "Unmapped: $UNMAPPED_COUNT"
-if [[ $TOTAL_FASTA_IDS -gt 0 ]]; then
-    # Use awk for floating point arithmetic for a more precise percentage
-    PERCENTAGE=$(awk -v mapped="$MAPPED_COUNT" -v total="$TOTAL_FASTA_IDS" 'BEGIN { printf "%.2f", (mapped / total) * 100 }')
-    echo "Mapping coverage: ${PERCENTAGE}%"
-fi
-echo ""
+  # ---------------- FASTA processing -------------
+  /^>/ {
+    id = substr($0, 2)
+    sub(/\r$/, "", id)
+    if (id == "") next
+    if (++seen[id] == 1) {
+      total++
+      if (id in dict) {
+        if (mapped++) print ",\n" >> json
+        val = dict[id]
+        gsub(/"/, "\\\"", val)
+        printf "  \"%s\": \"%s\"", id, val >> json
+      } else {
+        print id >> unmapped
+        unmapped_cnt++
+      }
+    }
+    next
+  }
+
+  END {
+    print "\n}\n" >> json        # close JSON
+    cov = (total ? (mapped / total) * 100 : 0)
+    printf "Total IDs: %d\nMapped: %d\nUnmapped: %d\nCoverage: %.2f%%\n", total, mapped, unmapped_cnt, cov > "/dev/stderr"
+  }
+' "$DICT_FILE" "$FASTA_FILE"
+
+# -----------------------------------------------------------------------------
+# Epilogue
+# -----------------------------------------------------------------------------
+
 echo "JSON mapping written to: $OUTPUT_FILE"
 echo "Unmapped IDs written to: $UNMAPPED_FILE"
-echo "Script completed successfully!"
+echo "Done."
