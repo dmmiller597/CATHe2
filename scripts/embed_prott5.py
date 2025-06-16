@@ -219,7 +219,7 @@ def main(argv: List[str] | None = None):
     mmap_arr = np.memmap(mmap_path, mode="w+", dtype="float32", shape=(len(ids), 1024))
 
     _LOGGER.info("Initialising ProtT5 (this can take a minute)…")
-    tokenizer = AutoTokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False)
+    tokenizer = AutoTokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False, legacy=True)
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
     model.eval().to(device)
 
