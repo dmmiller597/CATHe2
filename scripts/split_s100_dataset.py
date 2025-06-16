@@ -224,9 +224,9 @@ def main():
     small_superfamilies_data = flatten_superfamily_groups(small_sf)
 
     # --- 5. Save all files ---
-    save_json(train_data, args.output_dir / "train.json")
-    save_json(val_data, args.output_dir / "validation.json")
-    save_json(test_data, args.output_dir / "test.json")
+    save_json(train_data, args.output_dir / "s100_train.json")
+    save_json(val_data, args.output_dir / "s100_val.json")
+    save_json(test_data, args.output_dir / "s100_test.json")
     save_json(
         small_superfamilies_data, args.output_dir / "small_superfamilies.json"
     )
