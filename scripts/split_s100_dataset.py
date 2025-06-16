@@ -18,6 +18,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from tqdm import tqdm
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -43,7 +45,7 @@ def group_by_superfamily(
     """
     logging.info("Grouping sequences by superfamily...")
     superfamily_groups = defaultdict(list)
-    for seq_id, sf_label in data.items():
+    for seq_id, sf_label in tqdm(data.items(), desc="Grouping by superfamily"):
         superfamily_groups[sf_label].append(seq_id)
     logging.info(f"Found {len(superfamily_groups)} unique superfamilies.")
     return superfamily_groups
@@ -69,7 +71,9 @@ def filter_superfamilies(
     )
     large_enough_superfamilies = {}
     small_superfamilies = {}
-    for sf, sequences in superfamily_groups.items():
+    for sf, sequences in tqdm(
+        superfamily_groups.items(), desc="Filtering superfamilies"
+    ):
         if len(sequences) < min_size:
             small_superfamilies[sf] = sequences
         else:
@@ -106,7 +110,9 @@ def create_splits(
     train_data, val_data, test_data = {}, {}, {}
     rng = random.Random(seed)
 
-    for sf_label, sequences in superfamily_groups.items():
+    for sf_label, sequences in tqdm(
+        superfamily_groups.items(), desc="Creating splits"
+    ):
         rng.shuffle(sequences)
         n = len(sequences)
 
