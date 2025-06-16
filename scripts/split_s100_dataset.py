@@ -174,7 +174,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default="data/TED/splits",
+        default="data/TED/s100",
         help="Directory to save the output split files.",
     )
     parser.add_argument(
