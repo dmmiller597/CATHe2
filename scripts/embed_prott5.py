@@ -196,7 +196,7 @@ def parse_args(argv: List[str] | None = None):
     p.add_argument("--meta", default="data/TED/s30/s30_full.json", type=Path, help="JSON with SF & split labels")
     p.add_argument("--out-dir", default="data/TED/s30/protT5", type=Path, help="Directory for outputs")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--max-tokens", type=int, default=50000, help="Token budget per batch")
+    p.add_argument("--max-tokens", type=int, default=100000, help="Token budget per batch")
     return p.parse_args(argv)
 
 
