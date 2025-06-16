@@ -185,9 +185,9 @@ def write_split_files(meta: dict, ids: List[str], out_dir: Path):
 
 def parse_args(argv: List[str] | None = None):
     p = argparse.ArgumentParser(description="ProtT5 mem-map embedding generator")
-    p.add_argument("--fasta", required=True, type=Path, help="Input FASTA file")
-    p.add_argument("--meta", required=True, type=Path, help="JSON with SF & split labels")
-    p.add_argument("--out-dir", required=True, type=Path, help="Directory for outputs")
+    p.add_argument("--fasta", required=True, default="data/TED/s30/s30_full.fasta", type=Path, help="Input FASTA file")
+    p.add_argument("--meta", required=True, default="data/TED/s30/s30_full.json", type=Path, help="JSON with SF & split labels")
+    p.add_argument("--out-dir", required=True, default="data/TED/s30/protT5", type=Path, help="Directory for outputs")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--max-tokens", type=int, default=150000, help="Token budget per batch")
     return p.parse_args(argv)
