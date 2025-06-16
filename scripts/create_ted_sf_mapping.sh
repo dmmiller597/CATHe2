@@ -79,51 +79,73 @@ awk -F '\t' \
     -v unmapped_file="$UNMAPPED_FILE" \
     -v output_json_path="$OUTPUT_JSON" \
 '
+# In the BEGIN block, we start the JSON structure. This ensures valid JSON.
+BEGIN {
+    print "{"
+}
+
 # -------------------- PASS 1: FASTA -------------------------------
+# FNR==NR is true only for the first file (FASTA). We read it into memory.
 FNR==NR {
     if ($0 ~ /^>/) {
         id = substr($1, 2)            # strip leading ">"
         if (!(id in needed)) {
             needed[id] = 1
-            total++
+            total_ids++
         }
     }
     next                               # continue reading FASTA only
 }
 
-# -------------------- PASS 2: TSV ---------------------------------
+# Report progress before processing the second file. This runs only once.
+FNR == 1 {
+    printf "\nPass 1 Complete: %d unique IDs read from FASTA.\n", total_ids > "/dev/stderr"
+    printf "Pass 2: Streaming TSV dictionary to find mappings...\n\n" > "/dev/stderr"
+}
+
+# -------------------- PASS 2: Streaming TSV Dictionary --------------
+# This block executes for the second file (TSV), streaming it line-by-line.
 NF >= 15 {
     id = $1; sf = $15
+    # Check if we need this ID and it has a valid, non-empty SF.
     if (id in needed && sf != "" && sf != "-") {
-        if (!printed[id]) {
-            printed[id] = 1
-            if (count) printf ",\n"
+        # Ensure we only map each ID once, taking the first match from the TSV.
+        if (!mapped[id]) {
+            # Add a comma before all but the first JSON entry.
+            if (mapped_count > 0) printf ",\n"
             printf "  \"%s\": \"%s\"", id, sf
-            delete needed[id]
-            count++
+
+            mapped[id] = 1             # Mark ID as mapped.
+            delete needed[id]          # Remove from queue (memory optimization).
+            mapped_count++
         }
     }
 }
 
 # -------------------- END -----------------------------------------
+# This block runs after all files are processed.
 END {
-    if (count) printf "\n"
+    # Add a final newline for clean formatting if entries were written.
+    if (mapped_count > 0) printf "\n"
     print "}"
 
+    # Write all remaining (unmapped) IDs to the unmapped file.
     for (id in needed) print id >> unmapped_file
     close(unmapped_file)
 
-    unmapped = total - count
-    cov = (total ? count / total * 100 : 0)
+    # Calculate final stats for the summary report.
+    unmapped_count = total_ids - mapped_count
+    coverage = (total_ids > 0) ? (mapped_count / total_ids * 100) : 0
 
+    # Print a summary report to stderr.
     printf "\nSummary\n-------\n" > "/dev/stderr"
-    printf "Total TED IDs:    %d\n", total        > "/dev/stderr"
-    printf "Mapped:           %d\n", count        > "/dev/stderr"
-    printf "Unmapped:         %d\n", unmapped     > "/dev/stderr"
-    printf "Coverage:         %.1f%%\n", cov         > "/dev/stderr"
-    printf "-----------------\n"               > "/dev/stderr"
+    printf "Total TED IDs:    %d\n", total_ids        > "/dev/stderr"
+    printf "Mapped:           %d\n", mapped_count     > "/dev/stderr"
+    printf "Unmapped:         %d\n", unmapped_count   > "/dev/stderr"
+    printf "Coverage:         %.1f%%\n", coverage     > "/dev/stderr"
+    printf "-----------------\n"                     > "/dev/stderr"
     printf "Output JSON:      %s\n", output_json_path > "/dev/stderr"
-    printf "Unmapped IDs:     %s\n", unmapped_file     > "/dev/stderr"
+    printf "Unmapped IDs:     %s\n", unmapped_file    > "/dev/stderr"
 }
 ' "$FASTA_FILE" "$DICT_FILE" > "$OUTPUT_JSON"
 
