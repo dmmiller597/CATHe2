@@ -88,7 +88,11 @@ BEGIN {
 # FNR==NR is true only for the first file (FASTA). We read it into memory.
 FNR==NR {
     if ($0 ~ /^>/) {
-        id = substr($1, 2)            # strip leading ">"
+        # Strip leading ">" and anything after the first whitespace so that
+        # the identifier matches the first column of the TSV exactly.
+        id_raw = substr($0, 2)
+        sub(/[ \t].*$/, "", id_raw)  # remove description after ID (if any)
+        id = id_raw
         if (!(id in needed)) {
             needed[id] = 1
             total_ids++
