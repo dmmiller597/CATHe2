@@ -1,6 +1,7 @@
 #!/bin/bash
 # david miller - 16/06/2025
 # Create TED-ID to CATH-SF mapping from FASTA and TSV files
+# Efficiently handles millions of sequences using awk.
 # need to run on bubba213-3 
 
 # Input files
@@ -39,62 +40,71 @@ awk -F '\t' 'NF >= 15 && $15 != "-" && $15 != "" { print $1 "\t" $15 }' "$DICT_F
 TOTAL_TSV_MAPPINGS=$(wc -l < "$TSV_LOOKUP_FILE")
 echo "Found $TOTAL_TSV_MAPPINGS TED-IDs with CATH-SF mappings in TSV file"
 
-# Load TSV data into associative array
-echo "Loading TSV mappings..."
-declare -A tsv_lookup
-while IFS=$'\t' read -r ted_id cath_sf; do
-    tsv_lookup["$ted_id"]="$cath_sf"
-done < "$TSV_LOOKUP_FILE"
-
-# Process FASTA TED-IDs and create mapping
-echo "Creating JSON mapping..."
-declare -a unmapped_ids
-mapped_count=0
-first_entry=true
-
-# Create JSON file
+# Use awk to perform the mapping efficiently.
+# Mapped JSON is printed to stdout, unmapped IDs to stderr.
+echo "Creating JSON mapping using awk..."
 {
-    echo "{"
-    
-    while IFS= read -r ted_id; do
-        if [[ -n "${tsv_lookup[$ted_id]}" ]]; then
-            # Found mapping
-            if [[ "$first_entry" == "true" ]]; then
-                first_entry=false
-            else
-                echo ","
-            fi
-            printf "  \"%s\": \"%s\"" "$ted_id" "${tsv_lookup[$ted_id]}"
-            ((mapped_count++))
-        else
-            # No mapping found
-            unmapped_ids+=("$ted_id")
-        fi
-    done < "$TED_IDS_FILE"
-    
-    echo ""
-    echo "}"
-} > "$OUTPUT_FILE"
+    awk -F'\t' '
+        # First file (the lookup table): store mappings in an awk associative array.
+        # NR==FNR is true only while awk is reading the first file.
+        NR==FNR {
+            lookup[$1] = $2
+            next
+        }
 
-# Write unmapped IDs to separate file
-if [[ ${#unmapped_ids[@]} -gt 0 ]]; then
-    printf '%s\n' "${unmapped_ids[@]}" > "$UNMAPPED_FILE"
-    echo "Unmapped IDs written to: $UNMAPPED_FILE"
-else
-    # Create empty unmapped file
-    touch "$UNMAPPED_FILE"
-    echo "All TED-IDs were successfully mapped!"
-fi
+        # Initialization block: runs just before processing the second file
+        # to correctly print the opening brace for the JSON.
+        FNR==1 {
+            print "{"
+            first_entry = 1
+        }
+
+        # Second file (the IDs to map): check against the lookup table.
+        {
+            if ($1 in lookup) {
+                # This ID has a mapping. Handle the comma for subsequent JSON entries.
+                if (first_entry == 0) {
+                    printf ",\n"
+                }
+                first_entry = 0
+
+                # Print the JSON key-value pair to stdout.
+                printf "  \"%s\": \"%s\"", $1, lookup[$1]
+            } else {
+                # No mapping found, print the ID to stderr.
+                print $1 > "/dev/stderr"
+            }
+        }
+
+        # END block: runs after all files are processed to close the JSON object.
+        END {
+            # Add a newline after the last entry if any entries were written.
+            if (first_entry == 0) {
+                printf "\n"
+            }
+            print "}"
+        }
+    ' "$TSV_LOOKUP_FILE" "$TED_IDS_FILE"
+} > "$OUTPUT_FILE" 2> "$UNMAPPED_FILE"
+
+echo "Mapping complete."
+
+# Calculate counts from the generated files for the summary
+MAPPED_COUNT=$(grep -c '":' "$OUTPUT_FILE")
+UNMAPPED_COUNT=$(wc -l < "$UNMAPPED_FILE" 2>/dev/null || echo 0)
 
 # Display summary
 echo ""
 echo "=== SUMMARY ==="
 echo "Total FASTA TED-IDs: $TOTAL_FASTA_IDS"
-echo "Successfully mapped: $mapped_count"
-echo "Unmapped: ${#unmapped_ids[@]}"
+echo "Successfully mapped: $MAPPED_COUNT"
+echo "Unmapped: $UNMAPPED_COUNT"
 if [[ $TOTAL_FASTA_IDS -gt 0 ]]; then
-    echo "Mapping coverage: $(( mapped_count * 100 / TOTAL_FASTA_IDS ))%"
+    # Use awk for floating point arithmetic for a more precise percentage
+    PERCENTAGE=$(awk -v mapped="$MAPPED_COUNT" -v total="$TOTAL_FASTA_IDS" 'BEGIN { printf "%.2f", (mapped / total) * 100 }')
+    echo "Mapping coverage: ${PERCENTAGE}%"
 fi
 echo ""
 echo "JSON mapping written to: $OUTPUT_FILE"
+echo "Unmapped IDs written to: $UNMAPPED_FILE"
 echo "Script completed successfully!"
