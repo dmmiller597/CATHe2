@@ -27,7 +27,7 @@ from typing import Iterator, List, Tuple
 import numpy as np
 import torch
 from tqdm import tqdm
-from transformers import AutoTokenizer, T5EncoderModel
+from transformers import T5EncoderModel, T5Tokenizer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def embed_sequences(
     ids: List[str],
     seqs: List[str],
     memmap: np.memmap,
-    tokenizer: AutoTokenizer,
+    tokenizer: T5Tokenizer,
     model: T5EncoderModel,
     device: torch.device,
     max_tokens: int,
@@ -219,8 +219,9 @@ def main(argv: List[str] | None = None):
     mmap_arr = np.memmap(mmap_path, mode="w+", dtype="float32", shape=(len(ids), 1024))
 
     _LOGGER.info("Initialising ProtT5 (this can take a minute)…")
-    tokenizer = AutoTokenizer.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc", do_lower_case=False, legacy=True)
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False, legacy=True)
     model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+
     model.eval().to(device)
 
     embed_sequences(ids, seqs, mmap_arr, tokenizer, model, device, args.max_tokens)
