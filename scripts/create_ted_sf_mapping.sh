@@ -42,15 +42,7 @@ while getopts ":f:d:o:u:h" opt; do
   esac
 done
 
-# Start timing
-START_TIME=$(date +%s)
-
-echo "=== TED-ID to CATH-SF Mapping Tool ===" >&2
-echo "Started at: $(date)" >&2
-echo >&2
-
-# Validate inputs and show file information
-echo "Validating input files..." >&2
+# Validate inputs
 for f in "$FASTA_FILE" "$DICT_FILE"; do
   if [[ ! -r "$f" ]]; then
     echo "ERROR: Cannot read input file: $f" >&2
@@ -58,76 +50,55 @@ for f in "$FASTA_FILE" "$DICT_FILE"; do
   fi
 done
 
-echo "Input files:" >&2
-echo "  FASTA: $(basename "$FASTA_FILE")" >&2
-echo "    Size: $(du -h "$FASTA_FILE" | cut -f1)" >&2
-echo "    Sequences: $(grep -c '^>' "$FASTA_FILE" 2>/dev/null || echo "unknown")" >&2
-echo "  Dictionary: $(basename "$DICT_FILE")" >&2
-echo "    Size: $(du -h "$DICT_FILE" | cut -f1)" >&2
-echo "    Records: $(wc -l < "$DICT_FILE" 2>/dev/null || echo "unknown")" >&2
-echo >&2
-
 # Ensure output directories exist
-echo "Creating output directories..." >&2
 mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$UNMAPPED_FILE")" || {
   echo "ERROR: Cannot create output directories" >&2
   exit 1
 }
 
-echo "Output files:" >&2
-echo "  JSON mapping: $OUTPUT_JSON" >&2
-echo "  Unmapped IDs: $UNMAPPED_FILE" >&2
-echo >&2
+# Check if pv is available for progress visualization
+PV_CMD=""
+if command -v pv >/dev/null 2>&1; then
+  PV_CMD="pv -p -t -e -r -a"
+fi
 
-echo "Processing pipeline:" >&2
-echo "  [1/4] Extracting TED IDs from FASTA headers..." >&2
-echo "  [2/4] Extracting CATH-SF mappings from dictionary..." >&2
-echo "  [3/4] Joining data and generating JSON..." >&2
-echo "  [4/4] Writing output files..." >&2
-echo >&2
+echo "[$(date '+%H:%M:%S')] Starting TED-SF mapping process..." >&2
+echo "[$(date '+%H:%M:%S')] Extracting TED IDs from FASTA..." >&2
 
 # Extract TED IDs from FASTA and join with dictionary to create JSON
 {
   echo "{"
+  
+  echo "[$(date '+%H:%M:%S')] Processing and joining data..." >&2
   join -t$'\t' -a 1 \
-    <(awk '/^>/ {sub(/^>/,""); print $1}' "$FASTA_FILE" | LC_ALL=C sort -u) \
+    <(awk '/^>/ {sub(/^>/,""); print $1}' "$FASTA_FILE" | ${PV_CMD:-cat} | LC_ALL=C sort -u) \
     <(awk -F'\t' '$15 != "" && $15 != "-" {print $1 "\t" $15}' "$DICT_FILE" | LC_ALL=C sort -k1,1) |
+  ${PV_CMD:-cat} |
   awk -v unmapped="$UNMAPPED_FILE" '
-    BEGIN { 
-      first = 1
-      mapped_count = 0
-      unmapped_count = 0
-    }
+    BEGIN { first = 1; mapped = 0; unmapped_count = 0 }
     {
       if (NF == 2) {
         if (!first) printf ",\n"
         first = 0
         gsub(/"/, "\\\"", $2)  # Escape quotes in SF value
         printf "  \"%s\": \"%s\"", $1, $2
-        mapped_count++
-        if (mapped_count % 1000 == 0) {
-          printf "\rProcessing... %d mapped so far", mapped_count > "/dev/stderr"
-        }
+        mapped++
       } else {
         print $1 > unmapped
         unmapped_count++
       }
+      if ((mapped + unmapped_count) % 1000000 == 0) {
+        printf "" > "/dev/stderr"
+        print "[" strftime("%H:%M:%S") "] Processed " (mapped + unmapped_count) " entries..." > "/dev/stderr"
+      }
     }
     END {
-      if (mapped_count > 0) {
-        printf "\rProcessing... %d total mapped, %d unmapped\n", mapped_count, unmapped_count > "/dev/stderr"
-      }
+      print "[" strftime("%H:%M:%S") "] Processing complete: " mapped " mapped, " unmapped_count " unmapped" > "/dev/stderr"
     }'
   echo -e "\n}"
 } > "$OUTPUT_JSON"
 
-echo "Finalizing output files..." >&2
-
-# Calculate elapsed time
-END_TIME=$(date +%s)
-ELAPSED=$((END_TIME - START_TIME))
-ELAPSED_MIN=$((ELAPSED / 60))
-ELAPSED_SEC=$((ELAPSED % 60))
+echo "[$(date '+%H:%M:%S')] Calculating final statistics..." >&2
 
 # Calculate and display statistics
 TOTAL_IDS=$(awk '/^>/ {count++} END {print count+0}' "$FASTA_FILE")
@@ -139,17 +110,15 @@ COVERAGE=$(awk -v m="$MAPPED_COUNT" -v t="$TOTAL_IDS" 'BEGIN {
 
 cat >&2 <<EOF
 
-=== RESULTS ===
+Summary
+-------
 Total TED IDs:    $TOTAL_IDS
-Mapped:           $MAPPED_COUNT (${COVERAGE}%)
+Mapped:           $MAPPED_COUNT
 Unmapped:         $UNMAPPED_COUNT
+Coverage:         ${COVERAGE}%
 -----------------
-Output JSON:      $OUTPUT_JSON ($(du -h "$OUTPUT_JSON" | cut -f1))
-Unmapped IDs:     $UNMAPPED_FILE ($(wc -l < "$UNMAPPED_FILE" 2>/dev/null || echo 0) lines)
------------------
-Processing time:  ${ELAPSED_MIN}m ${ELAPSED_SEC}s
-Completed at:     $(date)
+Output JSON:      $OUTPUT_JSON
+Unmapped IDs:     $UNMAPPED_FILE
 EOF
 
-echo >&2
-echo "Done! ✓" >&2
+echo "Done." >&2
