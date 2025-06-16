@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # david miller - 16/06/2025
 # Create TED-ID to CATH-SF mapping from FASTA and TSV files
 # Efficiently handles millions of sequences using awk.
 # need to run on bubba213-3 
-set -e
-set -o pipefail
+set -euo pipefail
+IFS=$'\n\t'
 
 # Input files
 FASTA_FILE="/SAN/orengolab/cath_alphafold/cath_ted_gold_sequences_hmmvalidated_qscore_0.7_S100_rep_seq.fasta"
@@ -14,27 +14,13 @@ DICT_FILE="/state/partition2/NO_BACKUP/databases/ted/datasets/ted_365m.domain_su
 OUTPUT_FILE="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-mapping.json"
 UNMAPPED_FILE="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-unmapped.txt"
 
-# --- START OF TEST BLOCK ---
-# This block creates smaller, temporary input files for a quick test run.
-# It uses the first 1000 lines from your original files.
-# To run the script on the full data, simply delete this entire block.
-echo "--- Running in TEST mode. Using first 1000 lines of input files. ---"
-TEMP_FASTA_FOR_TEST=$(mktemp)
-TEMP_DICT_FOR_TEST=$(mktemp)
-head -n 1000 "$FASTA_FILE" > "$TEMP_FASTA_FOR_TEST"
-head -n 1000 "$DICT_FILE" > "$TEMP_DICT_FOR_TEST"
-
-FASTA_FILE="$TEMP_FASTA_FOR_TEST"
-DICT_FILE="$TEMP_DICT_FOR_TEST"
-# --- END OF TEST BLOCK ---
-
 # Create output directory if it doesn't exist
 mkdir -p "$(dirname "$OUTPUT_FILE")"
 mkdir -p "$(dirname "$UNMAPPED_FILE")"
 
 # Temporary files
-TED_IDS_FILE=$(mktemp)
-TSV_LOOKUP_FILE=$(mktemp)
+TED_IDS_FILE=$(mktemp -t ted_ids.XXXXXX)
+TSV_LOOKUP_FILE=$(mktemp -t ted_lookup.XXXXXX)
 
 # Cleanup function
 cleanup() {
@@ -46,7 +32,7 @@ echo "Processing files..."
 
 # Extract TED-IDs from FASTA headers
 echo "Extracting TED-IDs from FASTA file..."
-grep '^>' "$FASTA_FILE" | sed -e 's/^>//' -e 's/\r$//' > "$TED_IDS_FILE"
+awk '/^>/{sub(/^>/,""); sub(/\r$/,"\"); print}' "$FASTA_FILE" > "$TED_IDS_FILE"
 TOTAL_FASTA_IDS=$(wc -l < "$TED_IDS_FILE")
 echo "Found $TOTAL_FASTA_IDS TED-IDs in FASTA file"
 
@@ -61,43 +47,24 @@ echo "Found $TOTAL_TSV_MAPPINGS TED-IDs with CATH-SF mappings in TSV file"
 echo "Creating JSON mapping using awk..."
 {
     awk -F'\t' '
-        # First file (the lookup table): store mappings in an awk associative array.
-        # NR==FNR is true only while awk is reading the first file.
+        BEGIN { print "{" }
         NR==FNR {
             lookup[$1] = $2
             next
         }
-
-        # Initialization block: runs just before processing the second file
-        # to correctly print the opening brace for the JSON.
-        FNR==1 {
-            print "{"
-            first_entry = 1
-        }
-
-        # Second file (the IDs to map): check against the lookup table.
         {
             if ($1 in lookup) {
-                # This ID has a mapping. Handle the comma for subsequent JSON entries.
-                if (first_entry == 0) {
-                    printf ",\n"
-                }
+                if (!first_entry) printf ",\n"
                 first_entry = 0
-
-                # Print the JSON key-value pair to stdout.
-                printf "  \"%s\": \"%s\"", $1, lookup[$1]
+                val = lookup[$1]
+                gsub(/"/, "\\\"", val)
+                printf "  \"%s\": \"%s\"", $1, val
             } else {
-                # No mapping found, print the ID to stderr.
                 print $1 > "/dev/stderr"
             }
         }
-
-        # END block: runs after all files are processed to close the JSON object.
         END {
-            # Add a newline after the last entry if any entries were written.
-            if (first_entry == 0) {
-                printf "\n"
-            }
+            if (first_entry == 0) printf "\n"
             print "}"
         }
     ' "$TSV_LOOKUP_FILE" "$TED_IDS_FILE"
