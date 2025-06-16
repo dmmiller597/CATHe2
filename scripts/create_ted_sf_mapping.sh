@@ -68,7 +68,7 @@ mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$UNMAPPED_FILE")" || {
   exit 1
 }
 
-echo "Processing TED-SF mapping..." >&2
+echo "Reading FASTA file for TED Gold S100 IDs..." >&2
 
 # -------------------------------------------------------------------
 # Memory-only mapping: read FASTA first to collect required TED IDs, then
