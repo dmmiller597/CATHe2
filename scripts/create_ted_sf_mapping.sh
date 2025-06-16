@@ -4,7 +4,6 @@
 # david miller
 #
 # Build a TED-ID → CATH-SF mapping from a FASTA file and TSV dictionary.
-# Processes data in a streaming fashion to minimize memory usage.
 # ----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -13,12 +12,11 @@ set -euo pipefail
 FASTA_FILE="/SAN/orengolab/cath_alphafold/cath_ted_gold_sequences_hmmvalidated_qscore_0.7_S100_rep_seq.fasta"
 DICT_FILE="/state/partition2/NO_BACKUP/databases/ted/datasets/ted_365m.domain_summary.cath.globularity.taxid.qscore.tsv"
 OUTPUT_JSON="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-mapping.json"
-UNMAPPED_IDS="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-unmapped.txt"
-TMP_PARENT="${TMPDIR:-/tmp}"
+UNMAPPED_FILE="/SAN/orengolab/functional-families/CATHe2/data/TED/TED-SF-unmapped.txt"
 
 usage() {
   cat <<EOF
-Usage: ${0##*/} [-f FASTA] [-d TSV_DICT] [-o JSON_OUT] [-u UNMAPPED] [-t TMP_PARENT] [-h]
+Usage: ${0##*/} [-f FASTA] [-d TSV_DICT] [-o JSON_OUT] [-u UNMAPPED] [-h]
 
 Build a TED-ID to CATH-SF mapping from FASTA headers and dictionary.
 
@@ -26,21 +24,19 @@ Options:
   -f FASTA        Input FASTA with TED IDs (default: $FASTA_FILE)
   -d TSV_DICT     TSV with TED-ID (col-1) and CATH-SF (col-15) (default: $DICT_FILE)
   -o JSON_OUT     Output JSON mapping file (default: $OUTPUT_JSON)
-  -u UNMAPPED     Output unmapped IDs file (default: $UNMAPPED_IDS)
-  -t TMP_PARENT   Directory for temporary files (default: env TMPDIR or /tmp)
+  -u UNMAPPED     Output unmapped IDs file (default: $UNMAPPED_FILE)
   -h              Print this help and exit
 EOF
   exit 1
 }
 
 # Parse CLI options
-while getopts ":f:d:o:u:t:h" opt; do
+while getopts ":f:d:o:u:h" opt; do
   case "$opt" in
     f) FASTA_FILE=$OPTARG ;;
     d) DICT_FILE=$OPTARG ;;
     o) OUTPUT_JSON=$OPTARG ;;
-    u) UNMAPPED_IDS=$OPTARG ;;
-    t) TMP_PARENT=$OPTARG ;;
+    u) UNMAPPED_FILE=$OPTARG ;;
     h) usage ;;
     \?) echo "Invalid option: -$OPTARG" >&2; usage ;;
   esac
@@ -55,20 +51,11 @@ for f in "$FASTA_FILE" "$DICT_FILE"; do
 done
 
 # Ensure output directories exist
-for d in "$(dirname "$OUTPUT_JSON")" "$(dirname "$UNMAPPED_IDS")"; do
-  mkdir -p "$d" || { echo "ERROR: Cannot create output directory $d" >&2; exit 1; }
-done
-
-if [[ ! -d "$TMP_PARENT" || ! -w "$TMP_PARENT" ]]; then
-  echo "ERROR: TMP dir is not a writable directory: $TMP_PARENT" >&2
+mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$UNMAPPED_FILE")" || {
+  echo "ERROR: Cannot create output directories" >&2
   exit 1
-fi
+}
 
-# Setup temporary workspace
-SCRATCH="$(mktemp -d "$TMP_PARENT/tedmap.XXXXXX")"
-trap 'rm -rf "$SCRATCH"' EXIT INT TERM
-
-# Process in a single pipeline
 echo "Processing FASTA headers and creating mapping..." >&2
 
 # Extract TED IDs from FASTA and join with dictionary to create JSON
@@ -77,7 +64,7 @@ echo "Processing FASTA headers and creating mapping..." >&2
   join -t$'\t' -a 1 \
     <(awk '/^>/ {sub(/^>/,""); print $1}' "$FASTA_FILE" | LC_ALL=C sort -u) \
     <(awk -F'\t' '$15 != "" && $15 != "-" {print $1 "\t" $15}' "$DICT_FILE" | LC_ALL=C sort -k1,1) |
-  awk -v unmapped="$UNMAPPED_IDS" '
+  awk -v unmapped="$UNMAPPED_FILE" '
     BEGIN { first = 1 }
     {
       if (NF == 2) {
@@ -93,22 +80,24 @@ echo "Processing FASTA headers and creating mapping..." >&2
 } > "$OUTPUT_JSON"
 
 # Calculate and display statistics
-TOTAL_IDS=$(grep -c '^>' "$FASTA_FILE")
-MAPPED_IDS=$(grep -c ':' "$OUTPUT_JSON")
-UNMAPPED_IDS=$((TOTAL_IDS - MAPPED_IDS))
-COVERAGE=$(awk -v m="$MAPPED_IDS" -v t="$TOTAL_IDS" 'BEGIN {printf "%.1f", (m/t)*100}')
+TOTAL_IDS=$(awk '/^>/ {count++} END {print count+0}' "$FASTA_FILE")
+MAPPED_COUNT=$(awk -F'"' 'NF > 2 {count++} END {print count+0}' "$OUTPUT_JSON")
+UNMAPPED_COUNT=$((TOTAL_IDS - MAPPED_COUNT))
+COVERAGE=$(awk -v m="$MAPPED_COUNT" -v t="$TOTAL_IDS" 'BEGIN {
+  if (t > 0) printf "%.1f", (m/t)*100; else print "0.0"
+}')
 
 cat >&2 <<EOF
 
 Summary
 -------
 Total TED IDs:    $TOTAL_IDS
-Mapped:           $MAPPED_IDS
-Unmapped:         $UNMAPPED_IDS
+Mapped:           $MAPPED_COUNT
+Unmapped:         $UNMAPPED_COUNT
 Coverage:         ${COVERAGE}%
 -----------------
 Output JSON:      $OUTPUT_JSON
-Unmapped IDs:     $UNMAPPED_IDS
+Unmapped IDs:     $UNMAPPED_FILE
 EOF
 
 echo "Done." >&2
