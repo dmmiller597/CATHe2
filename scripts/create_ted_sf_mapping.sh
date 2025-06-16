@@ -56,69 +56,83 @@ mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$UNMAPPED_FILE")" || {
   exit 1
 }
 
-# Check if pv is available for progress visualization
-PV_CMD=""
-if command -v pv >/dev/null 2>&1; then
-  PV_CMD="pv -p -t -e -r -a"
-fi
+echo "Processing TED-SF mapping..." >&2
 
-echo "[$(date '+%H:%M:%S')] Starting TED-SF mapping process..." >&2
-echo "[$(date '+%H:%M:%S')] Extracting TED IDs from FASTA..." >&2
+# Extract TED IDs from FASTA and create sorted temp file for efficient lookup
+TEMP_TED_IDS=$(mktemp)
+trap 'rm -f "$TEMP_TED_IDS"' EXIT
 
-# Extract TED IDs from FASTA and join with dictionary to create JSON
-{
-  echo "{"
+awk '/^>/ {
+  # Extract TED ID (everything after > up to first space)
+  ted_id = substr($1, 2)
+  print ted_id
+}' "$FASTA_FILE" | sort -u > "$TEMP_TED_IDS"
+
+# Process TSV and generate JSON directly using awk for efficiency
+awk -v ted_ids_file="$TEMP_TED_IDS" -v unmapped_file="$UNMAPPED_FILE" '
+BEGIN {
+  # Load TED IDs into lookup table
+  while ((getline ted_id < ted_ids_file) > 0) {
+    needed_ted_ids[ted_id] = 1
+    total_ids++
+  }
+  close(ted_ids_file)
   
-  echo "[$(date '+%H:%M:%S')] Processing and joining data..." >&2
-  join -t$'\t' -a 1 \
-    <(awk '/^>/ {sub(/^>/,""); print $1}' "$FASTA_FILE" | ${PV_CMD:-cat} | LC_ALL=C sort -u) \
-    <(awk -F'\t' '$15 != "" && $15 != "-" {print $1 "\t" $15}' "$DICT_FILE" | LC_ALL=C sort -k1,1) |
-  ${PV_CMD:-cat} |
-  awk -v unmapped="$UNMAPPED_FILE" '
-    BEGIN { first = 1; mapped = 0; unmapped_count = 0 }
-    {
-      if (NF == 2) {
-        if (!first) printf ",\n"
-        first = 0
-        gsub(/"/, "\\\"", $2)  # Escape quotes in SF value
-        printf "  \"%s\": \"%s\"", $1, $2
-        mapped++
-      } else {
-        print $1 > unmapped
-        unmapped_count++
-      }
-      if ((mapped + unmapped_count) % 1000000 == 0) {
-        printf "" > "/dev/stderr"
-        print "[" strftime("%H:%M:%S") "] Processed " (mapped + unmapped_count) " entries..." > "/dev/stderr"
-      }
-    }
-    END {
-      print "[" strftime("%H:%M:%S") "] Processing complete: " mapped " mapped, " unmapped_count " unmapped" > "/dev/stderr"
-    }'
-  echo -e "\n}"
-} > "$OUTPUT_JSON"
+  # Initialize output
+  print "{"
+  first = 1
+  mapped_count = 0
+  
+  # Clear unmapped file
+  print "" > unmapped_file
+  close(unmapped_file)
+}
 
-echo "[$(date '+%H:%M:%S')] Calculating final statistics..." >&2
+# Process TSV file
+FNR > 0 && NF >= 15 {
+  ted_id = $1
+  cath_sf = $15
+  
+  # Only process if this TED ID is needed and has valid CATH SF
+  if (ted_id in needed_ted_ids && cath_sf != "" && cath_sf != "-") {
+    # Mark as found and output JSON entry
+    delete needed_ted_ids[ted_id]
+    if (!first) print ","
+    first = 0
+    
+    # Escape quotes in values
+    gsub(/"/, "\\\"", ted_id)
+    gsub(/"/, "\\\"", cath_sf)
+    
+    printf "  \"%s\": \"%s\"", ted_id, cath_sf
+    mapped_count++
+  }
+}
 
-# Calculate and display statistics
-TOTAL_IDS=$(awk '/^>/ {count++} END {print count+0}' "$FASTA_FILE")
-MAPPED_COUNT=$(awk -F'"' 'NF > 2 {count++} END {print count+0}' "$OUTPUT_JSON")
-UNMAPPED_COUNT=$((TOTAL_IDS - MAPPED_COUNT))
-COVERAGE=$(awk -v m="$MAPPED_COUNT" -v t="$TOTAL_IDS" 'BEGIN {
-  if (t > 0) printf "%.1f", (m/t)*100; else print "0.0"
-}')
-
-cat >&2 <<EOF
-
-Summary
--------
-Total TED IDs:    $TOTAL_IDS
-Mapped:           $MAPPED_COUNT
-Unmapped:         $UNMAPPED_COUNT
-Coverage:         ${COVERAGE}%
------------------
-Output JSON:      $OUTPUT_JSON
-Unmapped IDs:     $UNMAPPED_FILE
-EOF
+END {
+  # Close JSON
+  print ""
+  print "}"
+  
+  # Write unmapped TED IDs
+  for (ted_id in needed_ted_ids) {
+    print ted_id >> unmapped_file
+  }
+  close(unmapped_file)
+  
+  # Calculate statistics
+  unmapped_count = total_ids - mapped_count
+  coverage = (total_ids > 0) ? (mapped_count / total_ids) * 100 : 0
+  
+  # Print summary to stderr
+  printf "\nSummary\n-------\n" > "/dev/stderr"
+  printf "Total TED IDs:    %d\n", total_ids > "/dev/stderr"
+  printf "Mapped:           %d\n", mapped_count > "/dev/stderr"
+  printf "Unmapped:         %d\n", unmapped_count > "/dev/stderr"
+  printf "Coverage:         %.1f%%\n", coverage > "/dev/stderr"
+  printf "-----------------\n" > "/dev/stderr"
+  printf "Output JSON:      %s\n", ENVIRON["OUTPUT_JSON"] > "/dev/stderr"
+  printf "Unmapped IDs:     %s\n", ENVIRON["UNMAPPED_FILE"] > "/dev/stderr"
+}' OUTPUT_JSON="$OUTPUT_JSON" UNMAPPED_FILE="$UNMAPPED_FILE" "$DICT_FILE" > "$OUTPUT_JSON"
 
 echo "Done." >&2
