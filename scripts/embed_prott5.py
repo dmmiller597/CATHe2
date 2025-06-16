@@ -31,9 +31,16 @@ from transformers import T5EncoderModel, T5Tokenizer
 
 _LOGGER = logging.getLogger(__name__)
 
-# ────────────────────────────────────────────────────────────────────────────────
-# FASTA & JSON helpers (stand-alone – no external utils)
-# ────────────────────────────────────────────────────────────────────────────────
+# Load ProtT5 in half-precision (more specifically: the encoder-part of ProtT5-XL-U50)
+def get_T5_model():
+    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = model.to(device) # move model to GPU
+    model = model.eval() # set model to evaluation model
+    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False, legacy=True)
+
+    return model, tokenizer, device
 
 def read_fasta(path: Path) -> Tuple[List[str], List[str]]:
     """Parse a (multi-)FASTA file.
@@ -151,7 +158,7 @@ def embed_sequences(
                 seq_len = seq_lens[j].item()
                 seq_rep = reps[j, 1 : seq_len - 1]  # exclude special tokens
                 mean_vec = seq_rep.mean(dim=0)
-                memmap[row_idxs[j]] = mean_vec.cpu().numpy().astype(np.float32)
+                memmap[row_idxs[j]] = mean_vec.cpu().numpy().astype(np.float16)
 
             pbar.update(len(batch_seqs))
         pbar.close()
@@ -216,13 +223,10 @@ def main(argv: List[str] | None = None):
     # ── allocate mem-map ───────────────────────────────────────────────────────
     args.out_dir.mkdir(parents=True, exist_ok=True)
     mmap_path = args.out_dir / "protT5_embeddings.npy"
-    mmap_arr = np.memmap(mmap_path, mode="w+", dtype="float32", shape=(len(ids), 1024))
+    mmap_arr = np.memmap(mmap_path, mode="w+", dtype="float16", shape=(len(ids), 1024))
 
     _LOGGER.info("Initialising ProtT5 (this can take a minute)…")
-    tokenizer = T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_half_uniref50-enc', do_lower_case=False, legacy=True)
-    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_half_uniref50-enc")
-
-    model.eval().to(device)
+    model, tokenizer, device = get_T5_model()
 
     embed_sequences(ids, seqs, mmap_arr, tokenizer, model, device, args.max_tokens)
 
