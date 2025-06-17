@@ -20,10 +20,8 @@ def pairwise_distance(x: Tensor, y: Tensor) -> Tensor:
 
 def pairwise_cosine_similarity(X: torch.Tensor) -> torch.Tensor:
     """
-    Assumes embeddings are stacked
-    row-wise in tensor.
+    Computes pairwise cosine similarity between row vectors in a tensor.
+    Assumes embeddings are already L2-normalized.
     """
-    # Normalize each row to a unit vector
-    X_normalized = F.normalize(X, p=2, dim=1)
-    # Compute cosine similarity
-    return torch.matmul(X_normalized, X_normalized.T)
+    # Embeddings are assumed to be normalized, so we can just do a matrix multiplication.
+    return torch.matmul(X, X.T)
