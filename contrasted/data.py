@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple, List
 import lightning as L
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
-from utils import get_logger
+from utils import get_logger, convert_sf_string_to_list
 
 log = get_logger(__name__)
 
@@ -43,7 +43,12 @@ class EmbeddingDataset(Dataset):
         else:
              self.sequence_ids = df["sequence_id"].astype(str).to_list()
 
+        # For OverlapLoss: hierarchical list of strings
+        self.hierarchical_labels = (
+            df["SF"].astype(str).apply(convert_sf_string_to_list).to_list()
+        )
 
+        # For SupConLoss and metrics: integer labels
         sf_series = df["SF"].astype(str).apply(get_superfamily_label)
         unique_sf = sorted(sf_series.unique())
         encoder = {sf: idx for idx, sf in enumerate(unique_sf)}
@@ -54,10 +59,10 @@ class EmbeddingDataset(Dataset):
         self.num_classes = len(unique_sf)
         self.embedding_dim = self.embeddings.shape[1]
 
-        if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids)):
+        if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids) == len(self.hierarchical_labels)):
             raise ValueError(
-                "Mismatch between embeddings, labels, and sequence_ids lengths: "
-                f"{len(self.embeddings)}, {len(self.labels)}, {len(self.sequence_ids)}"
+                "Mismatch between embeddings, labels, sequence_ids, and hierarchical_labels lengths: "
+                f"{len(self.embeddings)}, {len(self.labels)}, {len(self.sequence_ids)}, {len(self.hierarchical_labels)}"
             )
         log.info(f"Loaded {len(self)} samples for Homologous Superfamily level.")
 
@@ -65,12 +70,13 @@ class EmbeddingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.embeddings)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
-        """Returns embedding, label index, and sequence ID."""
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
+        """Returns embedding, (integer label, hierarchical label), and sequence ID."""
         emb = torch.from_numpy(self.embeddings[idx])
         lbl = self.labels[idx]
+        hier_lbl = self.hierarchical_labels[idx]
         seq_id = self.sequence_ids[idx]
-        return emb, lbl, seq_id
+        return emb, (lbl, hier_lbl), seq_id
 
 
 class ContrastiveDataModule(L.LightningDataModule):
@@ -179,7 +185,6 @@ class ContrastiveDataModule(L.LightningDataModule):
         if "test" not in self.datasets:
             self.setup("test")
         return self._make_dataloader("test", False)
-
     def get_label_decoder(self) -> Dict[int, str]:
         return self.datasets["train"].label_decoder
 
