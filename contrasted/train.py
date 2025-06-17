@@ -12,29 +12,22 @@ from model import ContrastiveCATHeModel
 
 log = get_logger(__name__)
 
-def create_output_dirs(base_output_dir: Path, run_name: str) -> dict[str, Path]:
+def create_run_dir(base_output_dir: Path, run_name: str) -> Path:
     """
-    Create directories for the training run and return their paths.
+    Create a single directory for the training run and return its path.
     """
     run_dir = base_output_dir / run_name
-    subdirs = {
-        "root": "",
-        "ckpt": "checkpoints",
-        "tsne": "tsne_plots",
-        "umap": "umap_plots",
-    }
-    dirs = {key: (run_dir / sub if sub else run_dir) for key, sub in subdirs.items()}
-    for path in dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
-    return dirs
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 def build_datamodule(cfg: DictConfig) -> ContrastiveDataModule:
     """
     Instantiate and setup the data module for CATH Homologous Superfamily.
     """
+    data_path = Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir
     dm = ContrastiveDataModule(
-        data_dir=Path(hydra.utils.get_original_cwd()) / cfg.data.data_dir,
+        data_dir=str(data_path),
         train_embeddings_file=cfg.data.train_embeddings,
         train_labels_file=cfg.data.train_labels,
         val_embeddings_file=cfg.data.val_embeddings,
@@ -48,13 +41,13 @@ def build_datamodule(cfg: DictConfig) -> ContrastiveDataModule:
     return dm
 
 
-def build_model(cfg: DictConfig, dirs: dict[str, Path]) -> ContrastiveCATHeModel:
+def build_model(cfg: DictConfig, output_dir: Path) -> ContrastiveCATHeModel:
     """
     Instantiate a new model.
     """
     vis_args = {
-        "tsne_viz_dir": str(dirs["tsne"]),
-        "umap_viz_dir": str(dirs["umap"]),
+        "tsne_viz_dir": str(output_dir),
+        "umap_viz_dir": str(output_dir),
     }
 
     log.info("Initializing new model.")
@@ -72,12 +65,12 @@ def build_model(cfg: DictConfig, dirs: dict[str, Path]) -> ContrastiveCATHeModel
     )
 
 
-def build_callbacks(cfg: DictConfig, ckpt_dir: Path, run_name: str) -> list:
+def build_callbacks(cfg: DictConfig, output_dir: Path, run_name: str) -> list:
     """
     Create callbacks: checkpointing, early stopping, LR monitor, progress bar.
     """
     checkpoint_cb = ModelCheckpoint(
-        dirpath=ckpt_dir,
+        dirpath=str(output_dir),
         filename=f"{run_name}-{{epoch:02d}}-{{val/centroid_f1_macro:.4f}}",
         monitor=cfg.training.monitor_metric,
         mode=cfg.training.monitor_mode,
@@ -97,17 +90,16 @@ def build_callbacks(cfg: DictConfig, ckpt_dir: Path, run_name: str) -> list:
     return [checkpoint_cb, early_stop_cb, lr_monitor, progress_bar]
 
 
-def build_logger(cfg: DictConfig, run_name: str) -> WandbLogger:
+def build_logger(cfg: DictConfig) -> WandbLogger:
     """
     Configure and return a WandbLogger for this training run.
     """
-    wandb_logger = WandbLogger(
+    return WandbLogger(
         project="CATHe-Contrastive",
-        name=run_name,
+        name=None,  # Let wandb generate a unique name
         log_model=False,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
-    return wandb_logger
 
 
 @hydra.main(config_path="../config", config_name="contrastive", version_base="1.2")
@@ -119,17 +111,22 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg.training.seed)
     torch.set_float32_matmul_precision(cfg.training.accelerator.float32_matmul_precision)
 
-    run_name = "contrastive_superfamily"
-    log.info(f"=== Training CATH Homologous Superfamily ===")
+    log.info("=== Training CATH Homologous Superfamily ===")
 
+    # Initialize logger first to get the run name
+    logger = build_logger(cfg)
+    run_name = logger.experiment.name
+    log.info(f"W&B run name: {run_name}")
+
+    # Create directories for outputs
     base_output_dir = Path(hydra.utils.get_original_cwd()) / cfg.training.output_dir
-    dirs = create_output_dirs(base_output_dir, run_name)
-    log.info(f"Run output directory: {dirs['root']}")
+    run_dir = create_run_dir(base_output_dir, run_name)
+    log.info(f"Run output directory: {run_dir}")
 
+    # Setup data, model, and callbacks
     dm = build_datamodule(cfg)
-    model = build_model(cfg, dirs)
-    callbacks = build_callbacks(cfg, dirs["ckpt"], run_name)
-    logger = build_logger(cfg, run_name)
+    model = build_model(cfg, run_dir)
+    callbacks = build_callbacks(cfg, run_dir, run_name)
 
     trainer = L.Trainer(
         accelerator="auto",
@@ -141,7 +138,7 @@ def main(cfg: DictConfig) -> None:
         accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         precision=cfg.training.precision,
         log_every_n_steps=cfg.training.log_every_n_steps,
-        default_root_dir=str(dirs["root"]),
+        default_root_dir=str(run_dir),
         num_sanity_val_steps=2,
     )
 
