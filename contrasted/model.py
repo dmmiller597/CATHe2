@@ -12,7 +12,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 import csv
 
 from utils import get_logger
-from losses import SupConLoss, SINCERELoss
+from losses import SupConLoss, SINCERELoss, OverlapLoss
 from plotting import generate_tsne_plot, generate_umap_plot
 from metrics import (
     compute_holdout_metrics,
@@ -58,6 +58,7 @@ class ContrastiveCATHeModel(L.LightningModule):
         dropout: float = 0.3,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-4,
+        loss_fn: str = "overlap",
         use_layer_norm: bool = True,
         warmup_epochs: int = 0,
         warmup_start_factor: float = 0.1,
@@ -90,8 +91,13 @@ class ContrastiveCATHeModel(L.LightningModule):
             use_layer_norm=self.hparams.use_layer_norm,
         )
 
-        # Supervised contrastive loss (drop‐in replacement)
-        self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
+        # Loss function
+        if self.hparams.loss_fn == "supcon":
+            self.loss_fn = SupConLoss(temperature=self.hparams.temperature)
+        elif self.hparams.loss_fn == "overlap":
+            self.loss_fn = OverlapLoss()
+        else:
+            raise ValueError(f"Unsupported loss function '{self.hparams.loss_fn}'")
 
         # Buffers for metrics
         self._val_outputs: List[Dict[str, Tensor]] = []
@@ -113,21 +119,26 @@ class ContrastiveCATHeModel(L.LightningModule):
         x = self.projection(x)
         return F.normalize(x, p=2, dim=1)
 
-    def training_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> Tensor:
-        emb, labels, _ = batch # Unpack sequence_id into _
+    def training_step(self, batch: Tuple[Tensor, Tuple[Tensor, List[str]], List[str]], batch_idx: int) -> Tensor:
+        emb, (labels, hier_labels), _ = batch # Unpack sequence_id into _
         proj = self(emb)
-        loss = self.loss_fn(proj, labels)
+
+        loss_input = hier_labels if self.hparams.loss_fn == "overlap" else labels
+        loss = self.loss_fn(proj, loss_input)
+        
         self.log(
             'train/loss', loss,
             on_step=True, on_epoch=True, prog_bar=False, sync_dist=True
         )
         return loss
 
-    def validation_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> None:
-        emb, labels, sequence_ids = batch
+    def validation_step(self, batch: Tuple[Tensor, Tuple[Tensor, List[str]], List[str]], batch_idx: int) -> None:
+        emb, (labels, hier_labels), sequence_ids = batch
         with torch.inference_mode():
             proj = self(emb)
-            loss = self.loss_fn(proj, labels)
+            loss_input = hier_labels if self.hparams.loss_fn == "overlap" else labels
+            loss = self.loss_fn(proj, loss_input)
+
         self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self._val_outputs.append({
             "embeddings": proj.detach(),
@@ -135,8 +146,8 @@ class ContrastiveCATHeModel(L.LightningModule):
             "sequence_ids": sequence_ids
         })
 
-    def test_step(self, batch: Tuple[Tensor, Tensor, List[str]], batch_idx: int) -> None:
-        emb, labels, sequence_ids = batch
+    def test_step(self, batch: Tuple[Tensor, Tuple[Tensor, List[str]], List[str]], batch_idx: int) -> None:
+        emb, (labels, hier_labels), sequence_ids = batch
         with torch.inference_mode():
             proj = self(emb)
         self._test_outputs.append({
@@ -303,7 +314,6 @@ class ContrastiveCATHeModel(L.LightningModule):
         with torch.inference_mode():
             out = self(x)
         return out.cpu()
-
     def on_test_epoch_start(self) -> None:
         """Build the training‐set embedding/label cache once before any test metrics."""
         # This is no longer strictly necessary if we only compute self-classification metrics,
