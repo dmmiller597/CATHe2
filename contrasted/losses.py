@@ -81,8 +81,9 @@ class OverlapLoss(nn.Module):
             device=cosines.device # Ensure indices are on the same device
         )
         lower_overlap = overlap[lower_indices[0], lower_indices[1]].reshape(-1, 1)
-        lower_cosines = torch.clip(cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1), 0, 1)
-        return torch.nn.functional.mse_loss(lower_cosines.float(), lower_overlap)
+        # Rescale cosines from [-1, 1] to [0, 1] to match the range of overlap coefficient
+        rescaled_cosines = (cosines[lower_indices[0], lower_indices[1]] + 1) / 2
+        return torch.nn.functional.mse_loss(rescaled_cosines.reshape(-1, 1).float(), lower_overlap)
 
 
 class SINCERELoss(nn.Module):
