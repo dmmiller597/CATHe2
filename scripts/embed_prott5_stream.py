@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Iterator, List, Tuple
 
@@ -153,6 +154,9 @@ def embed_sequences_stream(
 
     seq_generator = read_fasta_generator(fasta_path)
 
+    start_time = time.time()
+    total_sequences_processed = 0
+
     while True:
         chunk = list(itertools.islice(seq_generator, chunk_size))
         if not chunk:
@@ -194,8 +198,39 @@ def embed_sequences_stream(
                     mean_vec = seq_rep.mean(dim=0)
                     memmap[row_idxs_for_batch[j]] = mean_vec.cpu().numpy().astype(np.float16)
 
-        pbar.update(len(chunk))
+        processed_in_chunk = len(chunk)
+        total_sequences_processed += processed_in_chunk
+        pbar.update(processed_in_chunk)
+
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 0:
+            seq_per_sec = total_sequences_processed / elapsed_time
+            pbar.set_postfix({"seq/s": f"{seq_per_sec:.2f}"})
+
     pbar.close()
+
+
+def create_and_save_id_index(fasta_path: Path, out_path: Path) -> dict[str, int]:
+    """Scan a FASTA file to create a mapping from sequence ID to index and save it."""
+    _LOGGER.info("Scanning FASTA to build ID index from %s. This may take a while for large files...", fasta_path)
+    id_to_idx: dict[str, int] = {}
+    pbar = tqdm(desc="Scanning FASTA", unit=" seqs")
+    with fasta_path.open() as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                id_ = line[1:].split()[0]
+                if id_ not in id_to_idx:
+                    id_to_idx[id_] = len(id_to_idx)
+                    pbar.update(1)
+    pbar.close()
+    _LOGGER.info("Found %d unique sequences.", len(id_to_idx))
+
+    save_json({"id2idx": id_to_idx}, out_path)
+    _LOGGER.info("ID index map saved to %s", out_path)
+    return id_to_idx
 
 # ────────────────────────────────────────────────────────────────────────────────
 # I/O helpers
@@ -227,7 +262,7 @@ def parse_args(argv: List[str] | None = None):
     p.add_argument("--meta-dir", default="data/TED/s100_splits", type=Path, help="Directory with JSON split files (train.json, val.json, test.json)")
     p.add_argument("--out-dir", default="data/TED/s100/protT5", type=Path, help="Directory for outputs")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--max-tokens", type=int, default=100000, help="Token budget per batch")
+    p.add_argument("--max-tokens", type=int, default=100000, help="Token budget per batch. Adjust based on GPU memory.")
     p.add_argument("--chunk-size", type=int, default=100_000, help="Number of sequences to process from FASTA at a time")
     return p.parse_args(argv)
 
@@ -242,21 +277,28 @@ def main(argv: List[str] | None = None):
     )
 
     device = torch.device(args.device)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    _LOGGER.info("Scanning FASTA to get sequence IDs from %s", args.fasta)
-    ids = read_fasta_ids(args.fasta)
-    id_to_idx = {id_: i for i, id_ in enumerate(ids)}
+    # 1. Build or load the ID-to-index map
+    id_map_path = args.out_dir / "protT5_id_index_map.json"
+    if id_map_path.exists():
+        _LOGGER.info("Loading existing ID index from %s", id_map_path)
+        with id_map_path.open() as fh:
+            id_to_idx = json.load(fh)["id2idx"]
+    else:
+        id_to_idx = create_and_save_id_index(args.fasta, id_map_path)
 
-    _LOGGER.info("Loading metadata from %s", args.meta_dir)
-    meta = load_meta_from_dir(args.meta_dir)
-
+    ids = list(id_to_idx.keys())
     if len(ids) == 0:
         _LOGGER.error("No sequences found in FASTA – aborting")
         sys.exit(1)
 
+    _LOGGER.info("Loading metadata from %s", args.meta_dir)
+    meta = load_meta_from_dir(args.meta_dir)
+
     # ── allocate mem-map ───────────────────────────────────────────────────────
-    args.out_dir.mkdir(parents=True, exist_ok=True)
     mmap_path = args.out_dir / "protT5_embeddings.npy"
+    _LOGGER.info("Allocating memory map array at %s with shape (%d, 1024)", mmap_path, len(ids))
     mmap_arr = np.memmap(mmap_path, mode="w+", dtype="float16", shape=(len(ids), 1024))
 
     _LOGGER.info("Initialising ProtT5 (this can take a minute)…")
@@ -268,8 +310,8 @@ def main(argv: List[str] | None = None):
     mmap_arr.flush()  # ensure everything hits disk
 
     # ── auxiliary artefacts ────────────────────────────────────────────────────
-    save_json({"id2idx": id_to_idx}, args.out_dir / "protT5_id_index_map.json")
-
+    # The ID map is now saved at the beginning of the script.
+    # We only need to write the split files here.
     write_split_files(meta, ids, args.out_dir.parent / "splits")
 
     _LOGGER.info("Finished. Mem-map stored at %s", mmap_path)
