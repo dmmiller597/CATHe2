@@ -7,7 +7,7 @@
 #$ -l gpu_type=a100_80
 #$ -l h_rt=24:00:00
 #$ -S /bin/bash
-#$ -N embeddings
+#$ -N protT5_s30_embeddings
 #$ -P cath
 #$ -o /SAN/orengolab/functional-families/CATHe2/qsub_logs/
 #$ -wd /SAN/orengolab/functional-families/CATHe2/
