@@ -71,7 +71,7 @@ class OverlapLoss(nn.Module):
 
     def __call__(self, embeddings, labels):
         overlap = torch.tensor(
-            pairwise_overlap_coefficient(labels),
+            pairwise_overlap_coefficient(labels, embeddings=embeddings),
             device=embeddings.device,
             # dtype=embeddings.dtype, Let it default to float32 for stability
         )  # compute the pairwise overlap coefficient between all the labels in a batch

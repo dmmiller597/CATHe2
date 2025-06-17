@@ -87,15 +87,19 @@ def overlap_coefficient(list1: list, list2: list) -> float:
 
 def pairwise_overlap_coefficient(
     list_of_lists: List[List[str]],
+    embeddings: Optional[torch.Tensor] = None,
 ) -> List[List[float]]:
     """
     Compute the pairwise overlap coefficient
     between all sets within a big list of lists.
     """
-    n = len(list_of_lists)
+    n = embeddings.shape[0] if embeddings is not None else len(list_of_lists)
     matrix = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(i, n):
+    # Use original list length for loop bounds to avoid index errors on list_of_lists
+    # if DistributedSampler added padding.
+    effective_length = len(list_of_lists)
+    for i in range(effective_length):
+        for j in range(i, effective_length):
             sim = overlap_coefficient(list_of_lists[i], list_of_lists[j])
             matrix[i][j] = sim
             matrix[j][i] = sim
