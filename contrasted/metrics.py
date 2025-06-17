@@ -69,18 +69,18 @@ def compute_centroid_metrics(
             # 6) Compute numpy/sklearn metrics on the filtered set
             y_true = eval_labs.numpy()
             y_pred = preds.numpy()
-            metrics[f"{metric_prefix}/acc"]          = accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true, y_pred)
             # Use labels=eligible_classes.numpy() if using average='weighted' or 'micro' might be needed
-            metrics[f"{metric_prefix}/balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-            metrics[f"{metric_prefix}/precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
     except Exception as e:
         log.error(f"Error computing centroid metrics for {stage}: {e}", exc_info=True)
         # on any error, return zeros to keep training stable
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{metric_prefix}/{name}"] = 0.0
+            metrics[f"{metric_prefix}_{name}"] = 0.0
         return metrics, None # Return None indices on error
 
     return metrics, eval_indices # Return calculated metrics and the indices used
@@ -109,7 +109,7 @@ def compute_knn_metrics(
     if n_samples <= k:
         log.warning(f"k-NN computation skipped for k={k}, stage={stage}: Not enough samples ({n_samples})")
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-             metrics[f"{metric_prefix}/{name}"] = 0.0
+             metrics[f"{metric_prefix}_{name}"] = 0.0
         return metrics, None
 
     try:
@@ -124,7 +124,7 @@ def compute_knn_metrics(
             if eligible_classes.numel() == 0:
                 log.warning(f"k-NN ({k}) metrics skipped for {stage}: no classes with >= {min_class_size} samples.")
                 for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                    metrics[f"{metric_prefix}/{name}"] = 0.0
+                    metrics[f"{metric_prefix}_{name}"] = 0.0
                 return metrics, None
             # --- End Pre-check ---
 
@@ -164,7 +164,7 @@ def compute_knn_metrics(
             if len(y_true_filtered) == 0:
                  log.warning(f"k-NN ({k}) metrics skipped for {stage}: no eligible samples remained after filtering.")
                  for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                     metrics[f"{metric_prefix}/{name}"] = 0.0
+                     metrics[f"{metric_prefix}_{name}"] = 0.0
                  return metrics, None
             # --- End Filter ---
 
@@ -172,11 +172,11 @@ def compute_knn_metrics(
             # Compute sklearn metrics
             y_true = y_true_filtered.numpy()
             y_pred = y_pred_filtered.numpy()
-            metrics[f"{metric_prefix}/acc"]           = accuracy_score(y_true, y_pred)
-            metrics[f"{metric_prefix}/balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
-            metrics[f"{metric_prefix}/precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_acc"]           = accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
             # Optional: Keep limited debug prints if helpful
             # print(f"  [knn k={k} batch {i//knn_batch_size}] preds_batch sample:", preds_batch[:3])
@@ -185,7 +185,7 @@ def compute_knn_metrics(
         log.error(f"Error in compute_knn_metrics(k={k}, stage={stage}): {e}", exc_info=True)
         # Ensure metrics dictionary exists and provide defaults on error
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{metric_prefix}/{name}"] = 0.0
+            metrics[f"{metric_prefix}_{name}"] = 0.0
         # Optionally re-raise if you want training to stop on metric calculation errors
         # raise e
         return metrics, None # Return None indices on error
@@ -330,11 +330,11 @@ def compute_holdout_metrics(
             # 5) sklearn metrics
             y_true = hold_labs.numpy()
             y_pred = preds.numpy()
-            metrics[f"{metric_prefix}/acc"]          = accuracy_score(y_true, y_pred)
-            metrics[f"{metric_prefix}/balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-            metrics[f"{metric_prefix}/precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}/f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+            metrics[f"{metric_prefix}_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
     except Exception as e:
         log.error(f"Error in compute_holdout_metrics for {stage}: {e}", exc_info=True)
