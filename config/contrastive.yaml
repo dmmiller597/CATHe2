@@ -8,6 +8,7 @@ model:
   projection_dims: [1024]
   output_dim: 512
   dropout: 0.3
+  loss_fn: "overlap" # "overlap" or "supcon"
   # Optimization
   learning_rate: 1e-4
   weight_decay: 1e-4
