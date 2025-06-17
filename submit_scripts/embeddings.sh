@@ -20,6 +20,6 @@ echo "####################  QSUB SCRIPT END  ####################"
 ROOT_DIR='/SAN/orengolab/functional-families/CATHe2'
 cd $ROOT_DIR
 source ${ROOT_DIR}/venv/bin/activate
-export PYTHONPATH=$PYTHONPATH:$ROOT_DIR
+export HF_HOME=${ROOT_DIR}/model_cache
 python ${ROOT_DIR}/scripts/embed_prott5.py --max-tokens 200000
 date
