@@ -25,7 +25,7 @@ def compute_centroid_metrics(
     Returns metrics dict and indices of evaluated samples relative to input.
     """
     metrics: Dict[str, float] = {}
-    metric_prefix = f"{stage}/centroid"
+    metric_prefix = f"{stage}_centroid"
     eval_indices: Optional[Tensor] = None # Store evaluated indices
 
     try:
@@ -101,7 +101,7 @@ def compute_knn_metrics(
     Returns metrics dict and indices of evaluated samples relative to input.
     """
     metrics = {}
-    metric_prefix = f"{stage}/knn_{k}"
+    metric_prefix = f"{stage}_knn_{k}"
     eval_indices: Optional[Tensor] = None # Store evaluated indices
     n_samples = embeddings.size(0)
     original_indices = torch.arange(n_samples) # Track original indices
@@ -209,14 +209,14 @@ def compute_centroid_metrics_reference(
         preds = classes[torch.argmin(dists, dim=1)]
         y_true = test_labels.numpy()
         y_pred = preds.numpy()
-        metrics[f"{stage}/centroid_acc"]          = accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/centroid_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
-        metrics[f"{stage}/centroid_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
-        metrics[f"{stage}/centroid_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_centroid_acc"]          = accuracy_score(y_true, y_pred)
+        metrics[f"{stage}_centroid_balanced_acc"] = balanced_accuracy_score(y_true, y_pred)
+        metrics[f"{stage}_centroid_precision"]    = precision_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_centroid_recall"]       = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_centroid_f1_macro"]     = f1_score(y_true, y_pred, average="macro", zero_division=0)
     except Exception:
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/centroid_{name}"] = 0.0
+            metrics[f"{stage}_centroid_{name}"] = 0.0
     return metrics
 
 
@@ -235,7 +235,7 @@ def compute_knn_metrics_reference(
     if num_ref <= k:
         log.warning(f"k-NN ref skipped for k={k}, stage={stage}: only {num_ref} ref samples")
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+            metrics[f"{stage}_knn_{k}_{name}"] = 0.0
         return metrics
 
     try:
@@ -251,15 +251,15 @@ def compute_knn_metrics_reference(
         preds = torch.cat(all_preds)
         y_true = test_labels.numpy()
         y_pred = preds.numpy()
-        metrics[f"{stage}/knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
-        metrics[f"{stage}/knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
-        metrics[f"{stage}/knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
-        metrics[f"{stage}/knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_knn_{k}_acc"]           = accuracy_score(y_true, y_pred)
+        metrics[f"{stage}_knn_{k}_balanced_acc"]  = balanced_accuracy_score(y_true, y_pred)
+        metrics[f"{stage}_knn_{k}_precision"]     = precision_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_knn_{k}_recall"]        = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        metrics[f"{stage}_knn_{k}_f1_macro"]      = f1_score(y_true, y_pred, average="macro", zero_division=0)
     except Exception as e:
         log.error(f"Error in compute_knn_metrics_reference(k={k}, stage={stage}): {e}", exc_info=True)
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{stage}/knn_{k}_{name}"] = 0.0
+            metrics[f"{stage}_knn_{k}_{name}"] = 0.0
     return metrics
 
 

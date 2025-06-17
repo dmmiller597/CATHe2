@@ -71,7 +71,7 @@ def build_callbacks(cfg: DictConfig, output_dir: Path) -> list:
     """
     checkpoint_cb = ModelCheckpoint(
         dirpath=str(output_dir),
-        filename="checkpoint-{{epoch:02d}}-{{val/centroid_f1_macro:.4f}}",
+        filename="checkpoint-{epoch:02d}-{val_centroid_f1_macro:.4f}",
         monitor=cfg.training.monitor_metric,
         mode=cfg.training.monitor_mode,
         save_top_k=1,
