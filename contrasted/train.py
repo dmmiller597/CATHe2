@@ -111,9 +111,8 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg.training.seed)
     torch.set_float32_matmul_precision(cfg.training.accelerator.float32_matmul_precision)
 
-    log.info("=== Training CATH Homologous Superfamily ===")
+    log.info("=== Training Contrastive Model ===")
 
-    # Initialize logger first to get the run name
     logger = build_logger(cfg)
     run_name = logger.experiment.name
     log.info(f"W&B run name: {run_name}")
