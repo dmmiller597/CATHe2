@@ -12,11 +12,11 @@ from model import ContrastiveCATHeModel
 
 log = get_logger(__name__)
 
-def create_run_dir(base_output_dir: Path, run_name: str) -> Path:
+def create_run_dir(base_output_dir: Path) -> Path:
     """
     Create a single directory for the training run and return its path.
     """
-    run_dir = base_output_dir / run_name
+    run_dir = base_output_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 
@@ -65,13 +65,13 @@ def build_model(cfg: DictConfig, output_dir: Path) -> ContrastiveCATHeModel:
     )
 
 
-def build_callbacks(cfg: DictConfig, output_dir: Path, run_name: str) -> list:
+def build_callbacks(cfg: DictConfig, output_dir: Path) -> list:
     """
     Create callbacks: checkpointing, early stopping, LR monitor, progress bar.
     """
     checkpoint_cb = ModelCheckpoint(
         dirpath=str(output_dir),
-        filename=f"{run_name}-{{epoch:02d}}-{{val/centroid_f1_macro:.4f}}",
+        filename="checkpoint-{{epoch:02d}}-{{val/centroid_f1_macro:.4f}}",
         monitor=cfg.training.monitor_metric,
         mode=cfg.training.monitor_mode,
         save_top_k=1,
@@ -114,18 +114,16 @@ def main(cfg: DictConfig) -> None:
     log.info("=== Training Contrastive Model ===")
 
     logger = build_logger(cfg)
-    run_name = logger.experiment.name
-    log.info(f"W&B run name: {run_name}")
 
     # Create directories for outputs
     base_output_dir = Path(hydra.utils.get_original_cwd()) / cfg.training.output_dir
-    run_dir = create_run_dir(base_output_dir, run_name)
+    run_dir = create_run_dir(base_output_dir)
     log.info(f"Run output directory: {run_dir}")
 
     # Setup data, model, and callbacks
     dm = build_datamodule(cfg)
     model = build_model(cfg, run_dir)
-    callbacks = build_callbacks(cfg, run_dir, run_name)
+    callbacks = build_callbacks(cfg, run_dir)
 
     trainer = L.Trainer(
         accelerator="auto",
