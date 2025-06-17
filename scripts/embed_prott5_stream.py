@@ -150,12 +150,9 @@ def embed_sequences_stream(
     """Encode and write each protein's mean embedding into *memmap* in-place."""
 
     _LOGGER.info("Embedding %d sequences", len(id_to_idx))
-    pbar = tqdm(total=len(id_to_idx), unit="seq")
+    pbar = tqdm(total=len(id_to_idx), unit="seq", dynamic_ncols=True)
 
     seq_generator = read_fasta_generator(fasta_path)
-
-    start_time = time.time()
-    total_sequences_processed = 0
 
     while True:
         chunk = list(itertools.islice(seq_generator, chunk_size))
@@ -198,14 +195,7 @@ def embed_sequences_stream(
                     mean_vec = seq_rep.mean(dim=0)
                     memmap[row_idxs_for_batch[j]] = mean_vec.cpu().numpy().astype(np.float16)
 
-        processed_in_chunk = len(chunk)
-        total_sequences_processed += processed_in_chunk
-        pbar.update(processed_in_chunk)
-
-        elapsed_time = time.time() - start_time
-        if elapsed_time > 0:
-            seq_per_sec = total_sequences_processed / elapsed_time
-            pbar.set_postfix({"seq/s": f"{seq_per_sec:.2f}"})
+                pbar.update(len(batch_seqs))
 
     pbar.close()
 
