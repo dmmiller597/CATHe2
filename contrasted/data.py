@@ -11,28 +11,19 @@ from utils import get_logger
 
 log = get_logger(__name__)
 
-CATH_LEVEL_NAMES = {
-    0: "Class",
-    1: "Architecture",
-    2: "Topology",
-    3: "Homologous_Superfamily",
-}
-
-
-def get_level_label(sf: str, level: int) -> str:
-    """Extract the CATH hierarchy label at the given level from an SF string."""
+def get_superfamily_label(sf: str) -> str:
+    """Extract the CATH Homologous Superfamily label (level 3) from an SF string."""
     parts = sf.split(".")
-    return ".".join(parts[: level + 1]) if len(parts) > level else sf
+    return ".".join(parts[:4]) if len(parts) > 3 else sf
 
 
 class EmbeddingDataset(Dataset):
-    """Dataset for precomputed embeddings, CATH labels, and sequence IDs."""
+    """
+    Dataset for precomputed embeddings, CATH Homologous Superfamily labels,
+    and sequence IDs.
+    """
 
-    def __init__(self, emb_path: Path, lbl_path: Path, level: int = 3):
-        if level not in CATH_LEVEL_NAMES:
-            raise ValueError(f"cath_level must be 0..3, got {level}")
-        self.level = level
-
+    def __init__(self, emb_path: Path, lbl_path: Path):
         if not emb_path.is_file():
             raise FileNotFoundError(f"Embeddings file not found: {emb_path}")
         if not lbl_path.is_file():
@@ -53,7 +44,7 @@ class EmbeddingDataset(Dataset):
              self.sequence_ids = df["sequence_id"].astype(str).to_list()
 
 
-        sf_series = df["SF"].astype(str).apply(lambda s: get_level_label(s, level))
+        sf_series = df["SF"].astype(str).apply(get_superfamily_label)
         unique_sf = sorted(sf_series.unique())
         encoder = {sf: idx for idx, sf in enumerate(unique_sf)}
 
@@ -68,7 +59,7 @@ class EmbeddingDataset(Dataset):
                 "Mismatch between embeddings, labels, and sequence_ids lengths: "
                 f"{len(self.embeddings)}, {len(self.labels)}, {len(self.sequence_ids)}"
             )
-        log.info(f"Loaded {len(self)} samples for level {self.level}.")
+        log.info(f"Loaded {len(self)} samples for Homologous Superfamily level.")
 
 
     def __len__(self) -> int:
@@ -94,7 +85,6 @@ class ContrastiveDataModule(L.LightningDataModule):
         val_labels_file: str,
         test_embeddings_file: Optional[str] = None,
         test_labels_file: Optional[str] = None,
-        cath_level: int = 3,
         batch_size: int = 128,
         num_workers: int = 4,
         pin_memory: bool = True,
@@ -111,7 +101,7 @@ class ContrastiveDataModule(L.LightningDataModule):
             ),
         }
         self.save_hyperparameters(
-            "cath_level", "batch_size", "num_workers", "pin_memory", "persistent_workers"
+            "batch_size", "num_workers", "pin_memory", "persistent_workers"
         )
 
         self.datasets: Dict[str, EmbeddingDataset] = {}
@@ -137,7 +127,7 @@ class ContrastiveDataModule(L.LightningDataModule):
         for split, req_stage in stage_map.items():
             emb_path, lbl_path = self.paths[split]
             if emb_path and lbl_path and (stage is None or stage == req_stage):
-                ds = EmbeddingDataset(emb_path, lbl_path, self.hparams.cath_level)
+                ds = EmbeddingDataset(emb_path, lbl_path)
                 self.datasets[split] = ds
                 if split == "train":
                     self.embedding_dim = ds.embedding_dim

@@ -5,8 +5,8 @@ defaults:
 model:
   # Architecture
   embedding_dim: ${data.embedding_dim}
-  projection_dims: [1024, 512]
-  output_dim: 128
+  projection_dims: [1024]
+  output_dim: 512
   dropout: 0.3
   # Optimization
   learning_rate: 1e-4
@@ -17,13 +17,14 @@ model:
   enable_visualization: false
   tsne_viz_dir: "results/tsne_plots"
   umap_viz_dir: "results/umap_plots"
+  evaluated_ids_output_dir: "results/evaluated_ids"
+  min_class_size_for_eval: 2
 
 training:
   # Training parameters
   batch_size: 1024
   max_epochs: 100
   accumulate_grad_batches: 1
-  cath_levels: [3] # <--- (0=C, 1=A, 2=T, 3=H)
 
   # Monitoring
   monitor_metric: "val/centroid_f1_macro"
@@ -43,4 +44,4 @@ training:
   precision: "16-mixed"
 
   # Output paths - These will be dynamically modified per level
-  output_dir: "outputs_contrastive_hierarchical" # Base output directory
+  output_dir: "outputs_contrastive" # Base output directory
