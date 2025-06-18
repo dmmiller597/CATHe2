@@ -173,23 +173,22 @@ class ContrastiveDataModule(L.LightningDataModule):
         )
 
     def train_dataloader(self):
-        if "train" not in self.datasets:
-            self.setup("fit")
         return self._make_dataloader("train", True)
 
     def val_dataloader(self):
-        if "val" not in self.datasets:
-            self.setup("fit")
         return self._make_dataloader("val", False)
 
     def test_dataloader(self):
-        if "test" not in self.datasets:
-            self.setup("test")
         return self._make_dataloader("test", False)
+
     def get_label_decoder(self) -> Dict[int, str]:
+        if "train" not in self.datasets:
+            self.setup("fit") # Ensure dataset is loaded for decoder access
         return self.datasets["train"].label_decoder
 
     def get_num_classes(self) -> int:
+        if "train" not in self.datasets:
+            self.setup("fit") # Ensure dataset is loaded for num_classes access
         return self.num_classes
 
 # --- Custom collate function to keep hierarchical labels per-sample ---

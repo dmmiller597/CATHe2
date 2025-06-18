@@ -141,20 +141,12 @@ def main(cfg: DictConfig) -> None:
 
     trainer.fit(model, datamodule=dm)
 
-    checkpoint_cb = next(cb for cb in callbacks if isinstance(cb, ModelCheckpoint))
-    best_path = checkpoint_cb.best_model_path or checkpoint_cb.last_model_path
-
-    if not best_path or not Path(best_path).exists():
-        log.error("Training finished, but no checkpoint was saved.")
-        if logger:
-            logger.experiment.finish(exit_code=1)
-        return
-
-    log.info(f"Best checkpoint saved to: {best_path}")
-
-    if dm.test_dataloader() is not None:
-        log.info("--- Starting Test Phase ---")
-        trainer.test(model=model, datamodule=dm, ckpt_path=best_path)
+    log.info("--- Starting Test Phase ---")
+    if dm.paths.get("test") and dm.paths["test"][0] is not None:
+        log.info("Found test set, running evaluation.")
+        trainer.test(datamodule=dm, ckpt_path="best")
+    else:
+        log.info("No test set configured, skipping test phase.")
 
     if logger:
         logger.experiment.finish()
