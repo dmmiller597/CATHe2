@@ -2,164 +2,24 @@
 import argparse
 import time
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict
 import yaml
 import csv
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import (
-    accuracy_score,
-    balanced_accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-)
 from sklearn.preprocessing import LabelEncoder
 
 # Import utilities directly from the contrasted package
-from data import CATH_LEVEL_NAMES, get_level_label # Use relative import
-from distances import pairwise_distance # Use relative import
+from data import get_level_label  # Use relative import
+from metrics import compute_centroid_metrics, compute_knn_metrics # Use relative import
+from utils import get_logger
 
-# Core Evaluation Logic (adapted from contrasted/metrics.py)
+log = get_logger(__name__)
 
-def evaluate_split(
-    embeddings: torch.Tensor,
-    labels: torch.Tensor,
-    min_class_size: int,
-    split_name: str,
-    knn_batch_size: int = 1024,
-) -> Dict[str, float]:
-    """
-    Evaluates embeddings using nearest centroid and 1-NN (leave-one-out)
-    after filtering for minimum class size.
-    """
-    print(f"\n--- Evaluating {split_name} split ---")
-    metrics = {}
-    n_samples = embeddings.size(0)
-
-    if n_samples == 0:
-        print("No samples found.")
-        return {}
-
-    # 1. Identify classes with enough samples for reliable evaluation
-    unique_labels, counts = torch.unique(labels, return_counts=True)
-    eligible_classes = unique_labels[counts >= min_class_size]
-
-    if eligible_classes.numel() == 0:
-        print(f"Skipping evaluation: No classes found with >= {min_class_size} samples.")
-        # Return zero metrics for consistency
-        for metric_type in ["centroid", "knn_1"]:
-             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                 metrics[f"{split_name}/{metric_type}_{name}"] = 0.0
-        return metrics
-
-    print(f"Found {eligible_classes.numel()} classes with >= {min_class_size} samples.")
-
-    # 2. Filter embeddings/labels to evaluate *only* on samples from eligible classes
-    eligible_mask = torch.isin(labels, eligible_classes)
-    eval_embs = embeddings[eligible_mask]
-    eval_labs = labels[eligible_mask]
-    n_eval_samples = eval_embs.size(0)
-
-    if n_eval_samples == 0:
-        print(f"Skipping evaluation: No samples remained after filtering for eligible classes.")
-        # Return zero metrics for consistency
-        for metric_type in ["centroid", "knn_1"]:
-             for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                 metrics[f"{split_name}/{metric_type}_{name}"] = 0.0
-        return metrics
-
-    print(f"Evaluating on {n_eval_samples} samples from eligible classes.")
-    y_true_np = eval_labs.numpy() # Common true labels for both methods
-
-    # --- 3. Centroid Evaluation ---
-    print("Calculating Centroid metrics...")
-    centroid_start = time.time()
-    metric_prefix = f"{split_name}/centroid"
-    try:
-        # Compute centroids *only* for eligible classes using all eligible samples
-        # Note: This uses the *evaluation set* to compute centroids, matching the original logic.
-        centroids = torch.stack([eval_embs[eval_labs == c].mean(dim=0) for c in eligible_classes])
-
-        # Compute distances between evaluation embeddings and eligible centroids
-        dists = pairwise_distance(eval_embs, centroids) # Shape: [n_eval_samples, n_eligible_classes]
-
-        # Assign nearest eligible centroid
-        preds_indices = torch.argmin(dists, dim=1)
-        preds = eligible_classes[preds_indices] # Map indices back to original class labels
-        y_pred_np = preds.numpy()
-
-        # Compute numpy/sklearn metrics on the filtered set
-        metrics[f"{metric_prefix}_acc"]          = accuracy_score(y_true_np, y_pred_np)
-        metrics[f"{metric_prefix}_balanced_acc"] = balanced_accuracy_score(y_true_np, y_pred_np)
-        metrics[f"{metric_prefix}_precision"]    = precision_score(y_true_np, y_pred_np, average="macro", zero_division=0)
-        metrics[f"{metric_prefix}_recall"]       = recall_score(y_true_np, y_pred_np, average="macro", zero_division=0)
-        metrics[f"{metric_prefix}_f1_macro"]     = f1_score(y_true_np, y_pred_np, average="macro", zero_division=0)
-        print(f"Centroid metrics calculated in {time.time() - centroid_start:.2f}s")
-
-    except Exception as e:
-        print(f"Error computing centroid metrics for {split_name}: {e}")
-        for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{metric_prefix}_{name}"] = 0.0
-
-
-    # --- 4. k-NN (k=1) Evaluation (Leave-One-Out within eligible set) ---
-    print("Calculating k-NN (k=1) LOO metrics...")
-    knn_start = time.time()
-    metric_prefix = f"{split_name}/knn_1"
-    k = 1
-    if n_eval_samples <= k:
-         print(f"Skipping k-NN (k=1): Not enough eligible samples ({n_eval_samples})")
-         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-            metrics[f"{metric_prefix}_{name}"] = 0.0
-    else:
-        try:
-            all_preds_knn = []
-            # Process in batches for distance calculation
-            for i in range(0, n_eval_samples, knn_batch_size):
-                batch_indices = range(i, min(i + knn_batch_size, n_eval_samples))
-                embs_batch = eval_embs[batch_indices]
-
-                # Compute distances between batch and *all eligible* samples
-                dists_batch = pairwise_distance(embs_batch, eval_embs) # Shape: [batch_size, n_eval_samples]
-
-                # Exclude self-distances (important for leave-one-out)
-                eligible_original_indices = torch.where(eligible_mask)[0] # Indices in the *full* dataset
-
-                for batch_idx, eval_idx in enumerate(batch_indices):
-                     # The column corresponding to self in the eval dist matrix is simply eval_idx
-                    self_dist_column_idx = eval_idx
-                    if self_dist_column_idx < dists_batch.shape[1]:
-                         dists_batch[batch_idx, self_dist_column_idx] = float("inf")
-
-                # Find 1 nearest neighbor (excluding self) for the current batch
-                knn_idxs_batch = torch.topk(dists_batch, k, largest=False).indices # Shape: [batch_size, k]
-
-                # Get neighbor labels and majority vote (trivial for k=1)
-                neighbor_labels_batch = eval_labs[knn_idxs_batch] # Shape: [batch_size, k]
-                preds_batch = neighbor_labels_batch.squeeze(dim=1) # Shape: [batch_size] for k=1
-                all_preds_knn.append(preds_batch)
-
-            # Concatenate predictions from all batches
-            preds_knn = torch.cat(all_preds_knn)
-            y_pred_knn_np = preds_knn.numpy()
-
-            # Compute sklearn metrics using filtered results
-            metrics[f"{metric_prefix}_acc"]           = accuracy_score(y_true_np, y_pred_knn_np)
-            metrics[f"{metric_prefix}_balanced_acc"]  = balanced_accuracy_score(y_true_np, y_pred_knn_np)
-            metrics[f"{metric_prefix}_precision"]     = precision_score(y_true_np, y_pred_knn_np, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}_recall"]        = recall_score(y_true_np, y_pred_knn_np, average="macro", zero_division=0)
-            metrics[f"{metric_prefix}_f1_macro"]      = f1_score(y_true_np, y_pred_knn_np, average="macro", zero_division=0)
-            print(f"k-NN (k=1) LOO metrics calculated in {time.time() - knn_start:.2f}s")
-
-        except Exception as e:
-            print(f"Error computing k-NN (k=1) metrics for {split_name}: {e}")
-            for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
-                 metrics[f"{metric_prefix}_{name}"] = 0.0
-
-    return metrics
+# The local evaluate_split function has been removed.
+# All metric calculations will now use the imported functions from metrics.py.
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate baseline embeddings using Centroid and k-NN (k=1) LOO.")
@@ -176,67 +36,67 @@ def main():
         with open(args.config_file, 'r') as f:
             data_config = yaml.safe_load(f)
         if not data_config or 'data_dir' not in data_config:
-             print(f"Error: 'data_dir' not found in config file {args.config_file}")
+             log.error(f"Error: 'data_dir' not found in config file {args.config_file}")
              return
         base_dir = Path(data_config['data_dir']).resolve()
-        print(f"Using data directory: {base_dir}")
+        log.info(f"Using data directory: {base_dir}")
     except FileNotFoundError:
-        print(f"Error: Config file not found at {args.config_file}")
+        log.error(f"Error: Config file not found at {args.config_file}")
         return
     except yaml.YAMLError as e:
-        print(f"Error parsing YAML file {args.config_file}: {e}")
+        log.error(f"Error parsing YAML file {args.config_file}: {e}")
         return
     except Exception as e:
-         print(f"An unexpected error occurred loading the config: {e}")
+         log.error(f"An unexpected error occurred loading the config: {e}")
          return
 
-    # --- MODIFIED: Only process the 'test' split ---
-    splits = ["test"]
+    # --- MODIFIED: Process both 'val' and 'test' splits ---
+    splits = ["val", "test"]
     # --- END MODIFICATION ---
 
     results = {}
 
-    for split in splits: # This loop will now only run once with split="test"
+    for split in splits:
         emb_key = f"{split}_embeddings"
         lbl_key = f"{split}_labels"
 
         # Check if paths exist in config
         if emb_key not in data_config or lbl_key not in data_config:
-             print(f"Skipping {split} split - '{emb_key}' or '{lbl_key}' not found in {args.config_file}.")
-             continue # Or potentially raise an error if test set is mandatory
+             log.warning(f"Skipping {split} split - '{emb_key}' or '{lbl_key}' not found in {args.config_file}.")
+             continue
 
         emb_file_rel = data_config[emb_key]
         lbl_file_rel = data_config[lbl_key]
 
         if not emb_file_rel or not lbl_file_rel:
-            print(f"Skipping {split} split - missing file paths in config for this split.")
-            continue # Or potentially raise an error
+            log.warning(f"Skipping {split} split - missing file paths in config for this split.")
+            continue
 
         emb_path = base_dir / emb_file_rel
         lbl_path = base_dir / lbl_file_rel
 
         if not emb_path.is_file():
-            print(f"ERROR: Embeddings file not found: {emb_path}")
-            continue # Or potentially raise an error
+            log.error(f"ERROR: Embeddings file not found: {emb_path}")
+            continue
         if not lbl_path.is_file():
-            print(f"ERROR: Labels file not found: {lbl_path}")
-            continue # Or potentially raise an error
+            log.error(f"ERROR: Labels file not found: {lbl_path}")
+            continue
 
-        print(f"\nLoading data for {split} split...")
+        log.info(f"Loading data for {split} split...")
         try:
             # Load embeddings
             emb_data = np.load(emb_path)
             if "embeddings" not in emb_data:
-                print(f"ERROR: 'embeddings' key not found in {emb_path}")
-                continue # Or potentially raise an error
+                log.error(f"ERROR: 'embeddings' key not found in {emb_path}")
+                continue
             embeddings_np = emb_data["embeddings"].astype(np.float32)
             embeddings_tensor = torch.from_numpy(embeddings_np)
 
             # Load labels
             df = pd.read_csv(lbl_path)
             if "SF" not in df.columns:
-                print(f"ERROR: 'SF' column not found in {lbl_path}")
-                continue # Or potentially raise an error
+                log.error(f"ERROR: 'SF' column not found in {lbl_path}")
+                continue
 
             # Process labels using imported function
             sf_series = df["SF"].astype(str).apply(lambda s: get_level_label(s, args.cath_level))
@@ -246,23 +106,43 @@ def main():
 
             # Check length consistency
             if len(embeddings_tensor) != len(labels_tensor):
-                 print(f"ERROR: Mismatch lengths for {split}: embeddings={len(embeddings_tensor)}, labels={len(labels_tensor)}")
-                 continue # Or potentially raise an error
+                 log.error(f"ERROR: Mismatch lengths for {split}: embeddings={len(embeddings_tensor)}, labels={len(labels_tensor)}")
+                 continue
 
-            print(f"Loaded {len(embeddings_tensor)} samples.")
+            log.info(f"Loaded {len(embeddings_tensor)} samples.")
 
-            # Evaluate
-            split_results = evaluate_split(
+            # --- MODIFIED: Evaluate using functions from metrics.py ---
+            log.info(f"--- Evaluating {split} split (min_class_size={args.min_class_size}) ---")
+
+            # 1. Compute Centroid metrics
+            centroid_start = time.time()
+            log.info("Calculating Centroid metrics...")
+            centroid_metrics, _ = compute_centroid_metrics(
                 embeddings=embeddings_tensor,
                 labels=labels_tensor,
+                stage=split,
                 min_class_size=args.min_class_size,
-                split_name=split,
-                knn_batch_size=args.knn_batch_size,
             )
-            results.update(split_results)
+            results.update(centroid_metrics)
+            log.info(f"Centroid metrics calculated in {time.time() - centroid_start:.2f}s")
+
+            # 2. Compute k-NN (k=1) LOO metrics
+            knn_start = time.time()
+            log.info("Calculating k-NN (k=1) LOO metrics...")
+            knn_metrics, _ = compute_knn_metrics(
+                embeddings=embeddings_tensor,
+                labels=labels_tensor,
+                k=1,
+                stage=split,
+                knn_batch_size=args.knn_batch_size,
+                min_class_size=args.min_class_size,
+            )
+            results.update(knn_metrics)
+            log.info(f"k-NN (k=1) LOO metrics calculated in {time.time() - knn_start:.2f}s")
+            # --- END MODIFICATION ---
 
         except Exception as e:
-            print(f"Failed to process {split} split: {e}") # Consider re-raising for critical errors
+            log.error(f"Failed to process {split} split: {e}", exc_info=True)
 
     print("\n--- Final Results (Console) ---")
     if not results:
