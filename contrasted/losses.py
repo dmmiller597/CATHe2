@@ -71,9 +71,8 @@ class OverlapLoss(nn.Module):
 
     def __call__(self, embeddings, labels):
         overlap = torch.tensor(
-            # Ensure the output matrix has the same size as the cosine-sim matrix by
-            # forwarding the embeddings tensor (its length defines the desired dim)
-            pairwise_overlap_coefficient(labels, embeddings),
+            # The matrix size is implicitly determined by the length of the labels list.
+            pairwise_overlap_coefficient(labels),
             device=embeddings.device,
             dtype=embeddings.dtype,
         )  # compute the pairwise overlap coefficient between all the labels in a batch with correct shape
