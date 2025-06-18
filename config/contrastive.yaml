@@ -7,11 +7,11 @@ model:
   embedding_dim: ${data.embedding_dim}
   projection_dims: [1024]
   output_dim: 512
-  dropout: 0.3
+  dropout: 0.1
   loss_fn: "overlap" # "overlap" or "supcon"
   # Optimization
   learning_rate: 1e-4
-  weight_decay: 1e-4
+  weight_decay: 0.01
   temperature: 0.07
   # --- Added Visualization ---
   visualization_method: "tsne" # "umap" or "tsne"
@@ -23,7 +23,7 @@ model:
 
 training:
   # Training parameters
-  batch_size: 1024
+  batch_size: 128
   max_epochs: 100
   accumulate_grad_batches: 1
 

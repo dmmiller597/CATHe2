@@ -22,5 +22,5 @@ cd $ROOT_DIR
 source venv/bin/activate
 export WANDB__SERVICE_WAIT=300
 export PYTHONPATH=$PYTHONPATH:$ROOT_DIR
-python ${ROOT_DIR}/src/contrastive_train.py
+python ${ROOT_DIR}/contrasted/train.py
 date
