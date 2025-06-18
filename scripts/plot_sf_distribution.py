@@ -20,8 +20,13 @@ def plot_sf_distribution(json_path, output_dir):
     except FileNotFoundError:
         print(f"Error: JSON file not found at {json_path}")
         return
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON from {json_path}: {e}")
+        return
     except Exception as e:
-        print(f"Error reading JSON file: {e}")
+        print(f"An unexpected error occurred: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception details: {repr(e)}")
         return
 
     plt.figure(figsize=(12, 6))
@@ -78,7 +83,7 @@ def main():
     parser.add_argument(
         "--json_path",
         type=str,
-        default="data/TED/TED-SF-mapping.json",
+        default="/data/TED/TED-SF-mapping.json",
         help="Path to the JSON file containing sequence to SF mapping."
     )
     parser.add_argument(
