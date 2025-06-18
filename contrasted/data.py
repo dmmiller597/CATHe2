@@ -11,6 +11,18 @@ from utils import get_logger, convert_sf_string_to_list
 
 log = get_logger(__name__)
 
+CATH_LEVEL_NAMES = ["Class", "Architecture", "Topology", "Homologous Superfamily"]
+
+def get_level_label(sf: str, level: int) -> str:
+    """Extract a CATH label at a specific level (0=C, 1=A, 2=T, 3=H)."""
+    parts = sf.split('.')
+    # CATH levels correspond to number of parts: C=1, A=2, T=3, H=4
+    num_parts = level + 1
+    if len(parts) >= num_parts:
+        return ".".join(parts[:num_parts])
+    return sf # Return original if not deep enough
+
+
 def get_superfamily_label(sf: str) -> str:
     """Extract the CATH Homologous Superfamily label (level 3) from an SF string."""
     parts = sf.split(".")
