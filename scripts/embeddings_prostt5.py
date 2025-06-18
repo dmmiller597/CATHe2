@@ -40,38 +40,65 @@ def get_prostT5_tokenizer_and_device():
     return tokenizer, device
 
 
-def load_prostT5_encoder_model(device):
-    """Load ProstT5 Encoder model."""
-    logging.info("Loading ProstT5 Encoder model...")
+def load_prostT5_model(device):
+    """Load ProstT5 Seq2Seq model."""
+    logging.info("Loading ProstT5 Seq2Seq model...")
     model_name = "Rostlab/ProstT5"
-    encoder_model = T5EncoderModel.from_pretrained(model_name).to(device)
-    encoder_model.eval()
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
+    model.eval()
     if device.type == 'cuda':
-        logging.info("Using half precision for Encoder model on GPU.")
-        encoder_model.half()
+        logging.info("Using half precision for model on GPU.")
+        model.half()
     else:
-        logging.info("Using full precision for Encoder model on CPU.")
-        encoder_model.float()
+        logging.info("Using full precision for model on CPU.")
+        model.float()
     
-    logging.info("ProstT5 Encoder model loaded.")
-    return encoder_model
+    logging.info("ProstT5 model loaded.")
+    return model
 
 
-def load_prostT5_translation_model(device):
-    """Load ProstT5 Translation (Seq2Seq) model."""
-    logging.info("Loading ProstT5 Translation (Seq2Seq) model...")
-    model_name = "Rostlab/ProstT5"
-    translation_model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
-    translation_model.eval()
-    if device.type == 'cuda':
-        logging.info("Using half precision for Translation model on GPU.")
-        translation_model.half()
-    else:
-        logging.info("Using full precision for Translation model on CPU.")
-        translation_model.float()
+def _sort_sequences_by_length(sequences):
+    """
+    Sorts sequences by length in descending order.
+    
+    Returns a tuple of:
+    - A list of sorted sequences.
+    - A list of the original indices corresponding to the sorted sequences.
+    """
+    indexed_sequences = []
+    for i, seq_str in enumerate(sequences):
+        if isinstance(seq_str, str) and len(seq_str) > 0:
+            indexed_sequences.append({'seq': seq_str, 'id': i, 'len': len(seq_str)})
+        else:
+            logging.warning(f"Skipping invalid sequence at index {i}: {seq_str}")
 
-    logging.info("ProstT5 Translation model loaded.")
-    return translation_model
+    if not indexed_sequences:
+        return [], []
+
+    indexed_sequences.sort(key=lambda x: x['len'], reverse=True)
+    
+    sorted_sequences = [item['seq'] for item in indexed_sequences]
+    sorted_indices = [item['id'] for item in indexed_sequences]
+    return sorted_sequences, sorted_indices
+
+
+def _save_results(output_dir, embed_type, split_name, embeddings, metadata_ids, metadata_sf):
+    """Saves embeddings and corresponding metadata to disk."""
+    if embeddings.size == 0:
+        logging.warning(f"No {embed_type} embeddings were generated for split {split_name}. Skipping save.")
+        return
+
+    file_prefix = f"prostT5_{'3di_from_aa' if embed_type == '3di' else 'aa'}"
+    
+    output_emb_file = output_dir / f'{file_prefix}_embeddings_{split_name}.npz'
+    np.savez_compressed(output_emb_file, embeddings=embeddings)
+    
+    metadata_df = pd.DataFrame({'sequence_id': metadata_ids, 'SF': metadata_sf})
+    output_labels_file = output_dir / f'{file_prefix}_labels_{split_name}.csv'
+    metadata_df.to_csv(output_labels_file, index=False)
+    
+    logging.info(f"Saved {embed_type} embeddings to {output_emb_file} (shape: {embeddings.shape})")
+    logging.info(f"Saved {embed_type} metadata to {output_labels_file}")
 
 
 def preprocess_sequences_for_prostt5(original_sequences, sequence_type):
@@ -100,20 +127,10 @@ def generate_prostt5_embeddings(encoder_model, tokenizer, original_sequences, se
     """
     all_embeddings = []
     
-    indexed_sequences = []
-    for i, seq_str in enumerate(original_sequences):
-        if isinstance(seq_str, str) and len(seq_str) > 0:
-            indexed_sequences.append({'seq': seq_str, 'id': i, 'len': len(seq_str)})
-        else:
-            logging.warning(f"Skipping invalid sequence at index {i}: {seq_str}")
+    sorted_original_sequences, sorted_indices = _sort_sequences_by_length(original_sequences)
 
-    if not indexed_sequences:
+    if not sorted_original_sequences:
         return np.array([]), []
-
-    indexed_sequences.sort(key=lambda x: x['len'], reverse=True)
-    
-    sorted_original_sequences = [item['seq'] for item in indexed_sequences]
-    sorted_indices = [item['id'] for item in indexed_sequences]
 
     # Pre-process all sorted sequences at once before batching
     all_preprocessed_sorted_sequences = preprocess_sequences_for_prostt5(sorted_original_sequences, sequence_type)
@@ -159,16 +176,11 @@ def translate_aa_to_3di(translation_model, tokenizer, aa_sequences, device, batc
     """Translate AA sequences to 3Di sequences, returning them in the original input order."""
     translated_3di_sequences_dict = {} 
 
-    indexed_aa_sequences = [{'seq': seq, 'id': i, 'len': len(seq)} for i, seq in enumerate(aa_sequences) if isinstance(seq, str) and len(seq) > 0]
-    if not indexed_aa_sequences:
+    sorted_input_aa_sequences, original_indices_for_sorted = _sort_sequences_by_length(aa_sequences)
+    
+    if not sorted_input_aa_sequences:
         logging.warning("No valid AA sequences provided for translation.")
         return ["" for _ in aa_sequences]
-
-
-    indexed_aa_sequences.sort(key=lambda x: x['len'], reverse=True)
-
-    sorted_input_aa_sequences = [item['seq'] for item in indexed_aa_sequences]
-    original_indices_for_sorted = [item['id'] for item in indexed_aa_sequences]
 
     # Pre-process all sorted AA sequences at once before batching for translation
     all_preprocessed_sorted_aa_sequences = preprocess_sequences_for_prostt5(sorted_input_aa_sequences, 'aa')
@@ -223,79 +235,63 @@ def process_split_data_prostt5(df_split, split_name, output_dir,
     sequence_ids_original_order = df_split['sequence_id'].tolist()
     sf_labels_original_order = df_split['SF'].values
 
+    # Load the main ProstT5 model once. We can get the encoder from it.
+    model = load_prostT5_model(device)
+    encoder_model = model.get_encoder()
+
     # 1. Generate AA Embeddings
-    logging.info(f"Loading encoder model for AA embeddings ({split_name})...")
-    encoder_model = load_prostT5_encoder_model(device)
     logging.info(f"Generating AA embeddings for {split_name}...")
-    aa_embeddings_sorted_by_length, aa_sort_indices = generate_prostt5_embeddings(
+    aa_embeddings_sorted, aa_sort_indices = generate_prostt5_embeddings(
         encoder_model, tokenizer, aa_sequences_original_order, 'aa', device, batch_size
     )
-    del encoder_model
-    if device.type == 'cuda': torch.cuda.empty_cache()
     
-    if aa_embeddings_sorted_by_length.size == 0:
-        logging.warning(f"No AA embeddings generated for split {split_name}. Skipping saving AA embeddings.")
-    else:
+    if aa_embeddings_sorted.size > 0:
         aa_metadata_ids_sorted = [sequence_ids_original_order[i] for i in aa_sort_indices]
         aa_metadata_sf_sorted = sf_labels_original_order[aa_sort_indices]
-        output_aa_emb_file = output_dir / f'prostT5_aa_embeddings_{split_name}.npz'
-        np.savez_compressed(output_aa_emb_file, embeddings=aa_embeddings_sorted_by_length)
-        aa_metadata_df = pd.DataFrame({'sequence_id': aa_metadata_ids_sorted, 'SF': aa_metadata_sf_sorted})
-        output_aa_labels_file = output_dir / f'prostT5_aa_labels_{split_name}.csv'
-        aa_metadata_df.to_csv(output_aa_labels_file, index=False)
-        logging.info(f"Saved AA embeddings to {output_aa_emb_file} (shape: {aa_embeddings_sorted_by_length.shape})")
-        logging.info(f"Saved AA metadata to {output_aa_labels_file}")
+        _save_results(output_dir, 'aa', split_name, aa_embeddings_sorted, 
+                      aa_metadata_ids_sorted, aa_metadata_sf_sorted)
+        logging.info(f"Number of unique superfamilies in {split_name} split (based on AA): {len(np.unique(aa_metadata_sf_sorted))}")
 
     # 2. Translate AA to 3Di
-    logging.info(f"Loading translation model for AA to 3Di ({split_name})...")
-    translation_model = load_prostT5_translation_model(device)
     logging.info(f"Translating AA to 3Di for {split_name}...")
     translated_3di_sequences = translate_aa_to_3di(
-        translation_model, tokenizer, aa_sequences_original_order, device, batch_size
+        model, tokenizer, aa_sequences_original_order, device, batch_size
     )
-    del translation_model
-    if device.type == 'cuda': torch.cuda.empty_cache()
     
     # 3. Generate 3Di Embeddings (from translated 3Di)
     # Filter out sequences that might have failed translation (are empty strings)
-    valid_translated_sequences_with_indices = [
+    valid_translations = [
         (seq, original_idx) for original_idx, seq in enumerate(translated_3di_sequences) if seq and isinstance(seq, str) and len(seq) > 0
     ]
 
-    if not valid_translated_sequences_with_indices:
+    if not valid_translations:
         logging.warning(f"No valid 3Di sequences to embed for {split_name} after translation. Skipping 3Di embeddings.")
     else:
-        valid_translated_sequences = [item[0] for item in valid_translated_sequences_with_indices]
-        original_indices_of_valid_translations = [item[1] for item in valid_translated_sequences_with_indices]
+        valid_3di_sequences = [item[0] for item in valid_translations]
+        original_indices_of_valid = [item[1] for item in valid_translations]
 
-        logging.info(f"Loading encoder model for 3Di embeddings ({split_name})...")
-        encoder_model = load_prostT5_encoder_model(device) 
-        logging.info(f"Generating 3Di embeddings for {len(valid_translated_sequences)} translated sequences for {split_name}...")
+        logging.info(f"Generating 3Di embeddings for {len(valid_3di_sequences)} translated sequences for {split_name}...")
         
-        # three_di_sort_indices will be indices relative to the `valid_translated_sequences` list
-        three_di_embeddings_sorted_by_length, three_di_sort_indices_relative = generate_prostt5_embeddings(
-            encoder_model, tokenizer, valid_translated_sequences, '3di', device, batch_size
+        # Note: three_di_sort_indices_relative are indices relative to the `valid_3di_sequences` list
+        three_di_embeddings_sorted, three_di_sort_indices_relative = generate_prostt5_embeddings(
+            encoder_model, tokenizer, valid_3di_sequences, '3di', device, batch_size
         )
-        del encoder_model
-        if device.type == 'cuda': torch.cuda.empty_cache()
 
-        if three_di_embeddings_sorted_by_length.size == 0:
-            logging.warning(f"No 3Di embeddings generated for split {split_name}. Skipping saving 3Di embeddings.")
-        else:
+        if three_di_embeddings_sorted.size > 0:
             # Map relative sort indices back to original full list indices
-            three_di_metadata_ids_sorted = [sequence_ids_original_order[original_indices_of_valid_translations[i]] for i in three_di_sort_indices_relative]
-            three_di_metadata_sf_sorted = sf_labels_original_order[[original_indices_of_valid_translations[i] for i in three_di_sort_indices_relative]]
+            original_indices_sorted = [original_indices_of_valid[i] for i in three_di_sort_indices_relative]
+            
+            three_di_metadata_ids_sorted = [sequence_ids_original_order[i] for i in original_indices_sorted]
+            three_di_metadata_sf_sorted = sf_labels_original_order[original_indices_sorted]
 
-            output_3di_emb_file = output_dir / f'prostT5_3di_from_aa_embeddings_{split_name}.npz'
-            np.savez_compressed(output_3di_emb_file, embeddings=three_di_embeddings_sorted_by_length)
-            three_di_metadata_df = pd.DataFrame({'sequence_id': three_di_metadata_ids_sorted, 'SF': three_di_metadata_sf_sorted})
-            output_3di_labels_file = output_dir / f'prostT5_3di_from_aa_labels_{split_name}.csv'
-            three_di_metadata_df.to_csv(output_3di_labels_file, index=False)
-            logging.info(f"Saved 3Di (from AA) embeddings to {output_3di_emb_file} (shape: {three_di_embeddings_sorted_by_length.shape})")
-            logging.info(f"Saved 3Di (from AA) metadata to {output_3di_labels_file}")
-    
-    if aa_embeddings_sorted_by_length.size > 0 and 'aa_metadata_sf_sorted' in locals():
-         logging.info(f"Number of unique superfamilies in {split_name} split (based on AA): {len(np.unique(aa_metadata_sf_sorted))}")
+            _save_results(output_dir, '3di', split_name, three_di_embeddings_sorted, 
+                          three_di_metadata_ids_sorted, three_di_metadata_sf_sorted)
+
+    # Clean up the model and clear GPU cache
+    del model
+    del encoder_model
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
 
 
 def main():
