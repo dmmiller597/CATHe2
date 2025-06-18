@@ -83,7 +83,7 @@ def main():
     parser.add_argument(
         "--json_path",
         type=str,
-        default="/data/TED/TED-SF-mapping.json",
+        default="data/TED/TED-SF-mapping.json",
         help="Path to the JSON file containing sequence to SF mapping."
     )
     parser.add_argument(
