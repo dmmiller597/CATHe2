@@ -78,10 +78,11 @@ class OverlapLoss(nn.Module):
         )  # compute the pairwise overlap coefficient between all the labels in a batch with correct shape
         cosines = pairwise_cosine_similarity(embeddings)
         lower_indices = torch.tril_indices(
-            cosines.shape[0], cosines.shape[1], offset=-1
+            cosines.shape[0], cosines.shape[1], offset=-1,
+            device=cosines.device
         )
-        lower_overlap = overlap[lower_indices].reshape(-1, 1)
-        lower_cosines = torch.clip(cosines[lower_indices].reshape(-1, 1), 0, 1)
+        lower_overlap = overlap[lower_indices[0], lower_indices[1]].reshape(-1, 1)
+        lower_cosines = torch.clip(cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1), 0, 1)
         return torch.nn.functional.mse_loss(lower_cosines, lower_overlap)
 
 
