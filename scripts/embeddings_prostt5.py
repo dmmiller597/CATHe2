@@ -298,8 +298,8 @@ def main():
     parser = argparse.ArgumentParser(description='Generate ProstT5 AA and 3Di-from-AA embeddings for protein sequences')
     parser.add_argument('--input', '-i', type=str, default='data/TED/s30/s30_full.parquet',
                         help='Input parquet file containing protein sequences (default: data/TED/s30/s30_full.parquet)')
-    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/prostT5_embeddings',
-                        help='Output directory for embeddings (default: data/TED/s30/prostT5_embeddings)')
+    parser.add_argument('--output', '-o', type=str, default='data/TED/s30/prostT5',
+                        help='Output directory for embeddings (default: data/TED/s30/prostT5)')
     parser.add_argument('--batch-size', '-b', type=int, default=32, 
                         help='Batch size for embedding generation (default: 32). Reduce if OOM errors occur.')
     parser.add_argument('--splits', '-s', nargs='+', choices=['train', 'val', 'test'], 
