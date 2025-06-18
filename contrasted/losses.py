@@ -71,19 +71,19 @@ class OverlapLoss(nn.Module):
 
     def __call__(self, embeddings, labels):
         overlap = torch.tensor(
-            pairwise_overlap_coefficient(labels, embeddings=embeddings),
+            # Ensure the output matrix has the same size as the cosine-sim matrix by
+            # forwarding the embeddings tensor (its length defines the desired dim)
+            pairwise_overlap_coefficient(labels, embeddings),
             device=embeddings.device,
-            # dtype=embeddings.dtype, Let it default to float32 for stability
-        )  # compute the pairwise overlap coefficient between all the labels in a batch
+            dtype=embeddings.dtype,
+        )  # compute the pairwise overlap coefficient between all the labels in a batch with correct shape
         cosines = pairwise_cosine_similarity(embeddings)
         lower_indices = torch.tril_indices(
-            cosines.shape[0], cosines.shape[1], offset=-1,
-            device=cosines.device # Ensure indices are on the same device
+            cosines.shape[0], cosines.shape[1], offset=-1
         )
-        lower_overlap = overlap[lower_indices[0], lower_indices[1]].reshape(-1, 1)
-        # Rescale cosines from [-1, 1] to [0, 1] to match the range of overlap coefficient
-        rescaled_cosines = (cosines[lower_indices[0], lower_indices[1]] + 1) / 2
-        return torch.nn.functional.mse_loss(rescaled_cosines.reshape(-1, 1).float(), lower_overlap)
+        lower_overlap = overlap[lower_indices].reshape(-1, 1)
+        lower_cosines = torch.clip(cosines[lower_indices].reshape(-1, 1), 0, 1)
+        return torch.nn.functional.mse_loss(lower_cosines, lower_overlap)
 
 
 class SINCERELoss(nn.Module):
