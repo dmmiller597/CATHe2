@@ -169,6 +169,7 @@ class ContrastiveDataModule(L.LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             persistent_workers=self.hparams.persistent_workers if train else False,
             drop_last=train,
+            collate_fn=collate_embedding_batch,
         )
 
     def train_dataloader(self):
@@ -190,3 +191,22 @@ class ContrastiveDataModule(L.LightningDataModule):
 
     def get_num_classes(self) -> int:
         return self.num_classes
+
+# --- Custom collate function to keep hierarchical labels per-sample ---
+
+def collate_embedding_batch(batch):
+    """Custom collate_fn for `EmbeddingDataset`.
+
+    Keeps the hierarchical label list as *per-sample* structure instead of
+    letting PyTorch default collation transpose it. The returned structure
+    matches what `ContrastiveCATHeModel.training_step` expects:
+
+        embeddings:   Tensor [B, D]
+        ((int_labels: Tensor[B]), hier_labels: List[List[str]]),
+        sequence_ids: List[str]
+    """
+    embeddings = torch.stack([item[0] for item in batch])           # (B, D)
+    int_labels = torch.stack([item[1][0] for item in batch])        # (B,)
+    hier_labels = [item[1][1] for item in batch]                    # List[B][str]
+    sequence_ids = [item[2] for item in batch]                      # List[B]
+    return embeddings, (int_labels, hier_labels), sequence_ids
