@@ -3,8 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from distances import pairwise_distance, pairwise_cosine_similarity
-from utils import pairwise_jaccard_similarity, pairwise_overlap_coefficient
+from distances import (
+    pairwise_cosine_similarity,
+    pairwise_distance,
+    pairwise_jaccard_similarity,
+    pairwise_overlap_coefficient,
+)
 
 
 class SupConLoss(nn.Module):
@@ -66,6 +70,12 @@ class JaccardLoss(nn.Module):
 
 
 class OverlapLoss(nn.Module):
+    """
+    Overlap Loss
+    Computes the overlap coefficient between all the labels in a batch
+    and the cosine similarity between all the embeddings in a batch
+    and then computes the mean squared error between the two
+    """
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -79,7 +89,7 @@ class OverlapLoss(nn.Module):
         cosines = pairwise_cosine_similarity(embeddings)
         lower_indices = torch.tril_indices(
             cosines.shape[0], cosines.shape[1], offset=-1,
-            device=cosines.device
+            device=cosines.device,
         )
         lower_overlap = overlap[lower_indices[0], lower_indices[1]].reshape(-1, 1)
         lower_cosines = torch.clip(cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1), 0, 1)
