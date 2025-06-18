@@ -37,7 +37,7 @@ def plot_sf_distribution(json_path, output_dir):
     sfs_ge_3 = (sf_sizes >= 3).sum()
 
     # Create log-scale histogram
-    plt.hist(np.log10(sf_sizes), bins=100,
+    plt.hist(np.log10(sf_sizes), bins=500,
                 color='lightblue', alpha=0.8)
 
     # Remove chart junk
@@ -68,7 +68,7 @@ def plot_sf_distribution(json_path, output_dir):
     # Save the figure
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    output_path = os.path.join(output_dir, "TED_s100_sf_size_distribution.png")
+    output_path = os.path.join(output_dir, "TED_s100_sf_size_distribution_log10.png")
     plt.savefig(output_path)
     print(f"Plot saved to {output_path}")
 
