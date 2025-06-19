@@ -2,9 +2,6 @@ defaults:
   - _self_
   - data: protT5
 
-data:
-  train_sampling_strategy: "class_balanced" # "weighted" or "class_balanced"
-
 model:
   # Architecture
   embedding_dim: ${data.embedding_dim}
@@ -29,6 +26,7 @@ training:
   batch_size: 128
   max_epochs: 100
   accumulate_grad_batches: 1
+  train_sampling_strategy: "class_balanced" # "weighted" or "class_balanced"
 
   # Monitoring
   monitor_metric: "val/loss"
