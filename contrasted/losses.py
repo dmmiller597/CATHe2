@@ -59,14 +59,15 @@ class JaccardLoss(nn.Module):
         jaccs = torch.tensor(
             pairwise_jaccard_similarity(labels), device=embeddings.device
         )
-        cosines = torch.abs(pairwise_cosine_similarity(embeddings))
+        cosines = pairwise_cosine_similarity(embeddings)
         lower_indices = torch.tril_indices(
             cosines.shape[0], cosines.shape[1], offset=-1,
             device=cosines.device,
         )
         lower_jaccs = jaccs[lower_indices[0], lower_indices[1]].reshape(-1, 1)
-        lower_cosines = torch.clip(cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1), 0, 1)
-        return torch.nn.functional.mse_loss(lower_cosines.float(), lower_jaccs)
+        # Scale cosine similarity from [-1, 1] to [0, 1] to match Jaccard range
+        scaled_cosines = (cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1) + 1) / 2
+        return torch.nn.functional.mse_loss(scaled_cosines.float(), lower_jaccs)
 
 
 class OverlapLoss(nn.Module):
@@ -92,8 +93,9 @@ class OverlapLoss(nn.Module):
             device=cosines.device,
         )
         lower_overlap = overlap[lower_indices[0], lower_indices[1]].reshape(-1, 1)
-        lower_cosines = torch.clip(cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1), 0, 1)
-        return torch.nn.functional.mse_loss(lower_cosines, lower_overlap)
+        # Scale cosine similarity from [-1, 1] to [0, 1] to match overlap coefficient range
+        scaled_cosines = (cosines[lower_indices[0], lower_indices[1]].reshape(-1, 1) + 1) / 2
+        return torch.nn.functional.mse_loss(scaled_cosines, lower_overlap)
 
 
 class SINCERELoss(nn.Module):
