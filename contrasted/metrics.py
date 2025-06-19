@@ -2,6 +2,7 @@ import torch
 from torch import Tensor
 from typing import Dict, List, Tuple, Optional
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, precision_score, recall_score, f1_score
+import numpy as np
 
 from distances import pairwise_distance
 from utils import get_logger
@@ -261,6 +262,78 @@ def compute_knn_metrics_reference(
         for name in ("acc", "balanced_acc", "precision", "recall", "f1_macro"):
             metrics[f"{stage}/knn_{k}_{name}"] = 0.0
     return metrics
+
+
+def calculate_all_metrics_reference(
+    query_embeddings: np.ndarray,
+    query_labels: list,
+    lookup_embeddings: np.ndarray,
+    lookup_labels: list,
+    level: int,
+    k: int,
+    stage: str,
+    batch_size: int = 1024
+) -> Dict[str, float]:
+    """
+    High-level wrapper to compute all metrics for a query set against a lookup set.
+
+    Args:
+        query_embeddings: Embeddings for the query set (e.g., validation/test).
+        query_labels: Hierarchical labels for the query set.
+        lookup_embeddings: Embeddings for the lookup set (e.g., training).
+        lookup_labels: Hierarchical labels for the lookup set.
+        level: The CATH level index to evaluate on (0=C, 1=A, 2=T, 3=H).
+        k: The value of 'k' for k-NN.
+        stage: A string identifier for the evaluation stage (e.g., 'val', 'test').
+        batch_size: Batch size for k-NN distance computation.
+
+    Returns:
+        A dictionary containing all computed metrics.
+    """
+    # Convert numpy arrays to tensors
+    query_embeddings_tensor = torch.from_numpy(query_embeddings).float()
+    lookup_embeddings_tensor = torch.from_numpy(lookup_embeddings).float()
+
+    # Extract labels for the specified level and encode them
+    query_level_labels = [label[level] for label in query_labels]
+    lookup_level_labels = [label[level] for label in lookup_labels]
+
+    unique_labels = sorted(list(set(lookup_level_labels)))
+    label_map = {label: i for i, label in enumerate(unique_labels)}
+
+    query_labels_encoded = torch.tensor([label_map.get(l, -1) for l in query_level_labels], dtype=torch.long)
+    lookup_labels_encoded = torch.tensor([label_map.get(l, -1) for l in lookup_level_labels], dtype=torch.long)
+    
+    # Filter out any query labels that weren't in the lookup set
+    valid_mask = query_labels_encoded != -1
+    query_embeddings_tensor = query_embeddings_tensor[valid_mask]
+    query_labels_encoded = query_labels_encoded[valid_mask]
+
+    all_metrics = {}
+
+    # 1. Compute Centroid-based metrics
+    centroid_metrics = compute_centroid_metrics_reference(
+        test_embeddings=query_embeddings_tensor,
+        test_labels=query_labels_encoded,
+        ref_embeddings=lookup_embeddings_tensor,
+        ref_labels=lookup_labels_encoded,
+        stage=stage
+    )
+    all_metrics.update(centroid_metrics)
+
+    # 2. Compute k-NN based metrics
+    knn_metrics = compute_knn_metrics_reference(
+        test_embeddings=query_embeddings_tensor,
+        test_labels=query_labels_encoded,
+        ref_embeddings=lookup_embeddings_tensor,
+        ref_labels=lookup_labels_encoded,
+        k=k,
+        stage=stage,
+        knn_batch_size=batch_size
+    )
+    all_metrics.update(knn_metrics)
+
+    return all_metrics
 
 
 # -------------------------------------------------------------------
