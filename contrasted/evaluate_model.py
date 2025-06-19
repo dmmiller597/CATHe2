@@ -2,11 +2,11 @@ import logging
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
-from contrasted.model import ContrastiveCATHeModel
-from contrasted.data import EmbeddingDataset
+from model import ContrastiveCATHeModel
+from data import EmbeddingDataset
 from torch.utils.data import DataLoader
 import numpy as np
-from contrasted.metrics import calculate_all_metrics_reference
+from metrics import calculate_all_metrics_reference
 import json
 from pathlib import Path
 import pickle
