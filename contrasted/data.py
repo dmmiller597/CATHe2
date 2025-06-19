@@ -3,6 +3,7 @@ import pandas as pd
 import torch
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
+from collections import defaultdict
 
 import lightning as L
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
@@ -32,10 +33,10 @@ def get_superfamily_label(sf: str) -> str:
 class EmbeddingDataset(Dataset):
     """
     Dataset for precomputed embeddings, CATH Homologous Superfamily labels,
-    and sequence IDs.
+    and sequence IDs. Supports instance-based or class-based sampling for training.
     """
 
-    def __init__(self, emb_path: Path, lbl_path: Path):
+    def __init__(self, emb_path: Path, lbl_path: Path, train_on_classes: bool = False):
         if not emb_path.is_file():
             raise FileNotFoundError(f"Embeddings file not found: {emb_path}")
         if not lbl_path.is_file():
@@ -71,6 +72,14 @@ class EmbeddingDataset(Dataset):
         self.num_classes = len(unique_sf)
         self.embedding_dim = self.embeddings.shape[1]
 
+        self.train_on_classes = train_on_classes
+        if self.train_on_classes:
+            log.info("Using class-based sampling for training.")
+            self.class_indices = defaultdict(list)
+            for i, label in enumerate(self.labels):
+                self.class_indices[label.item()].append(i)
+            self.class_list = list(self.class_indices.keys())
+
         if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids) == len(self.hierarchical_labels)):
             raise ValueError(
                 "Mismatch between embeddings, labels, sequence_ids, and hierarchical_labels lengths: "
@@ -80,10 +89,24 @@ class EmbeddingDataset(Dataset):
 
 
     def __len__(self) -> int:
+        if self.train_on_classes:
+            return len(self.class_list)
         return len(self.embeddings)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
-        """Returns embedding, (integer label, hierarchical label), and sequence ID."""
+        """
+        If train_on_classes, idx is a class index. A random sample from that
+        class is returned. Otherwise, idx is a sample index.
+        """
+        if self.train_on_classes:
+            class_label = self.class_list[idx]
+            instance_idx = np.random.choice(self.class_indices[class_label])
+            return self._get_single_item(instance_idx)
+
+        return self._get_single_item(idx)
+
+    def _get_single_item(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
+        """Returns embedding, (integer label, hierarchical label), and sequence ID for a given instance index."""
         emb = torch.from_numpy(self.embeddings[idx])
         lbl = self.labels[idx]
         hier_lbl = self.hierarchical_labels[idx]
@@ -107,6 +130,7 @@ class ContrastiveDataModule(L.LightningDataModule):
         num_workers: int = 4,
         pin_memory: bool = True,
         persistent_workers: bool = True,
+        train_sampling_strategy: str = "class_balanced",
     ):
         super().__init__()
         base = Path(data_dir).resolve()
@@ -119,8 +143,10 @@ class ContrastiveDataModule(L.LightningDataModule):
             ),
         }
         self.save_hyperparameters(
-            "batch_size", "num_workers", "pin_memory", "persistent_workers"
+            "batch_size", "num_workers", "pin_memory", "persistent_workers", "train_sampling_strategy"
         )
+        if self.hparams.train_sampling_strategy not in ["weighted", "class_balanced"]:
+            raise ValueError(f"Unsupported train_sampling_strategy: '{self.hparams.train_sampling_strategy}'. Must be 'weighted' or 'class_balanced'.")
 
         self.datasets: Dict[str, EmbeddingDataset] = {}
         self.embedding_dim: Optional[int] = None
@@ -145,7 +171,8 @@ class ContrastiveDataModule(L.LightningDataModule):
         for split, req_stage in stage_map.items():
             emb_path, lbl_path = self.paths[split]
             if emb_path and lbl_path and (stage is None or stage == req_stage):
-                ds = EmbeddingDataset(emb_path, lbl_path)
+                is_train_on_classes = (split == "train" and self.hparams.train_sampling_strategy == "class_balanced")
+                ds = EmbeddingDataset(emb_path, lbl_path, train_on_classes=is_train_on_classes)
                 self.datasets[split] = ds
                 if split == "train":
                     self.embedding_dim = ds.embedding_dim
@@ -167,16 +194,23 @@ class ContrastiveDataModule(L.LightningDataModule):
         ds = self.datasets.get(split)
         if ds is None:
             return None
-        sampler = (
-            WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
-            if train
-            else None
-        )
+
+        sampler = None
+        shuffle = False # Default shuffle behavior
+
+        if train:
+            if self.hparams.train_sampling_strategy == "weighted":
+                sampler = WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
+                # shuffle must be False when using a sampler
+            elif self.hparams.train_sampling_strategy == "class_balanced":
+                shuffle = True # Shuffle the classes
+        # For val/test, sampler is None and shuffle is False, so we get sequential evaluation
+
         return DataLoader(
             ds,
             batch_size=self.hparams.batch_size,
             sampler=sampler,
-            shuffle=False,
+            shuffle=shuffle,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             persistent_workers=self.hparams.persistent_workers if train else False,

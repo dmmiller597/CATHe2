@@ -36,6 +36,7 @@ def build_datamodule(cfg: DictConfig) -> ContrastiveDataModule:
         test_labels_file=getattr(cfg.data, "test_labels", None),
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers,
+        train_sampling_strategy=cfg.training.train_sampling_strategy,
     )
     # The Trainer will call dm.setup(stage="fit") automatically  
     return dm
