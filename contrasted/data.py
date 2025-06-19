@@ -96,41 +96,61 @@ class ClassBalancedSampler(Sampler[List[int]]):
     """
     A custom sampler for class-balanced training.
 
-    For each batch, it uniformly samples `batch_size` classes (with replacement)
-    and then randomly samples one instance from each of those classes. This ensures
-    each batch has a diverse set of classes, and implicitly oversamples rare classes.
+    For each batch, it uniformly samples `batch_size / 2` unique classes
+    (without replacement). For each class, it then randomly samples two instances
+    (with replacement, to handle classes with only one sample). This ensures that
+    each batch contains pairs from a diverse and unique set of classes, which is
+    useful for contrastive learning tasks.
     """
+
     def __init__(self, labels: torch.Tensor, batch_size: int):
         super().__init__(None)
+        if batch_size % 2 != 0:
+            raise ValueError("batch_size must be even to sample pairs.")
         self.labels = labels
         self.batch_size = batch_size
+        self.num_classes_per_batch = self.batch_size // 2
 
         # Create a map from class -> list of sample indices
         self.class_indices = defaultdict(list)
         for i, label in enumerate(self.labels):
             self.class_indices[label.item()].append(i)
 
-        self.class_list = list(self.class_indices.keys())
+        self.class_list = np.array(list(self.class_indices.keys()))
         self.num_samples = len(self.labels)
+
+        if self.num_classes_per_batch > len(self.class_list):
+            raise ValueError(
+                f"num_classes_per_batch ({self.num_classes_per_batch}) cannot be "
+                f"larger than the number of unique classes ({len(self.class_list)}) "
+                f"when sampling without replacement."
+            )
 
     def __iter__(self):
         num_batches = len(self)
         for _ in range(num_batches):
-            # Sample `batch_size` classes with replacement, uniformly
-            sampled_classes = torch.randint(0, len(self.class_list), (self.batch_size,)).tolist()
-            
-            # For each sampled class, pick one random instance
-            batch_indices = []
-            for class_key_idx in sampled_classes:
-                class_label = self.class_list[class_key_idx]
-                instance_idx = np.random.choice(self.class_indices[class_label])
-                batch_indices.append(instance_idx)
-            
+            # 1. Sample unique classes for the batch (no replacement)
+            sampled_classes = np.random.choice(
+                self.class_list, size=self.num_classes_per_batch, replace=False
+            )
+
+            # 2. For each class, sample two indices (with replacement).
+            # 3. Flatten the list of lists into a single list of indices.
+            batch_indices = [
+                idx
+                for class_label in sampled_classes
+                for idx in np.random.choice(
+                    self.class_indices[class_label], size=2, replace=True
+                )
+            ]
             yield batch_indices
 
     def __len__(self) -> int:
-        """The number of batches per epoch."""
-        return self.num_samples // self.batch_size
+        """
+        Defines an epoch as the number of batches needed to sample each unique
+        class approximately once.
+        """
+        return len(self.class_list) // self.num_classes_per_batch
 
 
 class ContrastiveDataModule(L.LightningDataModule):
