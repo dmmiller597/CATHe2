@@ -94,9 +94,19 @@ def evaluate(cfg: DictConfig) -> None:
     # --- Load Datasets ---
     log.info("Initializing datasets...")
     data_cfg = cfg.data
-    train_dataset = EmbeddingDataset(data_cfg.train_embeddings, data_cfg.train_labels)
-    val_dataset = EmbeddingDataset(data_cfg.val_embeddings, data_cfg.val_labels)
-    test_dataset = EmbeddingDataset(data_cfg.test_embeddings, data_cfg.test_labels)
+    base_data_dir = Path(data_cfg.data_dir)
+
+    # Resolve paths before passing to the dataset
+    train_embeddings_path = base_data_dir / data_cfg.train_embeddings
+    train_labels_path = base_data_dir / data_cfg.train_labels
+    val_embeddings_path = base_data_dir / data_cfg.val_embeddings
+    val_labels_path = base_data_dir / data_cfg.val_labels
+    test_embeddings_path = base_data_dir / data_cfg.test_embeddings
+    test_labels_path = base_data_dir / data_cfg.test_labels
+
+    train_dataset = EmbeddingDataset(train_embeddings_path, train_labels_path)
+    val_dataset = EmbeddingDataset(val_embeddings_path, val_labels_path)
+    test_dataset = EmbeddingDataset(test_embeddings_path, test_labels_path)
 
     train_loader = DataLoader(train_dataset, batch_size=cfg.training.batch_size, shuffle=False, num_workers=cfg.training.num_workers)
     val_loader = DataLoader(val_dataset, batch_size=cfg.training.batch_size, shuffle=False, num_workers=cfg.training.num_workers)
