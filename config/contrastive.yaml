@@ -2,8 +2,6 @@ defaults:
   - _self_
   - data: protT5
 
-ckpt_path: null # Should be provided via command line for evaluation
-
 model:
   # Architecture
   embedding_dim: ${data.embedding_dim}
