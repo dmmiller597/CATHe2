@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple, List
 from collections import defaultdict
 
 import lightning as L
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Sampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from utils import get_logger, convert_sf_string_to_list
 
@@ -33,10 +33,10 @@ def get_superfamily_label(sf: str) -> str:
 class EmbeddingDataset(Dataset):
     """
     Dataset for precomputed embeddings, CATH Homologous Superfamily labels,
-    and sequence IDs.
+    and sequence IDs. Supports instance-based or class-based sampling for training.
     """
 
-    def __init__(self, emb_path: Path, lbl_path: Path):
+    def __init__(self, emb_path: Path, lbl_path: Path, train_on_classes: bool = False):
         if not emb_path.is_file():
             raise FileNotFoundError(f"Embeddings file not found: {emb_path}")
         if not lbl_path.is_file():
@@ -72,6 +72,14 @@ class EmbeddingDataset(Dataset):
         self.num_classes = len(unique_sf)
         self.embedding_dim = self.embeddings.shape[1]
 
+        self.train_on_classes = train_on_classes
+        if self.train_on_classes:
+            log.info("Using class-based sampling for training.")
+            self.class_indices = defaultdict(list)
+            for i, label in enumerate(self.labels):
+                self.class_indices[label.item()].append(i)
+            self.class_list = list(self.class_indices.keys())
+
         if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids) == len(self.hierarchical_labels)):
             raise ValueError(
                 "Mismatch between embeddings, labels, sequence_ids, and hierarchical_labels lengths: "
@@ -81,76 +89,29 @@ class EmbeddingDataset(Dataset):
 
 
     def __len__(self) -> int:
+        if self.train_on_classes:
+            return len(self.class_list)
         return len(self.embeddings)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
-        """Returns embedding, (integer label, hierarchical label), and sequence ID."""
+        """
+        If train_on_classes, idx is a class index. A random sample from that
+        class is returned. Otherwise, idx is a sample index.
+        """
+        if self.train_on_classes:
+            class_label = self.class_list[idx]
+            instance_idx = np.random.choice(self.class_indices[class_label])
+            return self._get_single_item(instance_idx)
+
+        return self._get_single_item(idx)
+
+    def _get_single_item(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
+        """Returns embedding, (integer label, hierarchical label), and sequence ID for a given instance index."""
         emb = torch.from_numpy(self.embeddings[idx])
         lbl = self.labels[idx]
         hier_lbl = self.hierarchical_labels[idx]
         seq_id = self.sequence_ids[idx]
         return emb, (lbl, hier_lbl), seq_id
-
-
-class ClassBalancedSampler(Sampler[List[int]]):
-    """
-    A custom sampler for class-balanced training.
-
-    For each batch, it uniformly samples `batch_size / 2` unique classes
-    (without replacement). For each class, it then randomly samples two instances
-    (with replacement, to handle classes with only one sample). This ensures that
-    each batch contains pairs from a diverse and unique set of classes, which is
-    useful for contrastive learning tasks.
-    """
-
-    def __init__(self, labels: torch.Tensor, batch_size: int):
-        super().__init__(None)
-        if batch_size % 2 != 0:
-            raise ValueError("batch_size must be even to sample pairs.")
-        self.labels = labels
-        self.batch_size = batch_size
-        self.num_classes_per_batch = self.batch_size // 2
-
-        # Create a map from class -> list of sample indices
-        self.class_indices = defaultdict(list)
-        for i, label in enumerate(self.labels):
-            self.class_indices[label.item()].append(i)
-
-        self.class_list = np.array(list(self.class_indices.keys()))
-        self.num_samples = len(self.labels)
-
-        if self.num_classes_per_batch > len(self.class_list):
-            raise ValueError(
-                f"num_classes_per_batch ({self.num_classes_per_batch}) cannot be "
-                f"larger than the number of unique classes ({len(self.class_list)}) "
-                f"when sampling without replacement."
-            )
-
-    def __iter__(self):
-        num_batches = len(self)
-        for _ in range(num_batches):
-            # 1. Sample unique classes for the batch (no replacement)
-            sampled_classes = np.random.choice(
-                self.class_list, size=self.num_classes_per_batch, replace=False
-            )
-
-            # 2. For each class, sample two indices (with replacement).
-            # 3. Flatten the list of lists into a single list of indices.
-            batch_indices = [
-                idx
-                for class_label in sampled_classes
-                for idx in np.random.choice(
-                    self.class_indices[class_label], size=2, replace=True
-                )
-            ]
-            yield batch_indices
-
-    def __len__(self) -> int:
-        """
-        Defines an epoch as the number of batches needed to sample each unique
-        class approximately once.
-        """
-        return len(self.class_list) // self.num_classes_per_batch
 
 
 class ContrastiveDataModule(L.LightningDataModule):
@@ -210,7 +171,8 @@ class ContrastiveDataModule(L.LightningDataModule):
         for split, req_stage in stage_map.items():
             emb_path, lbl_path = self.paths[split]
             if emb_path and lbl_path and (stage is None or stage == req_stage):
-                ds = EmbeddingDataset(emb_path, lbl_path)
+                is_train_on_classes = (split == "train" and self.hparams.train_sampling_strategy == "class_balanced")
+                ds = EmbeddingDataset(emb_path, lbl_path, train_on_classes=is_train_on_classes)
                 self.datasets[split] = ds
                 if split == "train":
                     self.embedding_dim = ds.embedding_dim
@@ -233,40 +195,26 @@ class ContrastiveDataModule(L.LightningDataModule):
         if ds is None:
             return None
 
-        if train:
-            if self.hparams.train_sampling_strategy == "class_balanced":
-                batch_sampler = ClassBalancedSampler(ds.labels, self.hparams.batch_size)
-                return DataLoader(
-                    ds,
-                    batch_sampler=batch_sampler,
-                    num_workers=self.hparams.num_workers,
-                    pin_memory=self.hparams.pin_memory,
-                    persistent_workers=True,
-                    collate_fn=collate_embedding_batch,
-                )
-            
-            # WeightedRandomSampler logic
-            sampler = WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
-            return DataLoader(
-                ds,
-                batch_size=self.hparams.batch_size,
-                sampler=sampler,
-                num_workers=self.hparams.num_workers,
-                pin_memory=self.hparams.pin_memory,
-                persistent_workers=True,
-                drop_last=True,
-                collate_fn=collate_embedding_batch,
-            )
+        sampler = None
+        shuffle = False # Default shuffle behavior
 
-        # Fallback for val/test dataloaders
+        if train:
+            if self.hparams.train_sampling_strategy == "weighted":
+                sampler = WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
+                # shuffle must be False when using a sampler
+            elif self.hparams.train_sampling_strategy == "class_balanced":
+                shuffle = True # Shuffle the classes
+        # For val/test, sampler is None and shuffle is False, so we get sequential evaluation
+
         return DataLoader(
             ds,
             batch_size=self.hparams.batch_size,
-            shuffle=False,
+            sampler=sampler,
+            shuffle=shuffle,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            persistent_workers=False,
-            drop_last=False,
+            persistent_workers=self.hparams.persistent_workers if train else False,
+            drop_last=train,
             collate_fn=collate_embedding_batch,
         )
 
