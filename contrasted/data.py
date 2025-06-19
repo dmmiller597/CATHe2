@@ -74,7 +74,9 @@ class EmbeddingDataset(Dataset):
 
         self.train_on_classes = train_on_classes
         if self.train_on_classes:
-            log.info("Using class-based sampling for training.")
+            log.info(
+                "Using class-based sampling for training with 2 samples per class."
+            )
             self.class_indices = defaultdict(list)
             for i, label in enumerate(self.labels):
                 self.class_indices[label.item()].append(i)
@@ -93,15 +95,17 @@ class EmbeddingDataset(Dataset):
             return len(self.class_list)
         return len(self.embeddings)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
+    def __getitem__(self, idx: int):
         """
         If train_on_classes, idx is a class index. A random sample from that
         class is returned. Otherwise, idx is a sample index.
         """
         if self.train_on_classes:
             class_label = self.class_list[idx]
-            instance_idx = np.random.choice(self.class_indices[class_label])
-            return self._get_single_item(instance_idx)
+            instance_indices = np.random.choice(
+                self.class_indices[class_label], size=2, replace=True
+            )
+            return [self._get_single_item(i) for i in instance_indices]
 
         return self._get_single_item(idx)
 
@@ -143,7 +147,11 @@ class ContrastiveDataModule(L.LightningDataModule):
             ),
         }
         self.save_hyperparameters(
-            "batch_size", "num_workers", "pin_memory", "persistent_workers", "train_sampling_strategy"
+            "batch_size",
+            "num_workers",
+            "pin_memory",
+            "persistent_workers",
+            "train_sampling_strategy",
         )
         if self.hparams.train_sampling_strategy not in ["weighted", "class_balanced"]:
             raise ValueError(f"Unsupported train_sampling_strategy: '{self.hparams.train_sampling_strategy}'. Must be 'weighted' or 'class_balanced'.")
@@ -171,8 +179,13 @@ class ContrastiveDataModule(L.LightningDataModule):
         for split, req_stage in stage_map.items():
             emb_path, lbl_path = self.paths[split]
             if emb_path and lbl_path and (stage is None or stage == req_stage):
-                is_train_on_classes = (split == "train" and self.hparams.train_sampling_strategy == "class_balanced")
-                ds = EmbeddingDataset(emb_path, lbl_path, train_on_classes=is_train_on_classes)
+                is_train_on_classes = (
+                    split == "train"
+                    and self.hparams.train_sampling_strategy == "class_balanced"
+                )
+                ds = EmbeddingDataset(
+                    emb_path, lbl_path, train_on_classes=is_train_on_classes
+                )
                 self.datasets[split] = ds
                 if split == "train":
                     self.embedding_dim = ds.embedding_dim
@@ -250,6 +263,14 @@ def collate_embedding_batch(batch):
         ((int_labels: Tensor[B]), hier_labels: List[List[str]]),
         sequence_ids: List[str]
     """
+    # If class-based sampling is used, batch will be a list of lists of items.
+    # We need to flatten it first.
+    first_item = batch[0]
+    is_nested_list = isinstance(first_item, list)
+
+    if is_nested_list:
+        batch = [item for sublist in batch for item in sublist]
+
     embeddings = torch.stack([item[0] for item in batch])           # (B, D)
     int_labels = torch.stack([item[1][0] for item in batch])        # (B,)
     hier_labels = [item[1][1] for item in batch]                    # List[B][str]
