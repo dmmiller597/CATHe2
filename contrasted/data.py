@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple, List
 from collections import defaultdict
 
 import lightning as L
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Sampler
 
 from utils import get_logger, convert_sf_string_to_list
 
@@ -33,10 +33,10 @@ def get_superfamily_label(sf: str) -> str:
 class EmbeddingDataset(Dataset):
     """
     Dataset for precomputed embeddings, CATH Homologous Superfamily labels,
-    and sequence IDs. Supports instance-based or class-based sampling for training.
+    and sequence IDs.
     """
 
-    def __init__(self, emb_path: Path, lbl_path: Path, train_on_classes: bool = False):
+    def __init__(self, emb_path: Path, lbl_path: Path):
         if not emb_path.is_file():
             raise FileNotFoundError(f"Embeddings file not found: {emb_path}")
         if not lbl_path.is_file():
@@ -72,14 +72,6 @@ class EmbeddingDataset(Dataset):
         self.num_classes = len(unique_sf)
         self.embedding_dim = self.embeddings.shape[1]
 
-        self.train_on_classes = train_on_classes
-        if self.train_on_classes:
-            log.info("Using class-based sampling for training.")
-            self.class_indices = defaultdict(list)
-            for i, label in enumerate(self.labels):
-                self.class_indices[label.item()].append(i)
-            self.class_list = list(self.class_indices.keys())
-
         if not (len(self.embeddings) == len(self.labels) == len(self.sequence_ids) == len(self.hierarchical_labels)):
             raise ValueError(
                 "Mismatch between embeddings, labels, sequence_ids, and hierarchical_labels lengths: "
@@ -89,29 +81,56 @@ class EmbeddingDataset(Dataset):
 
 
     def __len__(self) -> int:
-        if self.train_on_classes:
-            return len(self.class_list)
         return len(self.embeddings)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
-        """
-        If train_on_classes, idx is a class index. A random sample from that
-        class is returned. Otherwise, idx is a sample index.
-        """
-        if self.train_on_classes:
-            class_label = self.class_list[idx]
-            instance_idx = np.random.choice(self.class_indices[class_label])
-            return self._get_single_item(instance_idx)
-
-        return self._get_single_item(idx)
-
-    def _get_single_item(self, idx: int) -> Tuple[torch.Tensor, Tuple[torch.Tensor, List[str]], str]:
-        """Returns embedding, (integer label, hierarchical label), and sequence ID for a given instance index."""
+        """Returns embedding, (integer label, hierarchical label), and sequence ID."""
         emb = torch.from_numpy(self.embeddings[idx])
         lbl = self.labels[idx]
         hier_lbl = self.hierarchical_labels[idx]
         seq_id = self.sequence_ids[idx]
         return emb, (lbl, hier_lbl), seq_id
+
+
+class ClassBalancedSampler(Sampler[List[int]]):
+    """
+    A custom sampler for class-balanced training.
+
+    For each batch, it uniformly samples `batch_size` classes (with replacement)
+    and then randomly samples one instance from each of those classes. This ensures
+    each batch has a diverse set of classes, and implicitly oversamples rare classes.
+    """
+    def __init__(self, labels: torch.Tensor, batch_size: int):
+        super().__init__(None)
+        self.labels = labels
+        self.batch_size = batch_size
+
+        # Create a map from class -> list of sample indices
+        self.class_indices = defaultdict(list)
+        for i, label in enumerate(self.labels):
+            self.class_indices[label.item()].append(i)
+
+        self.class_list = list(self.class_indices.keys())
+        self.num_samples = len(self.labels)
+
+    def __iter__(self):
+        num_batches = len(self)
+        for _ in range(num_batches):
+            # Sample `batch_size` classes with replacement, uniformly
+            sampled_classes = torch.randint(0, len(self.class_list), (self.batch_size,)).tolist()
+            
+            # For each sampled class, pick one random instance
+            batch_indices = []
+            for class_key_idx in sampled_classes:
+                class_label = self.class_list[class_key_idx]
+                instance_idx = np.random.choice(self.class_indices[class_label])
+                batch_indices.append(instance_idx)
+            
+            yield batch_indices
+
+    def __len__(self) -> int:
+        """The number of batches per epoch."""
+        return self.num_samples // self.batch_size
 
 
 class ContrastiveDataModule(L.LightningDataModule):
@@ -171,8 +190,7 @@ class ContrastiveDataModule(L.LightningDataModule):
         for split, req_stage in stage_map.items():
             emb_path, lbl_path = self.paths[split]
             if emb_path and lbl_path and (stage is None or stage == req_stage):
-                is_train_on_classes = (split == "train" and self.hparams.train_sampling_strategy == "class_balanced")
-                ds = EmbeddingDataset(emb_path, lbl_path, train_on_classes=is_train_on_classes)
+                ds = EmbeddingDataset(emb_path, lbl_path)
                 self.datasets[split] = ds
                 if split == "train":
                     self.embedding_dim = ds.embedding_dim
@@ -195,26 +213,40 @@ class ContrastiveDataModule(L.LightningDataModule):
         if ds is None:
             return None
 
-        sampler = None
-        shuffle = False # Default shuffle behavior
-
         if train:
-            if self.hparams.train_sampling_strategy == "weighted":
-                sampler = WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
-                # shuffle must be False when using a sampler
-            elif self.hparams.train_sampling_strategy == "class_balanced":
-                shuffle = True # Shuffle the classes
-        # For val/test, sampler is None and shuffle is False, so we get sequential evaluation
+            if self.hparams.train_sampling_strategy == "class_balanced":
+                batch_sampler = ClassBalancedSampler(ds.labels, self.hparams.batch_size)
+                return DataLoader(
+                    ds,
+                    batch_sampler=batch_sampler,
+                    num_workers=self.hparams.num_workers,
+                    pin_memory=self.hparams.pin_memory,
+                    persistent_workers=True,
+                    collate_fn=collate_embedding_batch,
+                )
+            
+            # WeightedRandomSampler logic
+            sampler = WeightedRandomSampler(self._train_weights, len(ds), replacement=True)
+            return DataLoader(
+                ds,
+                batch_size=self.hparams.batch_size,
+                sampler=sampler,
+                num_workers=self.hparams.num_workers,
+                pin_memory=self.hparams.pin_memory,
+                persistent_workers=True,
+                drop_last=True,
+                collate_fn=collate_embedding_batch,
+            )
 
+        # Fallback for val/test dataloaders
         return DataLoader(
             ds,
             batch_size=self.hparams.batch_size,
-            sampler=sampler,
-            shuffle=shuffle,
+            shuffle=False,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            persistent_workers=self.hparams.persistent_workers if train else False,
-            drop_last=train,
+            persistent_workers=False,
+            drop_last=False,
             collate_fn=collate_embedding_batch,
         )
 
