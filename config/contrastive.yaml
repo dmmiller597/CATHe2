@@ -2,6 +2,9 @@ defaults:
   - _self_
   - data: protT5
 
+data:
+  train_sampling_strategy: "class_balanced" # "weighted" or "class_balanced"
+
 model:
   # Architecture
   embedding_dim: ${data.embedding_dim}
