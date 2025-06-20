@@ -43,7 +43,14 @@ def read_fasta(fasta_file):
     """Reads a FASTA file and yields sequence ID and sequence."""
     with open(fasta_file, 'r') as f:
         for record in SeqIO.parse(f, 'fasta'):
-            yield str(record.id), str(record.seq)
+            # Extract CATH ID from header format: cath|4_4_0|1oaiA00/561-619
+            header = str(record.id)
+            if header.startswith('cath|'):
+                # Split by '|' and take the third part, then split by '/' to get just the domain ID
+                cath_id = header.split('|')[2].split('/')[0]
+                yield cath_id, str(record.seq)
+            else:
+                yield header, str(record.seq)
 
 def main():
     parser = argparse.ArgumentParser(description="Generate per-residue ESM-2 embeddings and store in LMDB.")
