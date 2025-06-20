@@ -276,12 +276,12 @@ def process_identity_level(
     
     return {
         "Identity": f"{identity_percent}%",
-        "Test Seqs": len(test_seqs),
-        "Test Labels": len(test_labels),
-        "Val Seqs": len(val_seqs),
-        "Val Labels": len(val_labels),
         "Train Seqs": len(train_seqs),
-        "Train Labels": len(train_labels),
+        "Train SFs": len(train_labels),
+        "Val Seqs": len(val_seqs),
+        "Val SFs": len(val_labels),
+        "Test Seqs": len(test_seqs),
+        "Test SFs": len(test_labels),
     }
 
 def main(args):
