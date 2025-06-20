@@ -2,7 +2,7 @@ wandb: true
 project_name: hifinn
 batch_size: 8
 train_ids_path: 'data/CATH/clustered_datasets_0.05/unified_train_set/train.fasta'
-test_ids_path: 'data/CATH/clustered_datasets_0.05/unified_test_set/s90/test.fasta'
+test_ids_path: 'data/CATH/clustered_datasets_0.05/s90/test.fasta'
 val_ids_path: 'data/CATH/clustered_datasets_0.05/unified_val_set/valid.fasta'
 embeddings_path: 'data/CATH/esm2_embeddings_layer32'
 annotations: 'data/CATH/cath_id_to_sf.json'
