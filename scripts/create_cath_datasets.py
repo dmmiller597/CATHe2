@@ -191,12 +191,19 @@ def main(args):
     all_sequences = parse_fasta(input_fasta)
     logging.info(f"Found {len(all_sequences)} total sequences.")
 
-    # --- New Logic: Sequential Filtering for a Single, Valid Training Set ---
+    # --- Revised Logic for Dataset Creation ---
+    # Strategy:
+    # 1. Hold out a validation set first. All members of validation clusters are removed from the main pool.
+    # 2. Iteratively build test sets from highest identity (90) to lowest (10).
+    # 3. In each iteration, cluster the current pool, identify test clusters, and add their
+    #    representatives to a cumulative test set. Then, remove ALL MEMBERS of these test clusters
+    #    from the pool to prevent data leakage in subsequent, lower-identity steps.
+    # 4. The final remaining pool becomes the training set.
+    # 5. Perform a final label consistency check across all sets.
 
     # 1. Create a global validation set to hold out from the start.
-    logging.info("\n--- Creating Global Validation Set ---")
-    # Use a medium identity threshold for a reasonable initial clustering.
-    val_identity_thresh = 0.5
+    logging.info("\n--- Step 1: Creating Global Validation Set ---")
+    val_identity_thresh = 0.5  # A medium identity for a reasonable initial split
     val_dir = output_base_dir / "validation_clustering"
     try:
         val_cluster_file = run_mmseqs2(input_fasta, val_dir, val_identity_thresh, args.low_sensitivity, args.coverage)
@@ -205,102 +212,127 @@ def main(args):
         return
 
     all_clusters = parse_clusters(val_cluster_file)
-    all_reps = list(all_clusters.keys())
     
     # Split reps to decide which clusters go to validation vs. the main pool
-    # We use a val_ratio of val_ratio, and test_ratio of 0 to just get a val set.
     reps_for_pool, val_reps, _ = split_representatives(
-        all_clusters, 
-        test_ratio=0.0, # No test set at this stage
+        all_clusters,
+        test_ratio=0.0,  # No test set at this stage
         val_ratio=args.val_ratio,
         min_label_count=args.min_label_count_for_split,
         random_state=args.random_state
     )
 
-    final_validation_set = {rep: all_sequences[rep] for rep in val_reps if rep in all_sequences}
-    
-    # The initial pool for training set creation includes all members of non-validation clusters
-    current_training_pool = {}
+    # The validation set contains ALL members of the validation clusters.
+    final_validation_set = {}
+    for rep in val_reps:
+        for member in all_clusters.get(rep, [rep]):
+            if member in all_sequences:
+                final_validation_set[member] = all_sequences[member]
+
+    # The initial pool for training/test creation includes all members of non-validation clusters.
+    current_pool_sequences = {}
     for rep in reps_for_pool:
         for member in all_clusters.get(rep, [rep]):
             if member in all_sequences:
-                current_training_pool[member] = all_sequences[member]
+                current_pool_sequences[member] = all_sequences[member]
 
-    logging.info(f"Held out {len(final_validation_set)} representatives for the global validation set.")
-    logging.info(f"Initial pool for training/test creation: {len(current_training_pool)} sequences.")
+    logging.info(f"Held out {len(final_validation_set)} sequences for the global validation set.")
+    logging.info(f"Initial pool for training/test creation: {len(current_pool_sequences)} sequences.")
 
     # 2. Iteratively create test sets and shrink the training pool
     final_test_sets = {}
     identities = sorted([int(i) for i in args.identity_thresholds.split(',')], reverse=True)
-
-    # Create a single temporary fasta file for the main pool to be used in all clustering steps.
-    pool_fasta_path = output_base_dir / "temp_pool_for_clustering.fasta"
-    write_fasta(pool_fasta_path, current_training_pool)
-
+    
     # This set will hold all representatives that have been assigned to any test set.
-    # This ensures that test sets are cumulative (S80 test will contain S90 test members).
-    cumulative_test_reps = set()
+    cumulative_test_reps_headers = set()
 
     for identity_percent in identities:
-        logging.info(f"\n--- Processing {identity_percent}% Identity vs. Training Pool ---")
+        logging.info(f"\n--- Step 2: Processing {identity_percent}% Identity Level ---")
         
+        if not current_pool_sequences:
+            logging.warning(f"Training pool is empty. Stopping at {identity_percent}%.")
+            break
+
+        # Create a temporary fasta file for the current (shrinking) pool
+        pool_fasta_path = output_base_dir / f"temp_pool_{identity_percent}.fasta"
+        write_fasta(pool_fasta_path, current_pool_sequences)
+
         identity_threshold = identity_percent / 100.0
         identity_dir = output_base_dir / f"s{identity_percent}"
-        
-        # Use higher sensitivity for lower identity thresholds
         sensitivity = args.high_sensitivity if identity_threshold < args.sensitivity_threshold else args.low_sensitivity
 
         try:
-            # We cluster the same, consistent pool of sequences each time.
             cluster_file = run_mmseqs2(
-                pool_fasta_path, 
-                identity_dir, 
-                identity_threshold, 
+                pool_fasta_path,
+                identity_dir,
+                identity_threshold,
                 sensitivity,
                 args.coverage
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"Failed to generate clusters for {identity_percent}%. Skipping. Error: {e}")
+            if pool_fasta_path.exists():
+                pool_fasta_path.unlink()
             continue
         
-        # These clusters are based on the full training/test pool
-        clusters_from_pool = parse_clusters(cluster_file)
+        clusters_from_current_pool = parse_clusters(cluster_file)
         
-        # Split the current pool's representatives into what stays and what becomes the test set
-        # The function returns (train_reps, val_reps, test_reps). We need the third element.
-        _, _, test_reps_for_level = split_representatives(
-            clusters_from_pool,
+        # Split the current pool's representatives to find *new* test representatives for this level
+        _, _, new_test_reps = split_representatives(
+            clusters_from_current_pool,
             test_ratio=args.test_ratio,
-            val_ratio=0, # No validation set here
+            val_ratio=0,  # No validation set here
             min_label_count=args.min_label_count_for_split,
             random_state=args.random_state
         )
         
-        # Add the new test representatives to our cumulative set
-        cumulative_test_reps.update(test_reps_for_level)
+        logging.info(f"Identified {len(new_test_reps)} new representative sequences for the S{identity_percent} test set.")
         
-        # The test set for this level consists of all representatives identified so far.
+        # Add the new representatives to our cumulative set
+        cumulative_test_reps_headers.update(new_test_reps)
+        
+        # The test set for this level consists of all *representatives* identified so far.
         final_test_sets[identity_percent] = {
-            rep: current_training_pool[rep] for rep in cumulative_test_reps if rep in current_training_pool
+            rep: all_sequences[rep] for rep in cumulative_test_reps_headers if rep in all_sequences
+        }
+        logging.info(f"Cumulative test set for S{identity_percent} now contains {len(final_test_sets[identity_percent])} representative sequences.")
+
+        # Find all members of the new test clusters and remove them from the pool to prevent data leakage.
+        members_to_remove = set()
+        for rep in new_test_reps:
+            members_to_remove.update(clusters_from_current_pool.get(rep, [rep]))
+        
+        # Shrink the pool for the next iteration.
+        current_pool_sequences = {
+            h: s for h, s in current_pool_sequences.items() if h not in members_to_remove
         }
         
-        logging.info(f"Test set for S{identity_percent} now contains {len(final_test_sets[identity_percent])} cumulative representative sequences.")
+        logging.info(f"Removed {len(members_to_remove)} sequences (members of new test clusters). Pool size: {len(current_pool_sequences)}.")
 
-    # Clean up the temporary pool file
-    if pool_fasta_path.exists():
-        pool_fasta_path.unlink()
+        # Clean up the temporary file for this iteration
+        if pool_fasta_path.exists():
+            pool_fasta_path.unlink()
 
-    # What remains is the final training set, which is the original pool minus ALL test representatives.
-    final_training_set = {
-        h: s for h, s in current_training_pool.items() if h not in cumulative_test_reps
-    }
+    # The final training set is what remains in the pool after all test sets have been carved out.
+    final_training_set = current_pool_sequences
 
-    # Final label consistency check (optional but good practice)
+    # --- Final Label Consistency Check ---
+    logging.info("\n--- Step 3: Final Label Consistency Check ---")
     final_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
-    final_validation_set = {h: s for h, s in final_validation_set.items() if get_cath_label(h) in final_train_labels}
-    for identity in final_test_sets:
-        final_test_sets[identity] = {h: s for h, s in final_test_sets[identity].items() if get_cath_label(h) in final_train_labels}
+    logging.info(f"Final training set contains {len(final_train_labels)} unique labels.")
 
+    # Filter validation set
+    original_val_len = len(final_validation_set)
+    final_validation_set = {h: s for h, s in final_validation_set.items() if get_cath_label(h) in final_train_labels}
+    logging.info(f"Filtered validation set from {original_val_len} to {len(final_validation_set)} sequences to match training labels.")
+
+    # Filter all test sets
+    for identity in final_test_sets:
+        original_test_len = len(final_test_sets[identity])
+        final_test_sets[identity] = {
+            h: s for h, s in final_test_sets[identity].items() if get_cath_label(h) in final_train_labels
+        }
+        logging.info(f"Filtered S{identity} test set from {original_test_len} to {len(final_test_sets[identity])} sequences.")
 
     # --- Save aggregated and filtered datasets ---
     # Save the single, final training set
