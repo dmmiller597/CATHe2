@@ -129,17 +129,21 @@ def split_representatives(
         return must_train_reps, set(), set()
 
     # Split splittable_reps into a temporary training set and a test set
-    try:
-        train_val_reps, test_reps = train_test_split(
-            splittable_reps,
-            test_size=test_ratio,
-            stratify=splittable_labels,
-            random_state=random_state
-        )
-    except ValueError:
-        # This can happen if a label has only one member in the splittable set, making stratification impossible.
-        logging.warning("Stratified test split failed. Falling back to unstratified split.")
-        train_val_reps, test_reps = train_test_split(splittable_reps, test_size=test_ratio, random_state=random_state)
+    if test_ratio > 0:
+        try:
+            train_val_reps, test_reps = train_test_split(
+                splittable_reps,
+                test_size=test_ratio,
+                stratify=splittable_labels,
+                random_state=random_state
+            )
+        except ValueError:
+            # This can happen if a label has only one member in the splittable set, making stratification impossible.
+            logging.warning("Stratified test split failed. Falling back to unstratified split.")
+            train_val_reps, test_reps = train_test_split(splittable_reps, test_size=test_ratio, random_state=random_state)
+    else:
+        train_val_reps = splittable_reps
+        test_reps = []
 
     # Adjust validation ratio for the second split from the remaining data
     if 1.0 - test_ratio <= 1e-9: # Avoid division by zero with float comparison
