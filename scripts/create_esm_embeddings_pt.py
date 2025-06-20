@@ -67,8 +67,8 @@ def read_fasta(fasta_file):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate per-residue ESM-2 embeddings and store as .pt files.")
-    parser.add_argument("--fasta_file", type=str, default="data/CATH/cath_S100.fasta", help="Path to the input FASTA file.")
-    parser.add_argument("--output_dir", type=str, default="data/CATH/esm2_embeddings_last_layer", help="Path to the output directory for .pt files.")
+    parser.add_argument("--fasta_file", type=str, default="data/CATH/CATH_S100.fasta", help="Path to the input FASTA file.")
+    parser.add_argument("--output_dir", type=str, default="data/CATH/esm2_embeddings", help="Path to the output directory for .pt files.")
     parser.add_argument("--model_name", type=str, default="facebook/esm2_t33_650M_UR50D", help="ESM model name.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for processing.")
     parser.add_argument('--flash-attention', '-f', action='store_true', help='Use Flash Attention-enabled ESM for faster processing')
