@@ -34,7 +34,7 @@ def init_wandb(cfg):
 )
 def main(cfg: DictConfig) -> None:
     if cfg.wandb:
-        wandb.login(key="insert key here")
+        wandb.login(key="938c14fc3876d53fde65a9042e567beb51ac7390")
 
     train_ids = load_ids(cfg.train_ids_path)
     test_ids = load_ids(cfg.test_ids_path)
