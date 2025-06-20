@@ -264,15 +264,17 @@ def process_identity_level(
 
     logging.info(f"Final split sizes: Train={len(train_seqs)}, Validation={len(val_seqs)}, Test={len(test_seqs)}")
 
+    # Calculate label counts for logging and summary
+    train_labels = {get_cath_label(h) for h in train_seqs}
+    val_labels = {get_cath_label(h) for h in val_seqs}
+    test_labels = {get_cath_label(h) for h in test_seqs}
+
+    logging.info(f"Unique SFs per split: Train={len(train_labels)}, Validation={len(val_labels)}, Test={len(test_labels)}")
+
     # Save the filtered datasets
     write_fasta(identity_dir / 'train.fasta', train_seqs)
     write_fasta(identity_dir / 'valid.fasta', val_seqs)
     write_fasta(identity_dir / 'test.fasta', test_seqs)
-
-    # Record results for summary table
-    train_labels = {get_cath_label(h) for h in train_seqs}
-    val_labels = {get_cath_label(h) for h in val_seqs}
-    test_labels = {get_cath_label(h) for h in test_seqs}
     
     return {
         "Identity": f"{identity_percent}%",
