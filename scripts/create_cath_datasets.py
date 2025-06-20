@@ -267,8 +267,8 @@ def main(args):
         clusters_from_pool = parse_clusters(cluster_file)
         
         # Split the current pool's representatives into what stays and what becomes the test set
-        # Note: 'reps_to_keep' is not used to shrink the pool anymore, but the split is still needed.
-        _, test_reps_for_level, _ = split_representatives(
+        # The function returns (train_reps, val_reps, test_reps). We need the third element.
+        _, _, test_reps_for_level = split_representatives(
             clusters_from_pool,
             test_ratio=args.test_ratio,
             val_ratio=0, # No validation set here
