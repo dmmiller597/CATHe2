@@ -169,123 +169,6 @@ def split_representatives(
 
     return final_train_reps, set(val_reps), set(test_reps)
 
-def enforce_label_consistency(
-    train_seqs: Dict[str, str], 
-    val_seqs: Dict[str, str], 
-    test_seqs: Dict[str, str]
-) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Ensures that validation and test sets only contain labels present in the training set.
-    Any sequence in the validation or test set with a label not found in the training
-    set is removed to prevent evaluation on unseen classes.
-    """
-    train_labels = {get_cath_label(h) for h in train_seqs.keys()}
-    
-    val_seqs_filtered = {h: s for h, s in val_seqs.items() if get_cath_label(h) in train_labels}
-    test_seqs_filtered = {h: s for h, s in test_seqs.items() if get_cath_label(h) in train_labels}
-    
-    val_removed = len(val_seqs) - len(val_seqs_filtered)
-    test_removed = len(test_seqs) - len(test_seqs_filtered)
-    
-    if val_removed > 0:
-        logging.info(f"Removed {val_removed} sequences from validation set due to missing labels in training set.")
-    if test_removed > 0:
-        logging.info(f"Removed {test_removed} sequences from test set due to missing labels in training set.")
-        
-    return val_seqs_filtered, test_seqs_filtered
-
-def process_identity_level(
-    identity_percent: int,
-    base_dir: Path,
-    all_sequences: Dict[str, str],
-    input_fasta: Path,
-    args: argparse.Namespace
-) -> Optional[Dict]:
-    """
-    Runs the full clustering and splitting pipeline for a single identity threshold.
-
-    Args:
-        identity_percent: The sequence identity threshold (e.g., 30 for 30%).
-        base_dir: The main output directory for all datasets.
-        all_sequences: A dictionary of all sequences from the input FASTA.
-        input_fasta: Path to the source FASTA file.
-        args: The command-line arguments.
-
-    Returns:
-        A dictionary containing the summary statistics for this identity level, or None if processing fails.
-    """
-    identity_threshold = identity_percent / 100.0
-    identity_dir = base_dir / f"s{identity_percent}"
-    identity_dir.mkdir(parents=True, exist_ok=True)
-
-    sensitivity = args.high_sensitivity if identity_threshold < args.sensitivity_threshold else args.low_sensitivity
-    
-    logging.info(f"\n--- Processing {identity_percent}% Identity Threshold ---")
-    
-    try:
-        cluster_file = run_mmseqs2(
-            input_fasta, 
-            identity_dir, 
-            identity_threshold, 
-            sensitivity,
-            args.coverage
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logging.error(f"Failed to generate clusters for {identity_percent}% identity. Skipping. Error: {e}")
-        return None
-
-    clusters = parse_clusters(cluster_file)
-    logging.info(f"Found {len(clusters)} clusters at {identity_percent}% identity.")
-
-    train_reps, val_reps, test_reps = split_representatives(
-        clusters, 
-        test_ratio=args.test_ratio,
-        val_ratio=args.val_ratio,
-        min_label_count=args.min_label_count_for_split,
-        random_state=args.random_state
-    )
-
-    # Training set includes all members of training clusters
-    train_seqs = {}
-    for rep in train_reps:
-        # The representative is part of its own cluster list in this implementation
-        for member in clusters.get(rep, [rep]):
-            if member in all_sequences:
-                train_seqs[member] = all_sequences[member]
-
-    # Validation and test sets contain ONLY the representatives
-    val_seqs = {rep: all_sequences[rep] for rep in val_reps if rep in all_sequences}
-    test_seqs = {rep: all_sequences[rep] for rep in test_reps if rep in all_sequences}
-    
-    logging.info(f"Initial split sizes: Train reps={len(train_reps)}, Val reps={len(val_reps)}, Test reps={len(test_reps)}")
-
-    # Enforce that validation and test labels are present in the training set
-    val_seqs, test_seqs = enforce_label_consistency(train_seqs, val_seqs, test_seqs)
-
-    logging.info(f"Final split sizes: Train={len(train_seqs)}, Validation={len(val_seqs)}, Test={len(test_seqs)}")
-
-    # Calculate label counts for logging and summary
-    train_labels = {get_cath_label(h) for h in train_seqs}
-    val_labels = {get_cath_label(h) for h in val_seqs}
-    test_labels = {get_cath_label(h) for h in test_seqs}
-
-    logging.info(f"Unique SFs per split: Train={len(train_labels)}, Validation={len(val_labels)}, Test={len(test_labels)}")
-
-    # Save the filtered datasets
-    write_fasta(identity_dir / 'train.fasta', train_seqs)
-    write_fasta(identity_dir / 'valid.fasta', val_seqs)
-    write_fasta(identity_dir / 'test.fasta', test_seqs)
-    
-    return {
-        "Identity": f"{identity_percent}%",
-        "Train Seqs": len(train_seqs),
-        "Train SFs": len(train_labels),
-        "Val Seqs": len(val_seqs),
-        "Val SFs": len(val_labels),
-        "Test Seqs": len(test_seqs),
-        "Test SFs": len(test_labels),
-    }
-
 def main(args):
     input_fasta = Path(args.input_fasta)
     if not input_fasta.is_file():
@@ -304,37 +187,168 @@ def main(args):
     all_sequences = parse_fasta(input_fasta)
     logging.info(f"Found {len(all_sequences)} total sequences.")
 
-    results_summary = []
+    # --- New Logic: Sequential Filtering for a Single, Valid Training Set ---
+
+    # 1. Create a global validation set to hold out from the start.
+    logging.info("\n--- Creating Global Validation Set ---")
+    # Use a medium identity threshold for a reasonable initial clustering.
+    val_identity_thresh = 0.5
+    val_dir = output_base_dir / "validation_clustering"
+    try:
+        val_cluster_file = run_mmseqs2(input_fasta, val_dir, val_identity_thresh, args.low_sensitivity, args.coverage)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        logging.error(f"Failed to generate initial validation clusters. Aborting. Error: {e}")
+        return
+
+    all_clusters = parse_clusters(val_cluster_file)
+    all_reps = list(all_clusters.keys())
     
-    identities = [int(i) for i in args.identity_thresholds.split(',')]
+    # Split reps to decide which clusters go to validation vs. the main pool
+    # We use a val_ratio of val_ratio, and test_ratio of 0 to just get a val set.
+    reps_for_pool, val_reps, _ = split_representatives(
+        all_clusters, 
+        test_ratio=0.0, # No test set at this stage
+        val_ratio=args.val_ratio,
+        min_label_count=args.min_label_count_for_split,
+        random_state=args.random_state
+    )
+
+    final_validation_set = {rep: all_sequences[rep] for rep in val_reps if rep in all_sequences}
+    
+    # The initial pool for training set creation includes all members of non-validation clusters
+    current_training_pool = {}
+    for rep in reps_for_pool:
+        for member in all_clusters.get(rep, [rep]):
+            if member in all_sequences:
+                current_training_pool[member] = all_sequences[member]
+
+    logging.info(f"Held out {len(final_validation_set)} representatives for the global validation set.")
+    logging.info(f"Initial pool for training/test creation: {len(current_training_pool)} sequences.")
+
+    # 2. Iteratively create test sets and shrink the training pool
+    final_test_sets = {}
+    identities = sorted([int(i) for i in args.identity_thresholds.split(',')])
 
     for identity_percent in identities:
-        result = process_identity_level(
-            identity_percent,
-            output_base_dir,
-            all_sequences,
-            input_fasta,
-            args
+        logging.info(f"\n--- Processing {identity_percent}% Identity vs. Training Pool ---")
+        
+        # Create a temporary fasta file for the current pool of sequences
+        pool_fasta_path = output_base_dir / f"temp_pool_{identity_percent}.fasta"
+        write_fasta(pool_fasta_path, current_training_pool)
+        
+        identity_threshold = identity_percent / 100.0
+        identity_dir = output_base_dir / f"s{identity_percent}"
+        
+        sensitivity = args.high_sensitivity if identity_threshold < args.sensitivity_threshold else args.low_sensitivity
+
+        try:
+            cluster_file = run_mmseqs2(
+                pool_fasta_path, 
+                identity_dir, 
+                identity_threshold, 
+                sensitivity,
+                args.coverage
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logging.error(f"Failed to generate clusters for {identity_percent}%. Skipping. Error: {e}")
+            pool_fasta_path.unlink() # Clean up temp file
+            continue
+        
+        pool_fasta_path.unlink() # Clean up temp file
+
+        # These clusters are based on the *remaining pool*, not all sequences
+        clusters_from_pool = parse_clusters(cluster_file)
+        
+        # We need to determine the test ratio relative to the original set of clusters
+        # This is a bit tricky. A simpler way is to maintain the same test_ratio of the *remaining* reps.
+        pool_reps_for_split = list(clusters_from_pool.keys())
+        
+        if len(pool_reps_for_split) < args.min_label_count_for_split:
+            logging.warning(f"Not enough clusters ({len(pool_reps_for_split)}) to perform a split at {identity_percent}%. Skipping.")
+            continue
+            
+        # Split the current pool's representatives into what stays and what becomes the test set
+        reps_to_keep, test_reps_for_level, _ = split_representatives(
+            clusters_from_pool,
+            test_ratio=args.test_ratio,
+            val_ratio=0, # No validation set here
+            min_label_count=args.min_label_count_for_split,
+            random_state=args.random_state
         )
-        if result:
-            results_summary.append(result)
+
+        final_test_sets[identity_percent] = {rep: current_training_pool[rep] for rep in test_reps_for_level}
+        
+        # The new training pool contains only members of the "keep" clusters
+        next_training_pool = {}
+        for rep in reps_to_keep:
+            for member in clusters_from_pool.get(rep, [rep]):
+                if member in current_training_pool:
+                     next_training_pool[member] = current_training_pool[member]
+        
+        logging.info(f"Created test set for S{identity_percent} with {len(final_test_sets[identity_percent])} sequences.")
+        logging.info(f"Training pool size reduced from {len(current_training_pool)} to {len(next_training_pool)}.")
+        current_training_pool = next_training_pool
+
+    # What remains is the final training set
+    final_training_set = current_training_pool
+
+    # Final label consistency check (optional but good practice)
+    final_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
+    final_validation_set = {h: s for h, s in final_validation_set.items() if get_cath_label(h) in final_train_labels}
+    for identity in final_test_sets:
+        final_test_sets[identity] = {h: s for h, s in final_test_sets[identity].items() if get_cath_label(h) in final_train_labels}
+
+
+    # --- Save aggregated and filtered datasets ---
+    # Save the single, final training set
+    unified_dir = output_base_dir / "unified_train_set"
+    unified_dir.mkdir(parents=True, exist_ok=True)
+    write_fasta(unified_dir / 'train.fasta', final_training_set)
+    write_fasta(unified_dir / 'valid.fasta', final_validation_set)
+    logging.info(f"\nSaved final training set to {unified_dir / 'train.fasta'}")
+    logging.info(f"Saved final validation set to {unified_dir / 'valid.fasta'}")
+
+    # Save each test set in its identity-specific directory
+    for identity, test_seqs in final_test_sets.items():
+        identity_dir = output_base_dir / f"s{identity}"
+        identity_dir.mkdir(parents=True, exist_ok=True)
+        write_fasta(identity_dir / 'test.fasta', test_seqs)
+        logging.info(f"Saved S{identity} test set to {identity_dir / 'test.fasta'}")
+
+    # --- Update and Print Final Summary Table ---
+    final_summary = []
+    final_master_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
+    final_master_val_labels = {get_cath_label(h) for h in final_validation_set.keys()}
+
+    for identity, test_seqs in sorted(final_test_sets.items()):
+        final_test_labels = {get_cath_label(h) for h in test_seqs.keys()}
+        final_summary.append({
+            "Identity": f"S{identity}",
+            "Test Seqs": len(test_seqs),
+            "Test SFs": len(final_test_labels),
+        })
 
     # Print summary table
     print("\n" + "="*90)
-    print(" " * 35 + "Dataset Creation Summary")
+    print(" " * 30 + "Final Dataset Creation Summary")
     print("="*90)
-    if results_summary:
-        headers = results_summary[0].keys()
+
+    print(f"Final Training Set:     {len(final_training_set):>7} sequences, {len(final_master_train_labels):>5} SFs")
+    print(f"Final Validation Set:   {len(final_validation_set):>7} sequences, {len(final_master_val_labels):>5} SFs")
+    print("-" * 90)
+
+    if final_summary:
+        headers = final_summary[0].keys()
         # Calculate column widths for neat printing
-        col_widths = {h: max(len(h), max((len(str(r[h])) for r in results_summary), default=0)) for h in headers}
+        col_widths = {h: max(len(h), max((len(str(r[h])) for r in final_summary), default=0)) for h in headers}
         header_line = " | ".join(h.ljust(col_widths[h]) for h in headers)
         print(header_line)
         print("-" * len(header_line))
-        for result in results_summary:
+        for result in final_summary:
             row_line = " | ".join(str(result[h]).ljust(col_widths[h]) for h in headers)
             print(row_line)
     else:
-        print("No datasets were generated.")
+        print("No test sets were generated.")
     print("="*90)
 
 
