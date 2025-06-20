@@ -9,6 +9,7 @@ individual .pt files named by their CATH ID.
 Key functionalities:
 - Reads protein sequences from a FASTA file.
 - Generates embeddings using ESM-2 models from the transformers library.
+- Supports both standard ESM-2 and Flash Attention for faster inference.
 - Extracts per-residue embeddings from a specific layer.
 - Stores embeddings in .pt files for easy loading with PyTorch.
 """
@@ -25,11 +26,24 @@ from transformers import AutoModel, AutoTokenizer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def get_esm_model(model_name, device):
+def get_esm_model(model_name, device, use_flash_attention=False):
     """Loads the ESM-2 model and tokenizer."""
     logging.info(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
+    
+    if use_flash_attention:
+        try:
+            from faesm.esm import FAEsmForMaskedLM
+            logging.info("Using Flash Attention ESM model.")
+            model = FAEsmForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
+            tokenizer = model.tokenizer
+        except ImportError:
+            logging.warning("faesm library not found. Please install it to use flash attention. Falling back to standard ESM model.")
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
+
     model = model.to(device)
     model.eval()
     if torch.cuda.is_available():
@@ -57,12 +71,15 @@ def main():
     parser.add_argument("--model_name", type=str, default="facebook/esm2_t33_650M_UR50D", help="ESM model name.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for processing.")
     parser.add_argument("--layer", type=int, default=32, help="Layer to extract embeddings from (e.g., 32 for esm2_t33).")
+    parser.add_argument('--flash-attention', '-f', action='store_true', help='Use Flash Attention-enabled ESM for faster processing')
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
-    model, tokenizer = get_esm_model(args.model_name, device)
+    model_info = "Flash Attention ESM-2" if args.flash_attention else "ESM-2"
+    logging.info(f"Loading {model_info} model...")
+    model, tokenizer = get_esm_model(args.model_name, device, use_flash_attention=args.flash_attention)
 
     # Estimate number of sequences for tqdm
     num_sequences = sum(1 for _ in read_fasta(args.fasta_file))
@@ -96,7 +113,7 @@ def main():
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             outputs = model(**inputs)
-            hidden_states = outputs.hidden_states[args.layer]
+            hidden_states = outputs['hidden_states'][args.layer]
 
             for j, seq_id in enumerate(batch_ids):
                 # Remove [CLS] and [SEP] tokens
