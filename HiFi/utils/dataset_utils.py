@@ -78,11 +78,15 @@ def get_embedding(filepath: str, per_residue: bool = True) -> torch.Tensor:
     Returns:
         ESM embedding.
     """
+    emb = torch.load(filepath)
     if per_residue:
-        emb = torch.load(filepath)
-        return torch.Tensor(emb["representations"][32])
+        # The new embedding generation script saves the tensor directly.
+        # The previous format was a dictionary. We can just return the tensor.
+        return torch.Tensor(emb)
     else:
-        emb = torch.load(filepath)
+        # The old format for mean representations was a dictionary.
+        # This path may need adjustment if mean embeddings are generated
+        # with the new script.
         return torch.Tensor(emb["mean_representations"][33])
 
 
