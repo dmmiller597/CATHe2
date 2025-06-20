@@ -4,13 +4,14 @@ Generate per-residue ESM-2 embeddings and store them as .pt files.
 
 This script takes a FASTA file of protein sequences as input, generates
 per-residue embeddings using a specified ESM-2 model, and saves them into
-individual .pt files named by their CATH ID.
+individual .pt files named by their CATH ID. The embeddings are extracted
+from the final layer of the model.
 
 Key functionalities:
 - Reads protein sequences from a FASTA file.
 - Generates embeddings using ESM-2 models from the transformers library.
 - Supports both standard ESM-2 and Flash Attention for faster inference.
-- Extracts per-residue embeddings from a specific layer.
+- Extracts per-residue embeddings from the last layer.
 - Stores embeddings in .pt files for easy loading with PyTorch.
 """
 
@@ -34,15 +35,15 @@ def get_esm_model(model_name, device, use_flash_attention=False):
         try:
             from faesm.esm import FAEsmForMaskedLM
             logging.info("Using Flash Attention ESM model.")
-            model = FAEsmForMaskedLM.from_pretrained(model_name, output_hidden_states=True)
+            model = FAEsmForMaskedLM.from_pretrained(model_name)
             tokenizer = model.tokenizer
-        except ImportError:
-            logging.warning("faesm library not found. Please install it to use flash attention. Falling back to standard ESM model.")
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
-    else:
+        except (ImportError, TypeError) as e:
+            logging.warning(f"Could not load Flash Attention model (reason: {e}). Falling back to standard ESM model.")
+            use_flash_attention = False
+    
+    if not use_flash_attention:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModel.from_pretrained(model_name, output_hidden_states=True)
+        model = AutoModel.from_pretrained(model_name)
 
     model = model.to(device)
     model.eval()
@@ -66,11 +67,10 @@ def read_fasta(fasta_file):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate per-residue ESM-2 embeddings and store as .pt files.")
-    parser.add_argument("--fasta_file", type=str, default="data/CATH/CATH_S100.fasta", help="Path to the input FASTA file.")
-    parser.add_argument("--output_dir", type=str, default="data/CATH/esm2_embeddings_layer32", help="Path to the output directory for .pt files.")
+    parser.add_argument("--fasta_file", type=str, default="data/CATH/cath_S100.fasta", help="Path to the input FASTA file.")
+    parser.add_argument("--output_dir", type=str, default="data/CATH/esm2_embeddings_last_layer", help="Path to the output directory for .pt files.")
     parser.add_argument("--model_name", type=str, default="facebook/esm2_t33_650M_UR50D", help="ESM model name.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for processing.")
-    parser.add_argument("--layer", type=int, default=32, help="Layer to extract embeddings from (e.g., 32 for esm2_t33).")
     parser.add_argument('--flash-attention', '-f', action='store_true', help='Use Flash Attention-enabled ESM for faster processing')
     args = parser.parse_args()
 
@@ -113,12 +113,14 @@ def main():
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             outputs = model(**inputs)
-            hidden_states = outputs['hidden_states'][args.layer]
+            # Use the last hidden state, which is supported by both model types.
+            # ModelOutput objects are dict-like, so we can use key access.
+            last_hidden_state = outputs['last_hidden_state']
 
             for j, seq_id in enumerate(batch_ids):
                 # Remove [CLS] and [SEP] tokens
                 seq_len = (inputs['attention_mask'][j] == 1).sum()
-                embedding = hidden_states[j, 1:seq_len-1].cpu()
+                embedding = last_hidden_state[j, 1:seq_len-1].cpu()
                 
                 # Store in .pt file
                 output_file = output_dir / f"{seq_id}.pt"
