@@ -48,13 +48,17 @@ def run_mmseqs2(
 ) -> Path:
     """Runs MMSeqs2 easy-cluster to cluster sequences."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    cluster_file_base = output_dir / f"cluster_{int(identity*100)}"
-    tmp_dir = output_dir / "tmp"
 
-    # Resolve input_file to an absolute path to ensure it's found
-    # when the subprocess is run with a different working directory.
+    # Define simple, relative paths for MMSeqs2 to use inside its working directory
+    cluster_file_base_name = f"cluster_{int(identity*100)}"
+    tmp_dir_name = "tmp"
+
+    # Resolve input_file to an absolute path to ensure it's found by the subprocess.
+    # The output and tmp paths are relative, as they are used within the `cwd`.
     cmd = [
-        "mmseqs", "easy-cluster", str(input_file.resolve()), str(cluster_file_base), str(tmp_dir),
+        "mmseqs", "easy-cluster", str(input_file.resolve()), 
+        cluster_file_base_name, 
+        tmp_dir_name,
         "--min-seq-id", str(identity),
         "-c", str(coverage),
         "--cov-mode", "0",
@@ -66,6 +70,7 @@ def run_mmseqs2(
     logging.info(f"Command: {' '.join(cmd)}")
     
     try:
+        # Run the command from within the specified output directory.
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=output_dir)
         logging.info("MMSeqs2 completed successfully.")
         logging.debug(f"MMSeqs2 stdout:\n{result.stdout}")
@@ -75,7 +80,8 @@ def run_mmseqs2(
         logging.error(f"Stderr: {e.stderr}")
         raise
     
-    cluster_tsv = cluster_file_base.with_name(f"{cluster_file_base.name}_cluster.tsv")
+    # The output cluster file will be inside the output_dir.
+    cluster_tsv = output_dir / f"{cluster_file_base_name}_cluster.tsv"
     if not cluster_tsv.is_file():
         raise FileNotFoundError(f"MMSeqs2 did not produce the expected cluster file: {cluster_tsv}")
         
