@@ -41,8 +41,5 @@ model:
 train_on_classes: false
 devices:
   - 0
-  - 1
-  - 2
-  - 3
 precision: '16-mixed'
 strategy: 'ddp'
