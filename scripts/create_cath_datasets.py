@@ -231,7 +231,7 @@ def main(args):
 
     # 2. Iteratively create test sets and shrink the training pool
     final_test_sets = {}
-    identities = sorted([int(i) for i in args.identity_thresholds.split(',')])
+    identities = sorted([int(i) for i in args.identity_thresholds.split(',')], reverse=True)
 
     for identity_percent in identities:
         logging.info(f"\n--- Processing {identity_percent}% Identity vs. Training Pool ---")
