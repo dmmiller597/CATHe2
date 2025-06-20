@@ -51,8 +51,10 @@ def run_mmseqs2(
     cluster_file_base = output_dir / f"cluster_{int(identity*100)}"
     tmp_dir = output_dir / "tmp"
 
+    # Resolve input_file to an absolute path to ensure it's found
+    # when the subprocess is run with a different working directory.
     cmd = [
-        "mmseqs", "easy-cluster", str(input_file), str(cluster_file_base), str(tmp_dir),
+        "mmseqs", "easy-cluster", str(input_file.resolve()), str(cluster_file_base), str(tmp_dir),
         "--min-seq-id", str(identity),
         "-c", str(coverage),
         "--cov-mode", "0",
