@@ -173,6 +173,48 @@ def split_representatives(
 
     return final_train_reps, set(val_reps), set(test_reps)
 
+def generate_summary(
+    final_training_set: Dict[str, str],
+    final_validation_set: Dict[str, str],
+    final_test_sets: Dict[int, Dict[str, str]]
+) -> str:
+    """Generates a formatted text summary of the created datasets."""
+    
+    final_master_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
+    final_master_val_labels = {get_cath_label(h) for h in final_validation_set.keys()}
+
+    summary_data = []
+    for identity, test_seqs in sorted(final_test_sets.items()):
+        final_test_labels = {get_cath_label(h) for h in test_seqs.keys()}
+        summary_data.append({
+            "Identity": f"S{identity}",
+            "Test Seqs": len(test_seqs),
+            "Test SFs": len(final_test_labels),
+        })
+
+    lines = []
+    lines.append("="*90)
+    lines.append(" " * 30 + "Final Dataset Creation Summary")
+    lines.append("="*90)
+    lines.append(f"Final Training Set:     {len(final_training_set):>7} sequences, {len(final_master_train_labels):>5} SFs")
+    lines.append(f"Final Validation Set:   {len(final_validation_set):>7} sequences, {len(final_master_val_labels):>5} SFs")
+    lines.append("-" * 90)
+
+    if summary_data:
+        headers = summary_data[0].keys()
+        col_widths = {h: max(len(h), max((len(str(r[h])) for r in summary_data), default=0)) for h in headers}
+        header_line = " | ".join(h.ljust(col_widths[h]) for h in headers)
+        lines.append(header_line)
+        lines.append("-" * len(header_line))
+        for result in summary_data:
+            row_line = " | ".join(str(result[h]).ljust(col_widths[h]) for h in headers)
+            lines.append(row_line)
+    else:
+        lines.append("No test sets were generated.")
+    lines.append("="*90)
+    
+    return "\n".join(lines)
+
 def main(args):
     input_fasta = Path(args.input_fasta)
     if not input_fasta.is_file():
@@ -351,40 +393,20 @@ def main(args):
         logging.info(f"Saved S{identity} test set to {identity_dir / 'test.fasta'}")
 
     # --- Update and Print Final Summary Table ---
-    final_summary = []
-    final_master_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
-    final_master_val_labels = {get_cath_label(h) for h in final_validation_set.keys()}
+    summary_text = generate_summary(final_training_set, final_validation_set, final_test_sets)
 
-    for identity, test_seqs in sorted(final_test_sets.items()):
-        final_test_labels = {get_cath_label(h) for h in test_seqs.keys()}
-        final_summary.append({
-            "Identity": f"S{identity}",
-            "Test Seqs": len(test_seqs),
-            "Test SFs": len(final_test_labels),
-        })
+    # Print to console
+    print("\n" + summary_text)
 
-    # Print summary table
-    print("\n" + "="*90)
-    print(" " * 30 + "Final Dataset Creation Summary")
-    print("="*90)
-
-    print(f"Final Training Set:     {len(final_training_set):>7} sequences, {len(final_master_train_labels):>5} SFs")
-    print(f"Final Validation Set:   {len(final_validation_set):>7} sequences, {len(final_master_val_labels):>5} SFs")
-    print("-" * 90)
-
-    if final_summary:
-        headers = final_summary[0].keys()
-        # Calculate column widths for neat printing
-        col_widths = {h: max(len(h), max((len(str(r[h])) for r in final_summary), default=0)) for h in headers}
-        header_line = " | ".join(h.ljust(col_widths[h]) for h in headers)
-        print(header_line)
-        print("-" * len(header_line))
-        for result in final_summary:
-            row_line = " | ".join(str(result[h]).ljust(col_widths[h]) for h in headers)
-            print(row_line)
-    else:
-        print("No test sets were generated.")
-    print("="*90)
+    # Save to file
+    if args.summary_file:
+        summary_file_path = output_base_dir / args.summary_file
+        try:
+            with open(summary_file_path, 'w') as f:
+                f.write(summary_text)
+            logging.info(f"Summary table saved to {summary_file_path}")
+        except IOError as e:
+            logging.error(f"Failed to write summary file to {summary_file_path}: {e}")
 
 
 if __name__ == '__main__':
@@ -457,6 +479,12 @@ if __name__ == '__main__':
         type=int,
         default=42,
         help="Random seed for reproducibility of splits."
+    )
+    parser.add_argument(
+        "--summary_file",
+        type=str,
+        default="summary.txt",
+        help="Name of the file in the output directory to save the final summary table. If empty, not saved."
     )
     
     args = parser.parse_args()
