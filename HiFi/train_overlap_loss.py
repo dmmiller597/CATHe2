@@ -45,14 +45,14 @@ def main(cfg: DictConfig) -> None:
     train_ds = EmbeddingsAndLabelsDataset(
         filepath=cfg.embeddings_path,
         ids=train_ids,
-        cath_id_to_sf=load_json(cfg.annotations),
+        id_to_sf=load_json(cfg.annotations),
         train_on_classes=cfg.train_on_classes,
     )
 
     val_ds = EmbeddingsAndLabelsDataset(
         filepath=cfg.embeddings_path,
         ids=test_ids,
-        cath_id_to_sf=load_json(cfg.annotations),
+        id_to_sf=load_json(cfg.annotations),
         train_on_classes=False,
     )
 
