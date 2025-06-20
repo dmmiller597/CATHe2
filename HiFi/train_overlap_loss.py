@@ -112,21 +112,21 @@ def main(cfg: DictConfig) -> None:
     # learning rate logger callback
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
-    # load model from checkpoint if it exists
-    if cfg.checkpoint_path is not None:
-        print(f"loading model from checkpoint!\n")
-        model.load_from_checkpoint(
-            checkpoint_path=cfg.checkpoint_path,
-            criterion=criterion,
-            learning_rate=cfg.optimiser.lr,
-            weight_decay=cfg.optimiser.weight_decay,
-            epochs=cfg.epochs,
-            min_lr=cfg.optimiser.min_lr,
-            normalize=cfg.normalize,
-            hidden_size_1=cfg.model.hidden_size_1,
-            output_size=cfg.model.output_size,
-            per_residue_embedding=True,
-        )
+    # # load model from checkpoint if it exists
+    # if cfg.checkpoint_path is not None:
+    #     print(f"loading model from checkpoint!\n")
+    #     model.load_from_checkpoint(
+    #         checkpoint_path=cfg.checkpoint_path,
+    #         criterion=criterion,
+    #         learning_rate=cfg.optimiser.lr,
+    #         weight_decay=cfg.optimiser.weight_decay,
+    #         epochs=cfg.epochs,
+    #         min_lr=cfg.optimiser.min_lr,
+    #         normalize=cfg.normalize,
+    #         hidden_size_1=cfg.model.hidden_size_1,
+    #         output_size=cfg.model.output_size,
+    #         per_residue_embedding=True,
+    #     )
 
     trainer = Trainer(
         devices=cfg.devices,  # specify which devices to train on here!
