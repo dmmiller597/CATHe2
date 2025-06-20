@@ -233,19 +233,25 @@ def main(args):
     final_test_sets = {}
     identities = sorted([int(i) for i in args.identity_thresholds.split(',')], reverse=True)
 
+    # Create a single temporary fasta file for the main pool to be used in all clustering steps.
+    pool_fasta_path = output_base_dir / "temp_pool_for_clustering.fasta"
+    write_fasta(pool_fasta_path, current_training_pool)
+
+    # This set will hold all representatives that have been assigned to any test set.
+    # This ensures that test sets are cumulative (S80 test will contain S90 test members).
+    cumulative_test_reps = set()
+
     for identity_percent in identities:
         logging.info(f"\n--- Processing {identity_percent}% Identity vs. Training Pool ---")
-        
-        # Create a temporary fasta file for the current pool of sequences
-        pool_fasta_path = output_base_dir / f"temp_pool_{identity_percent}.fasta"
-        write_fasta(pool_fasta_path, current_training_pool)
         
         identity_threshold = identity_percent / 100.0
         identity_dir = output_base_dir / f"s{identity_percent}"
         
+        # Use higher sensitivity for lower identity thresholds
         sensitivity = args.high_sensitivity if identity_threshold < args.sensitivity_threshold else args.low_sensitivity
 
         try:
+            # We cluster the same, consistent pool of sequences each time.
             cluster_file = run_mmseqs2(
                 pool_fasta_path, 
                 identity_dir, 
@@ -255,46 +261,39 @@ def main(args):
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"Failed to generate clusters for {identity_percent}%. Skipping. Error: {e}")
-            pool_fasta_path.unlink() # Clean up temp file
             continue
         
-        pool_fasta_path.unlink() # Clean up temp file
-
-        # These clusters are based on the *remaining pool*, not all sequences
+        # These clusters are based on the full training/test pool
         clusters_from_pool = parse_clusters(cluster_file)
         
-        # We need to determine the test ratio relative to the original set of clusters
-        # This is a bit tricky. A simpler way is to maintain the same test_ratio of the *remaining* reps.
-        pool_reps_for_split = list(clusters_from_pool.keys())
-        
-        if len(pool_reps_for_split) < args.min_label_count_for_split:
-            logging.warning(f"Not enough clusters ({len(pool_reps_for_split)}) to perform a split at {identity_percent}%. Skipping.")
-            continue
-            
         # Split the current pool's representatives into what stays and what becomes the test set
-        reps_to_keep, test_reps_for_level, _ = split_representatives(
+        # Note: 'reps_to_keep' is not used to shrink the pool anymore, but the split is still needed.
+        _, test_reps_for_level, _ = split_representatives(
             clusters_from_pool,
             test_ratio=args.test_ratio,
             val_ratio=0, # No validation set here
             min_label_count=args.min_label_count_for_split,
             random_state=args.random_state
         )
-
-        final_test_sets[identity_percent] = {rep: current_training_pool[rep] for rep in test_reps_for_level}
         
-        # The new training pool contains only members of the "keep" clusters
-        next_training_pool = {}
-        for rep in reps_to_keep:
-            for member in clusters_from_pool.get(rep, [rep]):
-                if member in current_training_pool:
-                     next_training_pool[member] = current_training_pool[member]
+        # Add the new test representatives to our cumulative set
+        cumulative_test_reps.update(test_reps_for_level)
         
-        logging.info(f"Created test set for S{identity_percent} with {len(final_test_sets[identity_percent])} sequences.")
-        logging.info(f"Training pool size reduced from {len(current_training_pool)} to {len(next_training_pool)}.")
-        current_training_pool = next_training_pool
+        # The test set for this level consists of all representatives identified so far.
+        final_test_sets[identity_percent] = {
+            rep: current_training_pool[rep] for rep in cumulative_test_reps if rep in current_training_pool
+        }
+        
+        logging.info(f"Test set for S{identity_percent} now contains {len(final_test_sets[identity_percent])} cumulative representative sequences.")
 
-    # What remains is the final training set
-    final_training_set = current_training_pool
+    # Clean up the temporary pool file
+    if pool_fasta_path.exists():
+        pool_fasta_path.unlink()
+
+    # What remains is the final training set, which is the original pool minus ALL test representatives.
+    final_training_set = {
+        h: s for h, s in current_training_pool.items() if h not in cumulative_test_reps
+    }
 
     # Final label consistency check (optional but good practice)
     final_train_labels = {get_cath_label(h) for h in final_training_set.keys()}
