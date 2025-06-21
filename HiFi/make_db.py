@@ -6,6 +6,7 @@
 import argparse
 import torch
 import yaml
+import numpy as np
 from annotators.nearest_neighbours import VectorStore
 from models.hifinn_model import HifinnLayerNormResiduePL
 from utils.embedding_utils import embed_queries, esm_embed
@@ -82,6 +83,7 @@ def main():
         raise ValueError("Program should have crashed by now...")
 
     # 3. use sequences to generate index data structure
+    data = data.astype(np.float32)
     db = VectorStore(
         sorted_ids,
         index_path,
