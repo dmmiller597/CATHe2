@@ -2,4 +2,4 @@ input: data/CATH/esm2_embeddings_layer32/ # the input sequences we wish to make 
 model_path: overlap_loss_ckpts/epoch=149-step=1463550.ckpt # the model we want to use to embed our sequences
 index_path: data/CATH/vector_index # the path we want to save our vector index to
 ids: data/CATH/clustered_datasets_0.05/unified_train_set/train.fasta # if we only want to build our index from a subset of input [OPTIONAL]
-device: 'cpu'
+device: 'cuda'
