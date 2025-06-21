@@ -42,6 +42,7 @@ def main():
     )
     model = load_model(model_path, model_obj, device=device)
     model.eval()
+    model.half()
     if input_format == "fasta":
         path_to_esm_emb = esm_embed(config["input"], residue_embeddings=True)
         # 2. embed queries
