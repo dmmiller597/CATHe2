@@ -113,10 +113,10 @@ def get_model_embeddings_from_dl(
             else:
                 #model_emb = model.forward_pass(emb.to(device)).squeeze(1).cpu().numpy()
                 if return_attention:
-                    model_emb, attn = model.forward(emb.to(device))
+                    model_emb, attn = model.forward(emb.to(device).half())
                     model_emb, attn = model_emb.cpu().numpy(), attn.cpu().numpy()
                 else:
-                    model_emb = model.forward(emb.to(device)).cpu().numpy()
+                    model_emb = model.forward(emb.to(device).half()).cpu().numpy()
             if save:
                 save_embeddings(model_emb, batch_ids)
                 if return_attention:
