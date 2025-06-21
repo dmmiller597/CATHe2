@@ -13,7 +13,7 @@ from utils.file_utils import load_ids, load_model, check_input_format
 
 
 def main():
-    with open("./configs/make_db.yaml", "r") as f:
+    with open("HiFi/configs/make_db.yaml", "r") as f:
         config = yaml.safe_load(f)
 
     model_path = config["model_path"]
